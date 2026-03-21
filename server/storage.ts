@@ -7,11 +7,19 @@ import {
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc } from "drizzle-orm";
+import path from "path";
+import fs from "fs";
 
-const sqlite = new Database("data.db");
+// Use DATA_DIR env var for persistent storage (Railway volume), fallback to cwd
+const dataDir = process.env.DATA_DIR || process.cwd();
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+const dbPath = path.join(dataDir, "data.db");
+const sqlite = new Database(dbPath);
 sqlite.pragma("journal_mode = WAL");
 
 export const db = drizzle(sqlite);
+export { dataDir };
 
 export interface IStorage {
   // Users
