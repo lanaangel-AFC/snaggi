@@ -102,8 +102,9 @@ export async function registerRoutes(
     const projectId = Number(req.params.projectId);
     const uidPrefix = req.body.uidPrefix;
     if (!uidPrefix) return res.status(400).json({ message: "UID prefix (drop-level-worktype) is required" });
-    const uid = await storage.getNextDefectUid(projectId, uidPrefix);
-    const { uidPrefix: _removed, ...rest } = req.body;
+    // Use the client-provided UID if they set a custom number, otherwise auto-generate
+    const uid = req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix);
+    const { uidPrefix: _removed, uidOverride: _removed2, ...rest } = req.body;
     const data = { ...rest, projectId, uid };
     const parsed = insertDefectSchema.safeParse(data);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });

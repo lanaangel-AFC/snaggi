@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Plus } from "lucide-react";
 import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
@@ -30,6 +30,15 @@ const WORK_TYPES = [
   { code: "RR", label: "Render Repair" },
   { code: "GK", label: "Gasket" },
   { code: "OT", label: "Other" },
+];
+
+// Standardised person roles for dropdowns
+const PERSON_ROLES = [
+  "Consultant",
+  "Contractor",
+  "Client",
+  "Project Manager",
+  "Facility Manager",
 ];
 
 const PHOTO_SLOTS = [
@@ -61,8 +70,17 @@ export default function DefectForm() {
     status: "open",
   });
 
-  // UID components
-  const [drop, setDrop] = useState("01");
+  // UID components — prefill drop from query param if navigating from "New Defect" button
+  const prefillDrop = useMemo(() => {
+    if (typeof window === "undefined") return "01";
+    const hash = window.location.hash; // e.g. #/projects/2/defects/new?drop=03
+    const qIdx = hash.indexOf("?");
+    if (qIdx === -1) return "01";
+    const params = new URLSearchParams(hash.slice(qIdx));
+    return params.get("drop") || "01";
+  }, []);
+
+  const [drop, setDrop] = useState(prefillDrop);
   const [level, setLevel] = useState("");
   const [workType, setWorkType] = useState("");
   const [seqNumber, setSeqNumber] = useState("01");
@@ -162,6 +180,7 @@ export default function DefectForm() {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
           ...form,
           uidPrefix,
+          uidOverride: assembledUid,
         });
         return res.json();
       }
@@ -341,7 +360,7 @@ export default function DefectForm() {
               </span>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
             <div>
               <Label htmlFor="drop" className="text-xs">Drop</Label>
               <Input
@@ -395,9 +414,26 @@ export default function DefectForm() {
                 </SelectContent>
               </Select>
             </div>
+            <div>
+              <Label htmlFor="seqNum" className="text-xs">Number</Label>
+              <Input
+                id="seqNum"
+                placeholder="01"
+                value={seqNumber}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/\D/g, "").slice(0, 2);
+                  setSeqNumber(v);
+                }}
+                maxLength={2}
+                required
+                disabled={isEdit}
+                className="font-mono text-center"
+                data-testid="input-seq-number"
+              />
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Format: Drop-Level-WorkType-Seq. The sequence number auto-increments.
+            Format: Drop-Level-WorkType-Number. The number auto-suggests but you can change it.
           </p>
         </Card>
 
@@ -468,14 +504,19 @@ export default function DefectForm() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label htmlFor="assignedTo">By Whom</Label>
-            <Input
-              id="assignedTo"
-              placeholder="Person or party responsible"
+            <Select
               value={form.assignedTo}
-              onChange={set("assignedTo")}
-              required
-              data-testid="input-assigned-to"
-            />
+              onValueChange={(val) => setForm((prev) => ({ ...prev, assignedTo: val }))}
+            >
+              <SelectTrigger data-testid="input-assigned-to">
+                <SelectValue placeholder="Select..." />
+              </SelectTrigger>
+              <SelectContent>
+                {PERSON_ROLES.map((role) => (
+                  <SelectItem key={role} value={role}>{role}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <Label htmlFor="dueDate">By When</Label>
@@ -515,14 +556,19 @@ export default function DefectForm() {
             </div>
             <div>
               <Label htmlFor="verificationPerson">Person</Label>
-              <Input
-                id="verificationPerson"
-                placeholder="Who will verify?"
+              <Select
                 value={form.verificationPerson}
-                onChange={set("verificationPerson")}
-                required
-                data-testid="input-verification-person"
-              />
+                onValueChange={(val) => setForm((prev) => ({ ...prev, verificationPerson: val }))}
+              >
+                <SelectTrigger data-testid="input-verification-person">
+                  <SelectValue placeholder="Select..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {PERSON_ROLES.map((role) => (
+                    <SelectItem key={role} value={role}>{role}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </Card>
@@ -663,6 +709,23 @@ export default function DefectForm() {
           <Save className="w-4 h-4 mr-2" />
           {saveMutation.isPending ? "Saving..." : isEdit ? "Update Defect" : "Save Defect"}
         </Button>
+
+        {/* New Defect button — shown when editing, navigates to new form with Drop prefilled */}
+        {isEdit && (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={() => {
+              // Navigate to new defect form; pass current drop as query param
+              navigate(`/projects/${projectId}/defects/new?drop=${encodeURIComponent(drop)}`);
+            }}
+            data-testid="button-new-defect-inline"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            New Defect
+          </Button>
+        )}
       </form>
     </div>
   );
