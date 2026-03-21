@@ -24,6 +24,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/shared ./shared
+COPY --from=builder /app/node_modules/.package-lock.json* ./
 
 # DATA_DIR is where the SQLite DB and uploads are stored.
 # On Railway, mount a persistent volume at /data.
@@ -33,4 +34,5 @@ ENV PORT=3000
 
 EXPOSE 3000
 
+# Start the app — the server creates the DB on first run
 CMD ["node", "dist/index.cjs"]
