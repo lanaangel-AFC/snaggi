@@ -105,6 +105,119 @@ export default function ProjectDetail() {
       .sort((a, b) => (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "")) ?? [],
     [defects]);
 
+  // ==================== SHARED: Render a single defect page (PDF) ====================
+  // This renders 1 defect per page: info table + 2x2 photo grid
+  const renderDefectPagePdf = async (
+    doc: any, defect: any, margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
+    addHeader: () => void, addFooter: () => void,
+    autoTable: any, DARK_TEXT: readonly number[], CAPTION_BLUE: readonly number[],
+  ) => {
+    doc.addPage();
+    addHeader();
+    addFooter();
+    let y = 20;
+
+    const slotOrder = ["wip1", "wip2", "wip3", "complete"];
+    const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
+
+    // UID heading + status
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...DARK_TEXT);
+    doc.text(defect.uid, margin, y);
+    const statusLabel = defect.status === "complete" ? "COMPLETE" : "OPEN";
+    const statusColor = defect.status === "complete" ? [34, 139, 34] : [200, 150, 0];
+    doc.setFontSize(10);
+    doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
+    doc.text(statusLabel, pageWidth - margin - doc.getTextWidth(statusLabel), y);
+    doc.setTextColor(0);
+    y += 4;
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100);
+    doc.text(deriveLocation(defect.uid), margin, y);
+    y += 5;
+
+    // Info table
+    autoTable(doc, {
+      startY: y,
+      body: [
+        ["Date Opened", defect.dateOpened],
+        ["Date Completed", defect.dateClosed || "\u2014"],
+        ["Observation", defect.comment],
+        ["Action Required", defect.actionRequired],
+        ["Assigned To", defect.assignedTo],
+        ["Due Date", defect.dueDate],
+        ["Verification Method", defect.verificationMethod],
+        ["Verification Person", defect.verificationPerson],
+      ],
+      margin: { left: margin, right: margin },
+      styles: { fontSize: 8, cellPadding: 2.5 },
+      columnStyles: {
+        0: { fontStyle: "bold", cellWidth: 38 },
+        1: { cellWidth: contentWidth - 38 },
+      },
+      theme: "plain",
+      didDrawCell: (cellData: any) => {
+        if (cellData.column.index === 0) {
+          doc.setDrawColor(220);
+          doc.line(
+            cellData.cell.x,
+            cellData.cell.y + cellData.cell.height,
+            cellData.cell.x + contentWidth,
+            cellData.cell.y + cellData.cell.height
+          );
+        }
+      },
+    });
+
+    y = (doc as any).lastAutoTable.finalY + 6;
+
+    // Photos: 2x2 grid
+    if (defect.photos && defect.photos.length > 0) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...DARK_TEXT);
+      doc.text("Photos", margin, y);
+      y += 4;
+
+      const sortedPhotos = slotOrder.map((s: string) => defect.photos.find((p: any) => p.slot === s)).filter(Boolean);
+      const imgW = (contentWidth - 6) / 2;
+      const imgH = imgW * 0.65;
+
+      for (let i = 0; i < sortedPhotos.length; i++) {
+        const photo = sortedPhotos[i];
+        const col = i % 2;
+        if (i > 0 && col === 0) y += imgH + 12;
+        if (col === 0 && y + imgH + 12 > pageHeight - 20) {
+          doc.addPage();
+          addHeader();
+          addFooter();
+          y = 20;
+        }
+        const x = margin + col * (imgW + 6);
+
+        const blob = await loadImageBlob(photo.filename);
+        if (blob) {
+          const dataUrl = await blobToDataUrl(blob);
+          doc.addImage(dataUrl, "JPEG", x, y, imgW, imgH);
+        } else {
+          doc.setDrawColor(180);
+          doc.rect(x, y, imgW, imgH);
+          doc.setFontSize(7);
+          doc.text("[Photo unavailable]", x + 4, y + imgH / 2);
+        }
+
+        doc.setFontSize(7);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(100);
+        doc.text(slotLabels[photo.slot] || photo.slot, x, y + imgH + 3);
+        doc.setTextColor(0);
+      }
+    }
+  };
+
   // ==================== PDF GENERATION (AFC Template) ====================
   const handleGeneratePdf = async () => {
     setGenerating("pdf");
@@ -259,6 +372,10 @@ export default function ProjectDetail() {
       y = (doc as any).lastAutoTable.finalY + 10;
 
       // ======= SECTION 2 - DEFECT REGISTER & RECTIFICATION LOG =======
+      const allDefects = [...(data.defects || [])];
+      const openData = allDefects.filter((d: any) => d.status !== "complete");
+      const completedData = allDefects.filter((d: any) => d.status === "complete");
+
       doc.addPage();
       addHeader();
       addFooter();
@@ -276,42 +393,21 @@ export default function ProjectDetail() {
       doc.text("Based on our observations, we recommend the following actions.", margin, y);
       y += 8;
 
-      // Observations table matching AFC template: ID | Location | Observation | Action Required | Status | Photo
-      const allDefects = [...(data.defects || [])];
-      const slotOrder = ["wip1", "wip2", "wip3", "complete"];
-
-      // Load thumbnail for each defect (first available photo)
-      const photoThumbnails: Record<string, string> = {};
-      for (const defect of allDefects) {
-        if (defect.photos && defect.photos.length > 0) {
-          const sortedPhotos = slotOrder
-            .map((s: string) => defect.photos.find((p: any) => p.slot === s))
-            .filter(Boolean);
-          if (sortedPhotos.length > 0) {
-            const blob = await loadImageBlob(sortedPhotos[sortedPhotos.length - 1].filename);
-            if (blob) {
-              photoThumbnails[defect.uid] = await blobToDataUrl(blob);
-            }
-          }
-        }
-      }
-
-      // Build table data
-      const tableHead = [["ID", "Location", "Observation", "Action Required", "Status", "Photo"]];
-      const tableBody = allDefects.map((d: any) => [
+      // Summary table (compact overview)
+      const summaryHead = [["ID", "Location", "Observation", "Action Required", "Status"]];
+      const summaryBody = allDefects.map((d: any) => [
         d.uid,
         deriveLocation(d.uid),
-        d.comment,
-        d.actionRequired,
+        d.comment.length > 60 ? d.comment.substring(0, 57) + "..." : d.comment,
+        d.actionRequired.length > 50 ? d.actionRequired.substring(0, 47) + "..." : d.actionRequired,
         d.status === "complete" ? "Complete" : "Open",
-        "", // Photo cell will be drawn manually
       ]);
 
-      if (tableBody.length > 0) {
+      if (summaryBody.length > 0) {
         autoTable(doc, {
           startY: y,
-          head: tableHead,
-          body: tableBody,
+          head: summaryHead,
+          body: summaryBody,
           margin: { left: margin, right: margin },
           styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak", valign: "top" },
           headStyles: {
@@ -322,35 +418,13 @@ export default function ProjectDetail() {
             lineColor: [...DARK_TEXT],
           },
           columnStyles: {
-            0: { cellWidth: 22 },
-            1: { cellWidth: 28 },
-            2: { cellWidth: 52 },
-            3: { cellWidth: 28 },
-            4: { cellWidth: 18 },
-            5: { cellWidth: contentWidth - 148 },
+            0: { cellWidth: 24 },
+            1: { cellWidth: 30 },
+            2: { cellWidth: 55 },
+            3: { cellWidth: 45 },
+            4: { cellWidth: 20 },
           },
-          didDrawPage: () => {
-            addHeader();
-            addFooter();
-          },
-          didDrawCell: (cellData: any) => {
-            // Draw photo thumbnails in column 5
-            if (cellData.section === "body" && cellData.column.index === 5) {
-              const defect = allDefects[cellData.row.index];
-              if (defect && photoThumbnails[defect.uid]) {
-                const imgW = cellData.cell.width - 2;
-                const imgH = Math.min(imgW * 0.75, cellData.cell.height - 2);
-                doc.addImage(
-                  photoThumbnails[defect.uid],
-                  "JPEG",
-                  cellData.cell.x + 1,
-                  cellData.cell.y + 1,
-                  imgW,
-                  imgH
-                );
-              }
-            }
-          },
+          didDrawPage: () => { addHeader(); addFooter(); },
           rowPageBreak: "auto",
         });
       } else {
@@ -358,79 +432,33 @@ export default function ProjectDetail() {
         doc.text("No defects recorded.", margin, y);
       }
 
-      // ======= APPENDIX A - SUPPLEMENTARY PHOTOGRAPHS =======
-      doc.addPage();
-      addHeader();
-      addFooter();
-      y = 20;
-
-      doc.setFontSize(18);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(...DARK_TEXT);
-      doc.text("Appendix A — Supplementary Photographs", margin, y);
-      y += 10;
-
-      const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
-
-      for (const defect of allDefects) {
-        if (!defect.photos || defect.photos.length === 0) continue;
-
-        const sortedPhotos = slotOrder
-          .map((s: string) => defect.photos.find((p: any) => p.slot === s))
-          .filter(Boolean);
-        if (sortedPhotos.length === 0) continue;
-
-        // Check if we need a new page
-        if (y + 10 > pageHeight - 30) {
-          doc.addPage();
-          addHeader();
-          addFooter();
-          y = 20;
+      // Active defects — 1 per page with full details + photos
+      if (openData.length > 0) {
+        for (const defect of openData) {
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
+      }
 
-        // Defect caption
-        doc.setFontSize(9);
+      // ======= SECTION 3 - COMPLETED WORKS SUMMARY =======
+      if (completedData.length > 0) {
+        doc.addPage();
+        addHeader();
+        addFooter();
+        y = 20;
+
+        doc.setFontSize(18);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(...CAPTION_BLUE);
-        doc.text(`${defect.uid} — ${deriveLocation(defect.uid)}`, margin, y);
-        y += 5;
+        doc.setTextColor(...DARK_TEXT);
+        doc.text("3. Completed Works Summary", margin, y);
+        y += 7;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+        doc.text("All defects that have been rectified and verified.", margin, y);
 
-        // Photo grid (2 columns)
-        const imgW = (contentWidth - 6) / 2;
-        const imgH = imgW * 0.7;
-
-        for (let i = 0; i < sortedPhotos.length; i++) {
-          const photo = sortedPhotos[i];
-          const col = i % 2;
-          if (i > 0 && col === 0) y += imgH + 10;
-          if (col === 0 && y + imgH + 10 > pageHeight - 20) {
-            doc.addPage();
-            addHeader();
-            addFooter();
-            y = 20;
-          }
-          const x = margin + col * (imgW + 6);
-
-          const blob = await loadImageBlob(photo.filename);
-          if (blob) {
-            const dataUrl = await blobToDataUrl(blob);
-            doc.addImage(dataUrl, "JPEG", x, y, imgW, imgH);
-          } else {
-            doc.setDrawColor(180);
-            doc.rect(x, y, imgW, imgH);
-          }
-
-          doc.setFontSize(7);
-          doc.setFont("helvetica", "bold");
-          doc.setTextColor(100);
-          const caption = `${slotLabels[photo.slot] || photo.slot}`;
-          doc.text(caption, x, y + imgH + 4);
-          doc.setTextColor(0);
+        for (const defect of completedData) {
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
-
-        const lastCol = (sortedPhotos.length - 1) % 2;
-        y += imgH + (lastCol === 1 ? 10 : 10);
-        y += 4;
       }
 
       doc.save(`${data.project.name.replace(/[^a-zA-Z0-9]/g, "_")}_SVR.pdf`);
@@ -681,6 +709,146 @@ export default function ProjectDetail() {
 
       introChildren.push(new Paragraph({ spacing: { before: 200 } }));
 
+      // ======= HELPER: Build 1 defect page for Word =======
+      const buildWordDefectPage = async (defect: any): Promise<any[]> => {
+        const elements: any[] = [];
+
+        // UID heading with status
+        elements.push(new Paragraph({
+          children: [
+            new TextRun({ text: defect.uid, bold: true, size: 28, font: "Aptos", color: CAPTION_BLUE }),
+            new TextRun({ text: "    " }),
+            new TextRun({
+              text: defect.status === "complete" ? "COMPLETE" : "OPEN",
+              bold: true,
+              size: 20,
+              color: defect.status === "complete" ? "228B22" : "C89600",
+            }),
+          ],
+          spacing: { after: 40 },
+        }));
+
+        // Location
+        elements.push(new Paragraph({
+          children: [new TextRun({ text: deriveLocation(defect.uid), size: 18, font: "Aptos", color: "666666" })],
+          spacing: { after: 200 },
+        }));
+
+        // Info table
+        const infoRows = [
+          ["Date Opened", defect.dateOpened],
+          ["Date Completed", defect.dateClosed || "\u2014"],
+          ["Observation", defect.comment],
+          ["Action Required", defect.actionRequired],
+          ["Assigned To", defect.assignedTo],
+          ["Due Date", defect.dueDate],
+          ["Verification Method", defect.verificationMethod],
+          ["Verification Person", defect.verificationPerson],
+        ];
+
+        const bottomBorder = { style: BorderStyle.SINGLE, size: 1, color: "DDDDDD" };
+
+        elements.push(new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          layout: TableLayoutType.FIXED,
+          rows: infoRows.map(([label, value]) =>
+            new TableRow({
+              children: [
+                new TableCell({
+                  width: { size: 28, type: WidthType.PERCENTAGE },
+                  children: [new Paragraph({
+                    children: [new TextRun({ text: label, bold: true, size: 18, font: "Aptos" })],
+                    spacing: { before: 50, after: 50 },
+                  })],
+                  borders: { top: noBorder, left: noBorder, right: noBorder, bottom: bottomBorder },
+                }),
+                new TableCell({
+                  width: { size: 72, type: WidthType.PERCENTAGE },
+                  children: [new Paragraph({
+                    children: [new TextRun({ text: value, size: 18, font: "Aptos" })],
+                    spacing: { before: 50, after: 50 },
+                  })],
+                  borders: { top: noBorder, left: noBorder, right: noBorder, bottom: bottomBorder },
+                }),
+              ],
+            })
+          ),
+        }));
+
+        elements.push(new Paragraph({ spacing: { before: 150 } }));
+
+        // Photos: 2x2 grid
+        if (defect.photos && defect.photos.length > 0) {
+          elements.push(new Paragraph({
+            children: [new TextRun({ text: "Photos", bold: true, size: 20, font: "Aptos" })],
+            spacing: { before: 100, after: 80 },
+          }));
+
+          const sortedPhotos = slotOrder
+            .map((s: string) => defect.photos.find((p: any) => p.slot === s))
+            .filter(Boolean);
+
+          for (let i = 0; i < sortedPhotos.length; i += 2) {
+            const photoCells: any[] = [];
+
+            for (let j = 0; j < 2; j++) {
+              const photo = sortedPhotos[i + j];
+              if (photo) {
+                const blob = await loadImageBlob(photo.filename);
+                const cellChildren: any[] = [];
+
+                if (blob) {
+                  const buffer = await blobToArrayBuffer(blob);
+                  cellChildren.push(new Paragraph({
+                    children: [
+                      new ImageRun({
+                        data: buffer,
+                        transformation: { width: 220, height: 160 },
+                        type: "jpg",
+                      }),
+                    ],
+                    alignment: AlignmentType.CENTER,
+                  }));
+                }
+
+                cellChildren.push(new Paragraph({
+                  children: [new TextRun({
+                    text: slotLabels[photo.slot] || photo.slot,
+                    bold: true,
+                    size: 16,
+                    font: "Aptos",
+                    color: photo.slot === "complete" ? "228B22" : "666666",
+                  })],
+                  alignment: AlignmentType.CENTER,
+                  spacing: { before: 40 },
+                }));
+
+                photoCells.push(new TableCell({
+                  width: { size: 50, type: WidthType.PERCENTAGE },
+                  children: cellChildren,
+                  borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
+                }));
+              } else {
+                photoCells.push(new TableCell({
+                  width: { size: 50, type: WidthType.PERCENTAGE },
+                  children: [new Paragraph("")],
+                  borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
+                }));
+              }
+            }
+
+            elements.push(new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              layout: TableLayoutType.FIXED,
+              rows: [new TableRow({ children: photoCells })],
+            }));
+            elements.push(new Paragraph({ spacing: { before: 60 } }));
+          }
+        }
+
+        return elements;
+      };
+
       // ======= SECTION 2 - DEFECT REGISTER & RECTIFICATION LOG =======
       const obsChildren: any[] = [];
 
@@ -699,112 +867,64 @@ export default function ProjectDetail() {
         spacing: { after: 200 },
       }));
 
-      // Build the 6-column observations table matching AFC template
-      // Columns: ID | Location | Observation | Action Required | Status | Photo
-      // Template widths (dxa): 846, 1139, 2833, 1136, 1276, 3260
-      const obsTableRows: any[] = [];
+      // Summary table (compact overview, no Photo column)
+      const summaryHeaderLabels = ["ID", "Location", "Observation", "Action Required", "Status"];
+      const summaryHeaderWidths = [1000, 1400, 3500, 2800, 1000];
 
-      // Header row
-      const headerLabels = ["ID", "Location", "Observation", "Action Required", "Status", "Photo"];
-      const headerWidths = [846, 1139, 2833, 1136, 1276, 3260];
+      const summaryTableRows: any[] = [];
 
-      obsTableRows.push(new TableRow({
+      summaryTableRows.push(new TableRow({
         tableHeader: true,
-        children: headerLabels.map((label, i) =>
+        children: summaryHeaderLabels.map((label, i) =>
           new TableCell({
-            width: { size: headerWidths[i], type: WidthType.DXA },
+            width: { size: summaryHeaderWidths[i], type: WidthType.DXA },
             children: [new Paragraph({
-              children: [new TextRun({ text: label, size: 18, font: "Aptos", bold: true, color: CAPTION_BLUE })],
-              spacing: { before: 40, after: 40 },
+              children: [new TextRun({ text: label, size: 16, font: "Aptos", bold: true, color: CAPTION_BLUE })],
+              spacing: { before: 30, after: 30 },
             })],
             borders: {
-              top: noBorder,
-              left: noBorder,
-              right: noBorder,
+              top: noBorder, left: noBorder, right: noBorder,
               bottom: { style: BorderStyle.SINGLE, size: 4, color: DARK_TEXT },
             },
           })
         ),
       }));
 
-      // Data rows
       for (const defect of allDefects) {
-        // Get the latest photo for the Photo column
-        let photoImageRun: any = null;
-        if (defect.photos && defect.photos.length > 0) {
-          const sortedPhotos = slotOrder
-            .map((s: string) => defect.photos.find((p: any) => p.slot === s))
-            .filter(Boolean);
-          if (sortedPhotos.length > 0) {
-            const lastPhoto = sortedPhotos[sortedPhotos.length - 1];
-            const blob = await loadImageBlob(lastPhoto.filename);
-            if (blob) {
-              const buffer = await blobToArrayBuffer(blob);
-              photoImageRun = new ImageRun({
-                data: buffer,
-                transformation: { width: 150, height: 100 },
-                type: "jpg",
-              });
-            }
-          }
-        }
-
         const statusText = defect.status === "complete" ? "Complete" : "Open";
-
-        const cellData = [
+        const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
+        const cellTexts = [
           defect.uid,
           deriveLocation(defect.uid),
-          defect.comment,
-          defect.actionRequired,
+          defect.comment.length > 80 ? defect.comment.substring(0, 77) + "..." : defect.comment,
+          defect.actionRequired.length > 60 ? defect.actionRequired.substring(0, 57) + "..." : defect.actionRequired,
           statusText,
         ];
-
-        const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
-
-        obsTableRows.push(new TableRow({
-          children: [
-            ...cellData.map((text: string, i: number) =>
-              new TableCell({
-                width: { size: headerWidths[i], type: WidthType.DXA },
-                children: [new Paragraph({
-                  children: [new TextRun({
-                    text,
-                    size: 16,
-                    font: "Aptos",
-                    color: i === 4 ? (statusText === "Complete" ? "228B22" : "C89600") : undefined,
-                    bold: i === 0,
-                  })],
-                  spacing: { before: 30, after: 30 },
-                })],
-                borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
-              })
-            ),
-            // Photo cell
+        summaryTableRows.push(new TableRow({
+          children: cellTexts.map((text: string, i: number) =>
             new TableCell({
-              width: { size: headerWidths[5], type: WidthType.DXA },
-              children: [
-                photoImageRun
-                  ? new Paragraph({
-                      children: [photoImageRun],
-                      alignment: AlignmentType.CENTER,
-                      spacing: { before: 30, after: 30 },
-                    })
-                  : new Paragraph({
-                      children: [new TextRun({ text: "—", size: 16, font: "Aptos", color: "AAAAAA" })],
-                      spacing: { before: 30, after: 30 },
-                    }),
-              ],
+              width: { size: summaryHeaderWidths[i], type: WidthType.DXA },
+              children: [new Paragraph({
+                children: [new TextRun({
+                  text,
+                  size: 15,
+                  font: "Aptos",
+                  color: i === 4 ? (statusText === "Complete" ? "228B22" : "C89600") : undefined,
+                  bold: i === 0,
+                })],
+                spacing: { before: 25, after: 25 },
+              })],
               borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
-            }),
-          ],
+            })
+          ),
         }));
       }
 
       if (allDefects.length > 0) {
         obsChildren.push(new Table({
-          width: { size: 10490, type: WidthType.DXA },
+          width: { size: 9700, type: WidthType.DXA },
           layout: TableLayoutType.FIXED,
-          rows: obsTableRows,
+          rows: summaryTableRows,
         }));
       } else {
         obsChildren.push(new Paragraph({
@@ -812,92 +932,35 @@ export default function ProjectDetail() {
         }));
       }
 
-      // ======= APPENDIX A - SUPPLEMENTARY PHOTOGRAPHS =======
-      const appendixChildren: any[] = [];
+      // Active defects — 1 per page with full details + photos
+      for (let i = 0; i < openData.length; i++) {
+        if (i > 0 || allDefects.length > 0) {
+          obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
+        }
+        const defectEls = await buildWordDefectPage(openData[i]);
+        obsChildren.push(...defectEls);
+      }
 
-      appendixChildren.push(new Paragraph({
-        children: [new TextRun({ text: "Supplementary Photographs", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
-        heading: HeadingLevel.HEADING_1,
-        spacing: { after: 200 },
-      }));
+      // ======= SECTION 3 - COMPLETED WORKS SUMMARY =======
+      const completedChildren: any[] = [];
 
-      for (const defect of allDefects) {
-        if (!defect.photos || defect.photos.length === 0) continue;
-
-        const sortedPhotos = slotOrder
-          .map((s: string) => defect.photos.find((p: any) => p.slot === s))
-          .filter(Boolean);
-        if (sortedPhotos.length === 0) continue;
-
-        // Defect sub-heading
-        appendixChildren.push(new Paragraph({
-          children: [new TextRun({
-            text: `${defect.uid} — ${deriveLocation(defect.uid)}`,
-            bold: true,
-            size: 20,
-            font: "Aptos",
-            color: DARK_TEXT,
-          })],
-          spacing: { before: 200, after: 100 },
+      if (completedData.length > 0) {
+        completedChildren.push(new Paragraph({
+          children: [new TextRun({ text: "Completed Works Summary", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+          heading: HeadingLevel.HEADING_1,
+          spacing: { after: 80 },
+        }));
+        completedChildren.push(new Paragraph({
+          children: [new TextRun({ text: "All defects that have been rectified and verified.", size: 18, color: "666666", italics: true, font: "Aptos" })],
+          spacing: { after: 200 },
         }));
 
-        // 2-column photo grid
-        for (let i = 0; i < sortedPhotos.length; i += 2) {
-          const photoCells: any[] = [];
-
-          for (let j = 0; j < 2; j++) {
-            const photo = sortedPhotos[i + j];
-            if (photo) {
-              const blob = await loadImageBlob(photo.filename);
-              const cellChildren: any[] = [];
-
-              if (blob) {
-                const buffer = await blobToArrayBuffer(blob);
-                cellChildren.push(new Paragraph({
-                  children: [
-                    new ImageRun({
-                      data: buffer,
-                      transformation: { width: 240, height: 180 },
-                      type: "jpg",
-                    }),
-                  ],
-                  alignment: AlignmentType.CENTER,
-                }));
-              }
-
-              cellChildren.push(new Paragraph({
-                children: [new TextRun({
-                  text: `${slotLabels[photo.slot] || photo.slot}`,
-                  bold: true,
-                  size: 16,
-                  font: "Aptos",
-                  color: DARK_TEXT,
-                })],
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 60 },
-              }));
-
-              photoCells.push(new TableCell({
-                width: { size: 50, type: WidthType.PERCENTAGE },
-                children: cellChildren,
-                borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
-              }));
-            } else {
-              photoCells.push(new TableCell({
-                width: { size: 50, type: WidthType.PERCENTAGE },
-                children: [new Paragraph("")],
-                borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
-              }));
-            }
+        for (let i = 0; i < completedData.length; i++) {
+          if (i > 0) {
+            completedChildren.push(new Paragraph({ children: [new PageBreak()] }));
           }
-
-          appendixChildren.push(new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            layout: TableLayoutType.FIXED,
-            rows: [new TableRow({ children: photoCells })],
-          }));
-
-          appendixChildren.push(new Paragraph({ spacing: { before: 80 } }));
+          const defectEls = await buildWordDefectPage(completedData[i]);
+          completedChildren.push(...defectEls);
         }
       }
 
@@ -910,6 +973,28 @@ export default function ProjectDetail() {
         headers: { default: defaultHeader },
         footers: { default: defaultFooter },
       };
+
+      const docSections: any[] = [
+        // Cover page (no header/footer)
+        {
+          properties: {
+            page: {
+              size: { width: 11906, height: 16838 },
+              margin: { top: 851, right: 1440, bottom: 1440, left: 1440 },
+            },
+          },
+          children: coverChildren,
+        },
+        // Introduction
+        { properties: sectionProps, children: introChildren },
+        // Section 2: Summary + Active defects
+        { properties: sectionProps, children: obsChildren },
+      ];
+
+      // Section 3: Completed works (only if there are completed defects)
+      if (completedChildren.length > 0) {
+        docSections.push({ properties: sectionProps, children: completedChildren });
+      }
 
       const wordDoc = new Document({
         creator: "Angel Façade Consulting",
@@ -925,33 +1010,7 @@ export default function ProjectDetail() {
             },
           },
         },
-        sections: [
-          // Cover page (no header/footer)
-          {
-            properties: {
-              page: {
-                size: { width: 11906, height: 16838 },
-                margin: { top: 851, right: 1440, bottom: 1440, left: 1440 },
-              },
-            },
-            children: coverChildren,
-          },
-          // Introduction
-          {
-            properties: sectionProps,
-            children: introChildren,
-          },
-          // Observations
-          {
-            properties: sectionProps,
-            children: obsChildren,
-          },
-          // Appendix
-          {
-            properties: sectionProps,
-            children: appendixChildren,
-          },
-        ],
+        sections: docSections,
       });
 
       const blob = await Packer.toBlob(wordDoc);
