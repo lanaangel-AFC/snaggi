@@ -7,14 +7,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Building2, MapPin, User, Calendar, ChevronRight, Trash2 } from "lucide-react";
+import { Plus, X, Building2, MapPin, User, Calendar, ChevronRight, Trash2 } from "lucide-react";
 import type { Project } from "@shared/schema";
 import { useState } from "react";
 
 export default function ProjectList() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01" });
+  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", projectNumber: "", inspectionNumber: "", inspectionDate: "", attendees: "[]" });
 
   const { data: projects, isLoading } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
@@ -31,7 +31,7 @@ export default function ProjectList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       setOpen(false);
-      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01" });
+      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", projectNumber: "", inspectionNumber: "", inspectionDate: "", attendees: "[]" });
       toast({ title: "Project created" });
     },
   });
@@ -137,6 +137,88 @@ export default function ProjectList() {
                     onChange={(e) => setForm({ ...form, revision: e.target.value })}
                     data-testid="input-project-revision"
                   />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="projectNumber">Project Number</Label>
+                  <Input
+                    id="projectNumber"
+                    placeholder="e.g. PRJ-001"
+                    value={form.projectNumber}
+                    onChange={(e) => setForm({ ...form, projectNumber: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="inspectionNumber">Inspection Number</Label>
+                  <Input
+                    id="inspectionNumber"
+                    placeholder="e.g. INS-01"
+                    value={form.inspectionNumber}
+                    onChange={(e) => setForm({ ...form, inspectionNumber: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="inspectionDate">Inspection Date</Label>
+                <Input
+                  id="inspectionDate"
+                  type="date"
+                  value={form.inspectionDate}
+                  onChange={(e) => setForm({ ...form, inspectionDate: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>Attendees</Label>
+                <div className="space-y-2 mt-1">
+                  {(JSON.parse(form.attendees) as { name: string; company: string }[]).map((attendee, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <Input
+                        placeholder="Name"
+                        value={attendee.name}
+                        onChange={(e) => {
+                          const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
+                          attendees[index].name = e.target.value;
+                          setForm({ ...form, attendees: JSON.stringify(attendees) });
+                        }}
+                      />
+                      <Input
+                        placeholder="Company / Role"
+                        value={attendee.company}
+                        onChange={(e) => {
+                          const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
+                          attendees[index].company = e.target.value;
+                          setForm({ ...form, attendees: JSON.stringify(attendees) });
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0"
+                        onClick={() => {
+                          const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
+                          attendees.splice(index, 1);
+                          setForm({ ...form, attendees: JSON.stringify(attendees) });
+                        }}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
+                      attendees.push({ name: "", company: "" });
+                      setForm({ ...form, attendees: JSON.stringify(attendees) });
+                    }}
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add Attendee
+                  </Button>
                 </div>
               </div>
               <Button type="submit" className="w-full" disabled={createMutation.isPending} data-testid="button-submit-project">

@@ -34,6 +34,7 @@ export interface IStorage {
   // Photos
   getPhotosByDefect(defectId: number): Promise<Photo[]>;
   createPhoto(photo: InsertPhoto): Promise<Photo>;
+  updatePhotoCaption(id: number, caption: string): Promise<Photo | undefined>;
   deletePhoto(id: number): Promise<Photo | undefined>;
 }
 
@@ -106,6 +107,9 @@ export class DatabaseStorage implements IStorage {
   }
   async createPhoto(photo: InsertPhoto): Promise<Photo> {
     return db.insert(photos).values(photo).returning().get();
+  }
+  async updatePhotoCaption(id: number, caption: string): Promise<Photo | undefined> {
+    return db.update(photos).set({ caption }).where(eq(photos.id, id)).returning().get();
   }
   async deletePhoto(id: number): Promise<Photo | undefined> {
     const photo = db.select().from(photos).where(eq(photos.id, id)).get();

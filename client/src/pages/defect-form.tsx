@@ -9,9 +9,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic } from "lucide-react";
+import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo } from "@shared/schema";
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -209,6 +210,35 @@ export default function DefectForm() {
     }
   };
 
+  // Caption state - keyed by photo id
+  const [captions, setCaptions] = useState<Record<number, string>>({});
+
+  // Initialize captions from loaded photos
+  useEffect(() => {
+    if (photos.length > 0) {
+      const caps: Record<number, string> = {};
+      photos.forEach((p) => { caps[p.id] = p.caption || ""; });
+      setCaptions(caps);
+    }
+  }, [photos]);
+
+  const handleCaptionSave = async (photoId: number, caption: string) => {
+    try {
+      await apiRequest("PATCH", `/api/photos/${photoId}`, { caption });
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/photos`] });
+    } catch {
+      toast({ title: "Failed to save caption", variant: "destructive" });
+    }
+  };
+
+  // Debounced save for caption edits
+  const captionTimers = useRef<Record<number, NodeJS.Timeout>>({});
+  const updateCaption = useCallback((photoId: number, text: string) => {
+    setCaptions((prev) => ({ ...prev, [photoId]: text }));
+    if (captionTimers.current[photoId]) clearTimeout(captionTimers.current[photoId]);
+    captionTimers.current[photoId] = setTimeout(() => handleCaptionSave(photoId, text), 800);
+  }, [defectId]);
+
   const handleDeletePhoto = async (photoId: number) => {
     try {
       await apiRequest("DELETE", `/api/photos/${photoId}`);
@@ -398,7 +428,12 @@ export default function DefectForm() {
 
         {/* Comment */}
         <div>
-          <Label htmlFor="comment">Comment</Label>
+          <div className="flex items-center gap-2 mb-1">
+            <Label htmlFor="comment">Observation</Label>
+            <DictationButton
+              onTranscript={(text) => setForm((prev) => ({ ...prev, comment: prev.comment + (prev.comment ? " " : "") + text }))}
+            />
+          </div>
           <Textarea
             id="comment"
             placeholder="Describe the defect observed..."
@@ -412,7 +447,12 @@ export default function DefectForm() {
 
         {/* Action Required */}
         <div>
-          <Label htmlFor="actionRequired">Action Required</Label>
+          <div className="flex items-center gap-2 mb-1">
+            <Label htmlFor="actionRequired">Action Required</Label>
+            <DictationButton
+              onTranscript={(text) => setForm((prev) => ({ ...prev, actionRequired: prev.actionRequired + (prev.actionRequired ? " " : "") + text }))}
+            />
+          </div>
           <Textarea
             id="actionRequired"
             placeholder="What needs to be done to rectify this defect?"
@@ -509,22 +549,38 @@ export default function DefectForm() {
                     data-testid={`photo-slot-${slot.key}`}
                   >
                     {photo ? (
-                      <div className="relative">
-                        <img
-                          src={`${API_BASE}/api/uploads/${photo.filename}`}
-                          alt={slot.label}
-                          className="w-full aspect-[4/3] object-cover"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePhoto(photo.id)}
-                          className="absolute top-2 right-2 p-1 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors"
-                          data-testid={`button-delete-photo-${slot.key}`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                        <div className={`absolute bottom-0 left-0 right-0 px-2 py-1.5 text-xs font-medium ${isCompleteSlot ? "bg-green-600/90 text-white" : "bg-black/50 text-white"}`}>
-                          {slot.label}
+                      <div>
+                        <div className="relative">
+                          <img
+                            src={`${API_BASE}/api/uploads/${photo.filename}`}
+                            alt={slot.label}
+                            className="w-full aspect-[4/3] object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePhoto(photo.id)}
+                            className="absolute top-2 right-2 p-1 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors"
+                            data-testid={`button-delete-photo-${slot.key}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                          <div className={`absolute bottom-0 left-0 right-0 px-2 py-1.5 text-xs font-medium ${isCompleteSlot ? "bg-green-600/90 text-white" : "bg-black/50 text-white"}`}>
+                            {slot.label}
+                          </div>
+                        </div>
+                        <div className="flex gap-1 p-1.5 bg-muted/30">
+                          <input
+                            type="text"
+                            placeholder="Add comment..."
+                            value={captions[photo.id] ?? ""}
+                            onChange={(e) => updateCaption(photo.id, e.target.value)}
+                            className="flex-1 text-xs px-2 py-1 rounded border bg-background placeholder:text-muted-foreground/60"
+                            data-testid={`input-caption-${slot.key}`}
+                          />
+                          <DictationButton
+                            onTranscript={(text) => updateCaption(photo.id, (captions[photo.id] ?? "") + (captions[photo.id] ? " " : "") + text)}
+                            className="shrink-0"
+                          />
                         </div>
                       </div>
                     ) : (

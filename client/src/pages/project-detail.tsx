@@ -212,7 +212,9 @@ export default function ProjectDetail() {
         doc.setFontSize(7);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(100);
-        doc.text(slotLabels[photo.slot] || photo.slot, x, y + imgH + 3);
+        const photoLabel = slotLabels[photo.slot] || photo.slot;
+        const photoCaption = photo.caption ? ` — ${photo.caption}` : "";
+        doc.text(photoLabel + photoCaption, x, y + imgH + 3);
         doc.setTextColor(0);
       }
     }
@@ -341,14 +343,28 @@ export default function ProjectDetail() {
       doc.text("1.2 Inspection", margin, y);
       y += 8;
 
+      // Build inspection table rows dynamically with new fields
+      const inspRows: string[][] = [];
+      if (data.project.inspectionDate) inspRows.push(["Date", formatReportDate(data.project.inspectionDate)]);
+      else inspRows.push(["Date", formatReportDate(new Date().toISOString())]);
+      if (data.project.projectNumber) inspRows.push(["Project Number", data.project.projectNumber]);
+      if (data.project.inspectionNumber) inspRows.push(["Inspection Number", data.project.inspectionNumber]);
+      inspRows.push(["Inspector", data.project.inspector]);
+      inspRows.push(["Location", data.project.address]);
+      inspRows.push(["Client", data.project.client]);
+
+      // Attendees
+      try {
+        const attendees = JSON.parse(data.project.attendees || "[]");
+        if (attendees.length > 0) {
+          const attendeeStr = attendees.map((a: any) => `${a.name} (${a.company})`).join(", ");
+          inspRows.push(["Attendees", attendeeStr]);
+        }
+      } catch {}
+
       autoTable(doc, {
         startY: y,
-        body: [
-          ["Date", formatReportDate(new Date().toISOString())],
-          ["Inspector", data.project.inspector],
-          ["Location", data.project.address],
-          ["Client", data.project.client],
-        ],
+        body: inspRows,
         margin: { left: margin, right: margin },
         styles: { fontSize: 9, cellPadding: 3 },
         columnStyles: {
@@ -672,13 +688,25 @@ export default function ProjectDetail() {
         spacing: { after: 100 },
       }));
 
-      // Inspection table
-      const inspectionData = [
-        ["Date", reportDate],
-        ["Inspector", data.project.inspector],
-        ["Locations covered", data.project.address],
-        ["Client", data.project.client],
-      ];
+      // Inspection table — dynamically built with new fields
+      const inspectionData: string[][] = [];
+      if (data.project.inspectionDate) inspectionData.push(["Date", formatReportDate(data.project.inspectionDate)]);
+      else inspectionData.push(["Date", reportDate]);
+      if (data.project.projectNumber) inspectionData.push(["Project Number", data.project.projectNumber]);
+      if (data.project.inspectionNumber) inspectionData.push(["Inspection Number", data.project.inspectionNumber]);
+      inspectionData.push(["Inspector", data.project.inspector]);
+      inspectionData.push(["Locations covered", data.project.address]);
+      inspectionData.push(["Client", data.project.client]);
+
+      // Attendees
+      try {
+        const attendees = JSON.parse(data.project.attendees || "[]");
+        if (attendees.length > 0) {
+          attendees.forEach((a: any) => {
+            inspectionData.push([a.company || a.name, a.name]);
+          });
+        }
+      } catch {}
 
       introChildren.push(new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
@@ -811,14 +839,23 @@ export default function ProjectDetail() {
                   }));
                 }
 
+                const captionText = photo.caption ? ` \u2014 ${photo.caption}` : "";
                 cellChildren.push(new Paragraph({
-                  children: [new TextRun({
-                    text: slotLabels[photo.slot] || photo.slot,
-                    bold: true,
-                    size: 16,
-                    font: "Aptos",
-                    color: photo.slot === "complete" ? "228B22" : "666666",
-                  })],
+                  children: [
+                    new TextRun({
+                      text: slotLabels[photo.slot] || photo.slot,
+                      bold: true,
+                      size: 16,
+                      font: "Aptos",
+                      color: photo.slot === "complete" ? "228B22" : "666666",
+                    }),
+                    ...(captionText ? [new TextRun({
+                      text: captionText,
+                      size: 14,
+                      font: "Aptos",
+                      color: "888888",
+                    })] : []),
+                  ],
                   alignment: AlignmentType.CENTER,
                   spacing: { before: 40 },
                 }));

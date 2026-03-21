@@ -159,6 +159,13 @@ export async function registerRoutes(
     res.status(201).json(photo);
   });
 
+  // Update photo caption
+  app.patch("/api/photos/:id", async (req, res) => {
+    const photo = await storage.updatePhotoCaption(Number(req.params.id), req.body.caption || "");
+    if (!photo) return res.status(404).json({ message: "Photo not found" });
+    res.json(photo);
+  });
+
   app.delete("/api/photos/:id", async (req, res) => {
     const photo = await storage.deletePhoto(Number(req.params.id));
     if (photo) {

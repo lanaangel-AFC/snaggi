@@ -10,6 +10,10 @@ export const projects = sqliteTable("projects", {
   inspector: text("inspector").notNull(),
   afcReference: text("afc_reference").default(""),
   revision: text("revision").default("01"),
+  projectNumber: text("project_number").default(""),
+  inspectionNumber: text("inspection_number").default(""),
+  inspectionDate: text("inspection_date").default(""),
+  attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
   createdAt: text("created_at").notNull(),
 });
 
