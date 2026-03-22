@@ -18,6 +18,51 @@ const dbPath = path.join(dataDir, "data.db");
 const sqlite = new Database(dbPath);
 sqlite.pragma("journal_mode = WAL");
 
+// Auto-create tables on startup (no need for drizzle-kit push on deploy)
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    client TEXT NOT NULL,
+    inspector TEXT NOT NULL,
+    afc_reference TEXT DEFAULT '',
+    revision TEXT DEFAULT '01',
+    project_number TEXT DEFAULT '',
+    inspection_number TEXT DEFAULT '',
+    inspection_date TEXT DEFAULT '',
+    attendees TEXT DEFAULT '[]',
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS defects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    uid TEXT NOT NULL,
+    date_opened TEXT NOT NULL,
+    date_closed TEXT,
+    comment TEXT NOT NULL,
+    action_required TEXT NOT NULL,
+    assigned_to TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    verification_method TEXT NOT NULL,
+    verification_person TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+  );
+  CREATE TABLE IF NOT EXISTS photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    defect_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    caption TEXT,
+    slot TEXT NOT NULL DEFAULT 'wip1',
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL
+  );
+`);
+
 export const db = drizzle(sqlite);
 export { dataDir };
 
