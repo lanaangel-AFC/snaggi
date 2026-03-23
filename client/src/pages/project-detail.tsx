@@ -161,12 +161,19 @@ export default function ProjectDetail() {
     },
   });
 
+  // Active defects (open, type=defect)
   const activeDefects = useMemo(() =>
     defects?.filter((d) => d.status !== "complete" && (d as any).recordType !== "observation") ?? [], [defects]);
-  const completedDefects = useMemo(() =>
-    defects?.filter((d) => d.status === "complete" && (d as any).recordType !== "observation")
+  // Active observations (open, type=observation)
+  const activeObservations = useMemo(() =>
+    defects?.filter((d) => d.status !== "complete" && (d as any).recordType === "observation") ?? [], [defects]);
+  // All completed (both defects and observations)
+  const completedAll = useMemo(() =>
+    defects?.filter((d) => d.status === "complete")
       .sort((a, b) => (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "")) ?? [],
     [defects]);
+  // Keep these for export compatibility
+  const completedDefects = completedAll;
   const observations = useMemo(() =>
     defects?.filter((d) => (d as any).recordType === "observation") ?? [], [defects]);
 
@@ -1350,17 +1357,21 @@ export default function ProjectDetail() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-4 gap-3 mb-6">
         <Card className="p-3 text-center">
           <div className="text-2xl font-semibold">{defects?.length ?? 0}</div>
           <div className="text-xs text-muted-foreground">Total</div>
         </Card>
         <Card className="p-3 text-center">
           <div className="text-2xl font-semibold text-amber-600">{activeDefects.length}</div>
-          <div className="text-xs text-muted-foreground">Active</div>
+          <div className="text-xs text-muted-foreground">Defects</div>
         </Card>
         <Card className="p-3 text-center">
-          <div className="text-2xl font-semibold text-green-600">{completedDefects.length}</div>
+          <div className="text-2xl font-semibold text-blue-600">{activeObservations.length}</div>
+          <div className="text-xs text-muted-foreground">Observations</div>
+        </Card>
+        <Card className="p-3 text-center">
+          <div className="text-2xl font-semibold text-green-600">{completedAll.length}</div>
           <div className="text-xs text-muted-foreground">Completed</div>
         </Card>
       </div>
@@ -1440,7 +1451,7 @@ export default function ProjectDetail() {
               <div className="flex items-center gap-2 mb-3">
                 <AlertTriangle className="w-4 h-4 text-amber-600" />
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                  Active ({activeDefects.length})
+                  Defects ({activeDefects.length})
                 </h2>
               </div>
               <div className="space-y-2">
@@ -1456,16 +1467,16 @@ export default function ProjectDetail() {
             </div>
           )}
 
-          {completedDefects.length > 0 && (
+          {activeObservations.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-3">
-                <Archive className="w-4 h-4 text-green-600" />
+                <Eye className="w-4 h-4 text-blue-600" />
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                  Completed ({completedDefects.length})
+                  Observations ({activeObservations.length})
                 </h2>
               </div>
               <div className="space-y-2">
-                {completedDefects.map((defect) => (
+                {activeObservations.map((defect) => (
                   <DefectCard
                     key={defect.id}
                     defect={defect}
@@ -1477,16 +1488,16 @@ export default function ProjectDetail() {
             </div>
           )}
 
-          {observations.length > 0 && (
+          {completedAll.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-3">
-                <Eye className="w-4 h-4 text-blue-600" />
+                <Archive className="w-4 h-4 text-green-600" />
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                  Observations ({observations.length})
+                  Completed ({completedAll.length})
                 </h2>
               </div>
               <div className="space-y-2">
-                {observations.map((defect) => (
+                {completedAll.map((defect) => (
                   <DefectCard
                     key={defect.id}
                     defect={defect}
