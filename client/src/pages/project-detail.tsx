@@ -14,10 +14,22 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
-  ChevronDown, FileDown, Eye
+  ChevronDown, FileDown, Eye, Settings, X
 } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Defect, Photo } from "@shared/schema";
 import { useState, useMemo } from "react";
+
+const STANDARD_ELEVATIONS = [
+  "North", "North East", "East", "South East",
+  "South", "South West", "West", "North West",
+];
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -95,6 +107,41 @@ export default function ProjectDetail() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [generating, setGenerating] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [customElevation, setCustomElevation] = useState("");
+
+  // Initialize edit form when project loads
+  const openEditDialog = () => {
+    if (!project) return;
+    setEditForm({
+      name: project.name,
+      address: project.address,
+      client: project.client,
+      inspector: project.inspector,
+      afcReference: (project as any).afcReference || "",
+      revision: (project as any).revision || "01",
+      inspectionNumber: (project as any).inspectionNumber || "",
+      inspectionDate: (project as any).inspectionDate || "",
+      locationsCovered: (project as any).locationsCovered || "",
+      elevations: (project as any).elevations || "[]",
+      attendees: (project as any).attendees || "[]",
+    });
+    setCustomElevation("");
+    setEditOpen(true);
+  };
+
+  const updateProjectMutation = useMutation({
+    mutationFn: async (data: Record<string, string>) => {
+      const res = await apiRequest("PATCH", `/api/projects/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
+      setEditOpen(false);
+      toast({ title: "Project updated" });
+    },
+  });
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", id],
@@ -1173,7 +1220,133 @@ export default function ProjectDetail() {
               </span>
             </div>
           </div>
+          <Button variant="ghost" size="icon" onClick={openEditDialog} data-testid="button-edit-project">
+            <Settings className="w-4 h-4" />
+          </Button>
         </div>
+
+        {/* Edit Project Dialog */}
+        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Project</DialogTitle>
+            </DialogHeader>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                updateProjectMutation.mutate(editForm);
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <Label>Project Name</Label>
+                <Input value={editForm.name || ""} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} required />
+              </div>
+              <div>
+                <Label>Site Address</Label>
+                <Input value={editForm.address || ""} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} required />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Client</Label>
+                  <Input value={editForm.client || ""} onChange={(e) => setEditForm({ ...editForm, client: e.target.value })} required />
+                </div>
+                <div>
+                  <Label>Inspector</Label>
+                  <Input value={editForm.inspector || ""} onChange={(e) => setEditForm({ ...editForm, inspector: e.target.value })} required />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>AFC Reference</Label>
+                  <Input value={editForm.afcReference || ""} onChange={(e) => setEditForm({ ...editForm, afcReference: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Revision</Label>
+                  <Input value={editForm.revision || ""} onChange={(e) => setEditForm({ ...editForm, revision: e.target.value })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Inspection Number</Label>
+                  <Input value={editForm.inspectionNumber || ""} onChange={(e) => setEditForm({ ...editForm, inspectionNumber: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Inspection Date</Label>
+                  <Input type="date" value={editForm.inspectionDate || ""} onChange={(e) => setEditForm({ ...editForm, inspectionDate: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <Label>Locations Covered</Label>
+                <Textarea value={editForm.locationsCovered || ""} onChange={(e) => setEditForm({ ...editForm, locationsCovered: e.target.value })} rows={2} />
+              </div>
+              {/* Elevations picker */}
+              <div>
+                <Label className="mb-2 block">Elevations</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {STANDARD_ELEVATIONS.map((elev) => {
+                    const selected: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                    return (
+                      <label key={elev} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={selected.includes(elev)}
+                          onCheckedChange={(checked) => {
+                            const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                            if (checked) { sel.push(elev); } else { const idx = sel.indexOf(elev); if (idx !== -1) sel.splice(idx, 1); }
+                            setEditForm({ ...editForm, elevations: JSON.stringify(sel) });
+                          }}
+                        />
+                        {elev}
+                      </label>
+                    );
+                  })}
+                </div>
+                {(() => {
+                  const selected: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                  const custom = selected.filter((e) => !STANDARD_ELEVATIONS.includes(e));
+                  return custom.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {custom.map((c) => (
+                        <span key={c} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs">
+                          {c}
+                          <button type="button" onClick={() => {
+                            const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                            setEditForm({ ...editForm, elevations: JSON.stringify(sel.filter((e) => e !== c)) });
+                          }} className="text-muted-foreground hover:text-destructive"><X className="w-3 h-3" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+                <div className="flex gap-2 mt-2">
+                  <Input
+                    placeholder="Add custom elevation..."
+                    value={customElevation}
+                    onChange={(e) => setCustomElevation(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && customElevation.trim()) {
+                        e.preventDefault();
+                        const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                        if (!sel.includes(customElevation.trim())) { sel.push(customElevation.trim()); setEditForm({ ...editForm, elevations: JSON.stringify(sel) }); }
+                        setCustomElevation("");
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => {
+                    if (customElevation.trim()) {
+                      const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                      if (!sel.includes(customElevation.trim())) { sel.push(customElevation.trim()); setEditForm({ ...editForm, elevations: JSON.stringify(sel) }); }
+                      setCustomElevation("");
+                    }
+                  }}><Plus className="w-4 h-4" /></Button>
+                </div>
+              </div>
+              <Button type="submit" className="w-full" disabled={updateProjectMutation.isPending}>
+                {updateProjectMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Stats */}

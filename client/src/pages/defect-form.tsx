@@ -391,6 +391,27 @@ export default function DefectForm() {
               )}
             </Badge>
           )}
+          {isEdit && (
+            <button
+              type="button"
+              onClick={async () => {
+                const newType = recordType === "defect" ? "observation" : "defect";
+                setRecordType(newType);
+                try {
+                  await apiRequest("PATCH", `/api/defects/${defectId}`, { recordType: newType });
+                  queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
+                  toast({ title: `Converted to ${newType}` });
+                } catch {
+                  toast({ title: "Failed to convert", variant: "destructive" });
+                  setRecordType(recordType);
+                }
+              }}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+              data-testid="button-convert-type"
+            >
+              Convert to {recordType === "defect" ? "Observation" : "Defect"}
+            </button>
+          )}
         </div>
         {isEdit && (
           <div>
