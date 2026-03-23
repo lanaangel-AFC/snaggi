@@ -27,8 +27,8 @@ export const defects = sqliteTable("defects", {
   dateClosed: text("date_closed"),
   comment: text("comment").notNull(),
   actionRequired: text("action_required").notNull(),
-  assignedTo: text("assigned_to").notNull(),
-  dueDate: text("due_date").notNull(),
+  assignedTo: text("assigned_to").default(""),
+  dueDate: text("due_date").default(""),
   verificationMethod: text("verification_method").notNull(),
   verificationPerson: text("verification_person").notNull(),
   status: text("status").notNull().default("open"), // open, complete

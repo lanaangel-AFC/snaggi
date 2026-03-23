@@ -635,7 +635,6 @@ export default function DefectForm() {
               type="date"
               value={form.dueDate}
               onChange={set("dueDate")}
-              required
               data-testid="input-due-date"
             />
           </div>
