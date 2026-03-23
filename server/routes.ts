@@ -104,6 +104,14 @@ export async function registerRoutes(
     if (!uidPrefix) return res.status(400).json({ message: "UID prefix (drop-level-worktype) is required" });
     // Use the client-provided UID if they set a custom number, otherwise auto-generate
     const uid = req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix);
+
+    // Check for duplicate UID within this project
+    const existingDefects = await storage.getDefectsByProject(projectId);
+    const duplicate = existingDefects.find((d) => d.uid === uid);
+    if (duplicate) {
+      return res.status(400).json({ message: `UID "${uid}" is already in use in this project. Please change the Number field.` });
+    }
+
     const { uidPrefix: _removed, uidOverride: _removed2, ...rest } = req.body;
     const recordType = rest.recordType || "defect";
     const data = { ...rest, projectId, uid, recordType };

@@ -507,13 +507,14 @@ export default function ProjectDetail() {
       y += 8;
 
       // Summary table (all items — defects + observations, open + complete)
-      const summaryHead = [["ID", "Type", "Location", "Observation", "Action Required", "Status"]];
+      const summaryHead = [["ID", "Type", "Location", "Observation", "Action Required", "By Date", "Status"]];
       const summaryBody = allDefects.map((d: any) => [
         d.uid,
         d.recordType === "observation" ? "Obs" : "Defect",
         deriveLocation(d.uid),
-        d.comment.length > 50 ? d.comment.substring(0, 47) + "..." : d.comment,
-        d.actionRequired.length > 40 ? d.actionRequired.substring(0, 37) + "..." : d.actionRequired,
+        d.comment.length > 45 ? d.comment.substring(0, 42) + "..." : d.comment,
+        d.actionRequired.length > 35 ? d.actionRequired.substring(0, 32) + "..." : d.actionRequired,
+        d.dueDate || "—",
         d.status === "complete" ? "Complete" : "Open",
       ]);
 
@@ -523,7 +524,7 @@ export default function ProjectDetail() {
           head: summaryHead,
           body: summaryBody,
           margin: { left: margin, right: margin },
-          styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak", valign: "top" },
+          styles: { fontSize: 6.5, cellPadding: 1.5, overflow: "linebreak", valign: "top" },
           headStyles: {
             fillColor: [255, 255, 255],
             textColor: [...CAPTION_BLUE],
@@ -532,12 +533,13 @@ export default function ProjectDetail() {
             lineColor: [...DARK_TEXT],
           },
           columnStyles: {
-            0: { cellWidth: 22 },
-            1: { cellWidth: 14 },
-            2: { cellWidth: 28 },
-            3: { cellWidth: 48 },
-            4: { cellWidth: 38 },
+            0: { cellWidth: 20 },
+            1: { cellWidth: 12 },
+            2: { cellWidth: 24 },
+            3: { cellWidth: 42 },
+            4: { cellWidth: 34 },
             5: { cellWidth: 18 },
+            6: { cellWidth: 16 },
           },
           didDrawPage: () => { addHeader(); addFooter(); },
           rowPageBreak: "auto",
@@ -1028,8 +1030,8 @@ export default function ProjectDetail() {
       }));
 
       // Summary table (all items — defects + observations, open + complete)
-      const summaryHeaderLabels = ["ID", "Type", "Location", "Observation", "Action Required", "Status"];
-      const summaryHeaderWidths = [900, 700, 1300, 3200, 2600, 1000];
+      const summaryHeaderLabels = ["ID", "Type", "Location", "Observation", "Action Required", "By Date", "Status"];
+      const summaryHeaderWidths = [850, 600, 1200, 2800, 2300, 1000, 950];
 
       const summaryTableRows: any[] = [];
 
@@ -1058,8 +1060,9 @@ export default function ProjectDetail() {
           defect.uid,
           typeText,
           deriveLocation(defect.uid),
-          defect.comment.length > 70 ? defect.comment.substring(0, 67) + "..." : defect.comment,
-          defect.actionRequired.length > 50 ? defect.actionRequired.substring(0, 47) + "..." : defect.actionRequired,
+          defect.comment.length > 60 ? defect.comment.substring(0, 57) + "..." : defect.comment,
+          defect.actionRequired.length > 45 ? defect.actionRequired.substring(0, 42) + "..." : defect.actionRequired,
+          defect.dueDate || "\u2014",
           statusText,
         ];
         summaryTableRows.push(new TableRow({
@@ -1069,9 +1072,9 @@ export default function ProjectDetail() {
               children: [new Paragraph({
                 children: [new TextRun({
                   text,
-                  size: 15,
+                  size: 14,
                   font: "Aptos",
-                  color: i === 5 ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined),
+                  color: i === 6 ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined),
                   bold: i === 0,
                 })],
                 spacing: { before: 25, after: 25 },
