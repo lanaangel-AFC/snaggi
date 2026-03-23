@@ -161,16 +161,40 @@ export default function ProjectDetail() {
     },
   });
 
+  // Sort by: Drop (asc), Level (desc/highest first), WorkType (grouped), Number (asc)
+  const sortByUid = (a: Defect, b: Defect): number => {
+    const pa = a.uid.split("-");
+    const pb = b.uid.split("-");
+    // Handle both 4-part and 5-part UIDs (with/without elevation prefix)
+    const aHasElev = pa.length >= 5;
+    const bHasElev = pb.length >= 5;
+    const aDrop = parseInt(pa[aHasElev ? 1 : 0] || "0", 10);
+    const bDrop = parseInt(pb[bHasElev ? 1 : 0] || "0", 10);
+    if (aDrop !== bDrop) return aDrop - bDrop;
+    const aLevel = parseInt(pa[aHasElev ? 2 : 1] || "0", 10);
+    const bLevel = parseInt(pb[bHasElev ? 2 : 1] || "0", 10);
+    if (aLevel !== bLevel) return bLevel - aLevel; // highest first
+    const aWork = pa[aHasElev ? 3 : 2] || "";
+    const bWork = pb[bHasElev ? 3 : 2] || "";
+    if (aWork !== bWork) return aWork.localeCompare(bWork);
+    const aNum = parseInt(pa[aHasElev ? 4 : 3] || "0", 10);
+    const bNum = parseInt(pb[bHasElev ? 4 : 3] || "0", 10);
+    return aNum - bNum;
+  };
+
   // Active defects (open, type=defect)
   const activeDefects = useMemo(() =>
-    defects?.filter((d) => d.status !== "complete" && (d as any).recordType !== "observation") ?? [], [defects]);
+    (defects?.filter((d) => d.status !== "complete" && (d as any).recordType !== "observation") ?? []).sort(sortByUid), [defects]);
   // Active observations (open, type=observation)
   const activeObservations = useMemo(() =>
-    defects?.filter((d) => d.status !== "complete" && (d as any).recordType === "observation") ?? [], [defects]);
-  // All completed (both defects and observations)
+    (defects?.filter((d) => d.status !== "complete" && (d as any).recordType === "observation") ?? []).sort(sortByUid), [defects]);
+  // All completed (both defects and observations) — most recent first, then by UID within same date
   const completedAll = useMemo(() =>
-    defects?.filter((d) => d.status === "complete")
-      .sort((a, b) => (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "")) ?? [],
+    (defects?.filter((d) => d.status === "complete") ?? []).sort((a, b) => {
+      const dateCompare = (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "");
+      if (dateCompare !== 0) return dateCompare;
+      return sortByUid(a, b);
+    }),
     [defects]);
   // Keep these for export compatibility
   const completedDefects = completedAll;
@@ -482,13 +506,14 @@ export default function ProjectDetail() {
       doc.text("Based on our observations, we recommend the following actions.", margin, y);
       y += 8;
 
-      // Summary table (compact overview)
-      const summaryHead = [["ID", "Location", "Observation", "Action Required", "Status"]];
-      const summaryBody = defectsOnly.map((d: any) => [
+      // Summary table (all items — defects + observations, open + complete)
+      const summaryHead = [["ID", "Type", "Location", "Observation", "Action Required", "Status"]];
+      const summaryBody = allDefects.map((d: any) => [
         d.uid,
+        d.recordType === "observation" ? "Obs" : "Defect",
         deriveLocation(d.uid),
-        d.comment.length > 60 ? d.comment.substring(0, 57) + "..." : d.comment,
-        d.actionRequired.length > 50 ? d.actionRequired.substring(0, 47) + "..." : d.actionRequired,
+        d.comment.length > 50 ? d.comment.substring(0, 47) + "..." : d.comment,
+        d.actionRequired.length > 40 ? d.actionRequired.substring(0, 37) + "..." : d.actionRequired,
         d.status === "complete" ? "Complete" : "Open",
       ]);
 
@@ -507,18 +532,19 @@ export default function ProjectDetail() {
             lineColor: [...DARK_TEXT],
           },
           columnStyles: {
-            0: { cellWidth: 24 },
-            1: { cellWidth: 30 },
-            2: { cellWidth: 55 },
-            3: { cellWidth: 45 },
-            4: { cellWidth: 20 },
+            0: { cellWidth: 22 },
+            1: { cellWidth: 14 },
+            2: { cellWidth: 28 },
+            3: { cellWidth: 48 },
+            4: { cellWidth: 38 },
+            5: { cellWidth: 18 },
           },
           didDrawPage: () => { addHeader(); addFooter(); },
           rowPageBreak: "auto",
         });
       } else {
         doc.setFontSize(9);
-        doc.text("No defects recorded.", margin, y);
+        doc.text("No items recorded.", margin, y);
       }
 
       // Active defects — 1 per page with full details + photos
@@ -1001,9 +1027,9 @@ export default function ProjectDetail() {
         spacing: { after: 200 },
       }));
 
-      // Summary table (compact overview, no Photo column)
-      const summaryHeaderLabels = ["ID", "Location", "Observation", "Action Required", "Status"];
-      const summaryHeaderWidths = [1000, 1400, 3500, 2800, 1000];
+      // Summary table (all items — defects + observations, open + complete)
+      const summaryHeaderLabels = ["ID", "Type", "Location", "Observation", "Action Required", "Status"];
+      const summaryHeaderWidths = [900, 700, 1300, 3200, 2600, 1000];
 
       const summaryTableRows: any[] = [];
 
@@ -1024,14 +1050,16 @@ export default function ProjectDetail() {
         ),
       }));
 
-      for (const defect of defectsOnly) {
+      for (const defect of allDefects) {
         const statusText = defect.status === "complete" ? "Complete" : "Open";
+        const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
         const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
         const cellTexts = [
           defect.uid,
+          typeText,
           deriveLocation(defect.uid),
-          defect.comment.length > 80 ? defect.comment.substring(0, 77) + "..." : defect.comment,
-          defect.actionRequired.length > 60 ? defect.actionRequired.substring(0, 57) + "..." : defect.actionRequired,
+          defect.comment.length > 70 ? defect.comment.substring(0, 67) + "..." : defect.comment,
+          defect.actionRequired.length > 50 ? defect.actionRequired.substring(0, 47) + "..." : defect.actionRequired,
           statusText,
         ];
         summaryTableRows.push(new TableRow({
@@ -1043,7 +1071,7 @@ export default function ProjectDetail() {
                   text,
                   size: 15,
                   font: "Aptos",
-                  color: i === 4 ? (statusText === "Complete" ? "228B22" : "C89600") : undefined,
+                  color: i === 5 ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined),
                   bold: i === 0,
                 })],
                 spacing: { before: 25, after: 25 },
@@ -1054,7 +1082,7 @@ export default function ProjectDetail() {
         }));
       }
 
-      if (defectsOnly.length > 0) {
+      if (allDefects.length > 0) {
         obsChildren.push(new Table({
           width: { size: 9700, type: WidthType.DXA },
           layout: TableLayoutType.FIXED,
@@ -1062,7 +1090,7 @@ export default function ProjectDetail() {
         }));
       } else {
         obsChildren.push(new Paragraph({
-          children: [new TextRun({ text: "No defects recorded.", size: 20, font: "Aptos", color: "999999", italics: true })],
+          children: [new TextRun({ text: "No items recorded.", size: 20, font: "Aptos", color: "999999", italics: true })],
         }));
       }
 
