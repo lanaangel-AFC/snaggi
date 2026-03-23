@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
-  ChevronDown, FileDown
+  ChevronDown, FileDown, Eye
 } from "lucide-react";
 import type { Project, Defect, Photo } from "@shared/schema";
 import { useState, useMemo } from "react";
@@ -56,10 +56,26 @@ async function loadAfcLogo(): Promise<{ dataUrl: string; buffer: ArrayBuffer } |
   }
 }
 
-// Derive location string from defect UID (e.g. "01-13-CR-01" -> "Drop 1, Level 13")
+// Elevation code to full name mapping
+const ELEVATION_NAMES: Record<string, string> = {
+  N: "North", S: "South", E: "East", W: "West",
+  NE: "North East", NW: "North West", SE: "South East", SW: "South West",
+};
+
+// Derive location string from defect UID
+// New format: "N-01-13-CR-01" -> "North Elevation, Drop 1, Level 13"
+// Old format: "01-13-CR-01" -> "Drop 1, Level 13"
 function deriveLocation(uid: string): string {
   const parts = uid.split("-");
+  if (parts.length >= 5) {
+    // New format: Elevation-Drop-Level-WorkType-Number
+    const elevName = ELEVATION_NAMES[parts[0]] || parts[0];
+    const drop = parseInt(parts[1], 10);
+    const level = parseInt(parts[2], 10);
+    return `${elevName} Elevation, Drop ${drop}, Level ${level}`;
+  }
   if (parts.length >= 2) {
+    // Old format: Drop-Level-WorkType-Number
     const drop = parseInt(parts[0], 10);
     const level = parseInt(parts[1], 10);
     return `Drop ${drop}, Level ${level}`;
@@ -99,11 +115,13 @@ export default function ProjectDetail() {
   });
 
   const activeDefects = useMemo(() =>
-    defects?.filter((d) => d.status !== "complete") ?? [], [defects]);
+    defects?.filter((d) => d.status !== "complete" && (d as any).recordType !== "observation") ?? [], [defects]);
   const completedDefects = useMemo(() =>
-    defects?.filter((d) => d.status === "complete")
+    defects?.filter((d) => d.status === "complete" && (d as any).recordType !== "observation")
       .sort((a, b) => (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "")) ?? [],
     [defects]);
+  const observations = useMemo(() =>
+    defects?.filter((d) => (d as any).recordType === "observation") ?? [], [defects]);
 
   // ==================== SHARED: Render a single defect page (PDF) ====================
   // This renders 1 defect per page: info table + 2x2 photo grid
@@ -117,8 +135,8 @@ export default function ProjectDetail() {
     addFooter();
     let y = 20;
 
-    const slotOrder = ["wip1", "wip2", "wip3", "complete"];
-    const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
+    const slotOrder = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
+    const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", wip4: "WIP 4", wip5: "WIP 5", complete: "Complete" };
 
     // UID heading + status
     doc.setFontSize(14);
@@ -347,10 +365,9 @@ export default function ProjectDetail() {
       const inspRows: string[][] = [];
       if (data.project.inspectionDate) inspRows.push(["Date", formatReportDate(data.project.inspectionDate)]);
       else inspRows.push(["Date", formatReportDate(new Date().toISOString())]);
-      if (data.project.projectNumber) inspRows.push(["Project Number", data.project.projectNumber]);
       if (data.project.inspectionNumber) inspRows.push(["Inspection Number", data.project.inspectionNumber]);
       inspRows.push(["Inspector", data.project.inspector]);
-      inspRows.push(["Location", data.project.address]);
+      inspRows.push(["Locations covered", data.project.locationsCovered || data.project.address]);
       inspRows.push(["Client", data.project.client]);
 
       // Attendees
@@ -389,8 +406,10 @@ export default function ProjectDetail() {
 
       // ======= SECTION 2 - DEFECT REGISTER & RECTIFICATION LOG =======
       const allDefects = [...(data.defects || [])];
-      const openData = allDefects.filter((d: any) => d.status !== "complete");
-      const completedData = allDefects.filter((d: any) => d.status === "complete");
+      const defectsOnly = allDefects.filter((d: any) => d.recordType !== "observation");
+      const observationsOnly = allDefects.filter((d: any) => d.recordType === "observation");
+      const openData = defectsOnly.filter((d: any) => d.status !== "complete");
+      const completedData = defectsOnly.filter((d: any) => d.status === "complete");
 
       doc.addPage();
       addHeader();
@@ -411,7 +430,7 @@ export default function ProjectDetail() {
 
       // Summary table (compact overview)
       const summaryHead = [["ID", "Location", "Observation", "Action Required", "Status"]];
-      const summaryBody = allDefects.map((d: any) => [
+      const summaryBody = defectsOnly.map((d: any) => [
         d.uid,
         deriveLocation(d.uid),
         d.comment.length > 60 ? d.comment.substring(0, 57) + "..." : d.comment,
@@ -477,6 +496,29 @@ export default function ProjectDetail() {
         }
       }
 
+      // ======= SECTION 4 - OBSERVATIONS =======
+      if (observationsOnly.length > 0) {
+        doc.addPage();
+        addHeader();
+        addFooter();
+        y = 20;
+
+        const obsSection = completedData.length > 0 ? "4" : "3";
+        doc.setFontSize(18);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...DARK_TEXT);
+        doc.text(`${obsSection}. Observations`, margin, y);
+        y += 7;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+        doc.text("General observations noted during inspection.", margin, y);
+
+        for (const defect of observationsOnly) {
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
+        }
+      }
+
       doc.save(`${data.project.name.replace(/[^a-zA-Z0-9]/g, "_")}_SVR.pdf`);
       toast({ title: "PDF report downloaded" });
     } catch (err) {
@@ -506,8 +548,10 @@ export default function ProjectDetail() {
       const logo = await loadAfcLogo();
 
       const allDefects = data.defects || [];
-      const openData = allDefects.filter((d: any) => d.status !== "complete");
-      const completedData = allDefects.filter((d: any) => d.status === "complete");
+      const defectsOnly = allDefects.filter((d: any) => d.recordType !== "observation");
+      const observationsOnly = allDefects.filter((d: any) => d.recordType === "observation");
+      const openData = defectsOnly.filter((d: any) => d.status !== "complete");
+      const completedData = defectsOnly.filter((d: any) => d.status === "complete");
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
       const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
 
@@ -692,10 +736,9 @@ export default function ProjectDetail() {
       const inspectionData: string[][] = [];
       if (data.project.inspectionDate) inspectionData.push(["Date", formatReportDate(data.project.inspectionDate)]);
       else inspectionData.push(["Date", reportDate]);
-      if (data.project.projectNumber) inspectionData.push(["Project Number", data.project.projectNumber]);
       if (data.project.inspectionNumber) inspectionData.push(["Inspection Number", data.project.inspectionNumber]);
       inspectionData.push(["Inspector", data.project.inspector]);
-      inspectionData.push(["Locations covered", data.project.address]);
+      inspectionData.push(["Locations covered", data.project.locationsCovered || data.project.address]);
       inspectionData.push(["Client", data.project.client]);
 
       // Attendees
@@ -927,7 +970,7 @@ export default function ProjectDetail() {
         ),
       }));
 
-      for (const defect of allDefects) {
+      for (const defect of defectsOnly) {
         const statusText = defect.status === "complete" ? "Complete" : "Open";
         const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
         const cellTexts = [
@@ -957,7 +1000,7 @@ export default function ProjectDetail() {
         }));
       }
 
-      if (allDefects.length > 0) {
+      if (defectsOnly.length > 0) {
         obsChildren.push(new Table({
           width: { size: 9700, type: WidthType.DXA },
           layout: TableLayoutType.FIXED,
@@ -971,7 +1014,7 @@ export default function ProjectDetail() {
 
       // Active defects — 1 per page with full details + photos
       for (let i = 0; i < openData.length; i++) {
-        if (i > 0 || allDefects.length > 0) {
+        if (i > 0 || defectsOnly.length > 0) {
           obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
         }
         const defectEls = await buildWordDefectPage(openData[i]);
@@ -1031,6 +1074,28 @@ export default function ProjectDetail() {
       // Section 3: Completed works (only if there are completed defects)
       if (completedChildren.length > 0) {
         docSections.push({ properties: sectionProps, children: completedChildren });
+      }
+
+      // Section 4: Observations
+      if (observationsOnly.length > 0) {
+        const obsOnlyChildren: any[] = [];
+        obsOnlyChildren.push(new Paragraph({
+          children: [new TextRun({ text: "Observations", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+          heading: HeadingLevel.HEADING_1,
+          spacing: { after: 80 },
+        }));
+        obsOnlyChildren.push(new Paragraph({
+          children: [new TextRun({ text: "General observations noted during inspection.", size: 18, color: "666666", italics: true, font: "Aptos" })],
+          spacing: { after: 200 },
+        }));
+        for (let i = 0; i < observationsOnly.length; i++) {
+          if (i > 0) {
+            obsOnlyChildren.push(new Paragraph({ children: [new PageBreak()] }));
+          }
+          const defectEls = await buildWordDefectPage(observationsOnly[i]);
+          obsOnlyChildren.push(...defectEls);
+        }
+        docSections.push({ properties: sectionProps, children: obsOnlyChildren });
       }
 
       const wordDoc = new Document({
@@ -1129,10 +1194,16 @@ export default function ProjectDetail() {
 
       {/* Actions */}
       <div className="flex gap-3 mb-6">
-        <Link href={`/projects/${id}/defects/new`}>
+        <Link href={`/projects/${id}/defects/new?type=defect`}>
           <Button data-testid="button-add-defect">
             <Plus className="w-4 h-4 mr-2" />
             Add Defect
+          </Button>
+        </Link>
+        <Link href={`/projects/${id}/defects/new?type=observation`}>
+          <Button variant="secondary" data-testid="button-add-observation">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Observation
           </Button>
         </Link>
 
@@ -1174,12 +1245,20 @@ export default function ProjectDetail() {
           <p className="text-sm text-muted-foreground mb-6 max-w-xs">
             Start your inspection by adding defects with photos and details.
           </p>
-          <Link href={`/projects/${id}/defects/new`}>
-            <Button data-testid="button-empty-add-defect">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Defect
-            </Button>
-          </Link>
+          <div className="flex gap-3">
+            <Link href={`/projects/${id}/defects/new?type=defect`}>
+              <Button data-testid="button-empty-add-defect">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Defect
+              </Button>
+            </Link>
+            <Link href={`/projects/${id}/defects/new?type=observation`}>
+              <Button variant="secondary" data-testid="button-empty-add-observation">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Observation
+              </Button>
+            </Link>
+          </div>
         </div>
       ) : (
         <div className="space-y-8">
@@ -1214,6 +1293,27 @@ export default function ProjectDetail() {
               </div>
               <div className="space-y-2">
                 {completedDefects.map((defect) => (
+                  <DefectCard
+                    key={defect.id}
+                    defect={defect}
+                    projectId={id!}
+                    onDelete={() => deleteMutation.mutate(defect.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {observations.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Eye className="w-4 h-4 text-blue-600" />
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  Observations ({observations.length})
+                </h2>
+              </div>
+              <div className="space-y-2">
+                {observations.map((defect) => (
                   <DefectCard
                     key={defect.id}
                     defect={defect}

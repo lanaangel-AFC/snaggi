@@ -105,7 +105,8 @@ export async function registerRoutes(
     // Use the client-provided UID if they set a custom number, otherwise auto-generate
     const uid = req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix);
     const { uidPrefix: _removed, uidOverride: _removed2, ...rest } = req.body;
-    const data = { ...rest, projectId, uid };
+    const recordType = rest.recordType || "defect";
+    const data = { ...rest, projectId, uid, recordType };
     const parsed = insertDefectSchema.safeParse(data);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
     const defect = await storage.createDefect(parsed.data);
@@ -129,13 +130,13 @@ export async function registerRoutes(
     res.json(photos);
   });
 
-  // Upload photo with slot (wip1, wip2, wip3, complete)
+  // Upload photo with slot (wip1, wip2, wip3, wip4, wip5, complete)
   app.post("/api/defects/:defectId/photos", upload.single("photo"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const slot = req.body.slot || "wip1";
-    const validSlots = ["wip1", "wip2", "wip3", "complete"];
+    const validSlots = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
     if (!validSlots.includes(slot)) {
-      return res.status(400).json({ message: "Invalid slot. Must be wip1, wip2, wip3, or complete" });
+      return res.status(400).json({ message: "Invalid slot. Must be wip1, wip2, wip3, wip4, wip5, or complete" });
     }
 
     const defectId = Number(req.params.defectId);

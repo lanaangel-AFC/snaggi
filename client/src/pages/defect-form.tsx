@@ -9,9 +9,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Plus } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic } from "lucide-react";
 import { DictationButton } from "@/components/DictationButton";
-import type { Defect, Photo } from "@shared/schema";
+import type { Defect, Photo, Project } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -29,7 +29,25 @@ const WORK_TYPES = [
   { code: "FL", label: "Flashing" },
   { code: "RR", label: "Render Repair" },
   { code: "GK", label: "Gasket" },
+  { code: "SR", label: "Steel Repair" },
+  { code: "SM", label: "Steel Removal" },
+  { code: "BR", label: "Brick Repair" },
+  { code: "LR", label: "Lintel Repair" },
+  { code: "SS", label: "Sill Stabilisation" },
+  { code: "GW", label: "General Works" },
   { code: "OT", label: "Other" },
+];
+
+// Elevation options for UID
+const ELEVATIONS = [
+  { code: "N", label: "North" },
+  { code: "S", label: "South" },
+  { code: "E", label: "East" },
+  { code: "W", label: "West" },
+  { code: "NE", label: "North East" },
+  { code: "NW", label: "North West" },
+  { code: "SE", label: "South East" },
+  { code: "SW", label: "South West" },
 ];
 
 // Standardised person roles for dropdowns
@@ -42,13 +60,15 @@ const PERSON_ROLES = [
 ];
 
 const PHOTO_SLOTS = [
-  { key: "wip1", label: "WIP 1", description: "First progress photo" },
-  { key: "wip2", label: "WIP 2", description: "Second progress photo" },
-  { key: "wip3", label: "WIP 3", description: "Third progress photo" },
+  { key: "wip1", label: "WIP 1", description: "Progress photo 1" },
+  { key: "wip2", label: "WIP 2", description: "Progress photo 2" },
+  { key: "wip3", label: "WIP 3", description: "Progress photo 3" },
+  { key: "wip4", label: "WIP 4", description: "Progress photo 4" },
+  { key: "wip5", label: "WIP 5", description: "Progress photo 5" },
   { key: "complete", label: "Complete", description: "Finished repair" },
 ] as const;
 
-type SlotKey = "wip1" | "wip2" | "wip3" | "complete";
+type SlotKey = "wip1" | "wip2" | "wip3" | "wip4" | "wip5" | "complete";
 
 export default function DefectForm() {
   const { projectId, defectId } = useParams<{ projectId: string; defectId?: string }>();
@@ -70,17 +90,41 @@ export default function DefectForm() {
     status: "open",
   });
 
-  // UID components — prefill drop from query param if navigating from "New Defect" button
-  const prefillDrop = useMemo(() => {
-    if (typeof window === "undefined") return "01";
-    const hash = window.location.hash; // e.g. #/projects/2/defects/new?drop=03
+  // Read query params from hash URL
+  const hashParams = useMemo(() => {
+    if (typeof window === "undefined") return new URLSearchParams();
+    const hash = window.location.hash;
     const qIdx = hash.indexOf("?");
-    if (qIdx === -1) return "01";
-    const params = new URLSearchParams(hash.slice(qIdx));
-    return params.get("drop") || "01";
+    if (qIdx === -1) return new URLSearchParams();
+    return new URLSearchParams(hash.slice(qIdx));
   }, []);
 
-  const [drop, setDrop] = useState(prefillDrop);
+  const [recordType, setRecordType] = useState(() => hashParams.get("type") || "defect");
+
+  // Fetch project to get configured elevations
+  const { data: project } = useQuery<Project>({
+    queryKey: ["/api/projects", projectId],
+  });
+
+  // Build elevation options from project config
+  const elevationOptions = useMemo(() => {
+    if (!project?.elevations) return [];
+    try {
+      const configured: string[] = JSON.parse(project.elevations as string);
+      // Map full names to short codes for UID
+      const codeMap: Record<string, string> = {
+        "North": "N", "South": "S", "East": "E", "West": "W",
+        "North East": "NE", "North West": "NW", "South East": "SE", "South West": "SW",
+      };
+      return configured.map((label) => ({
+        code: codeMap[label] || label.substring(0, 3).toUpperCase(),
+        label,
+      }));
+    } catch { return []; }
+  }, [project?.elevations]);
+
+  const [elevation, setElevation] = useState("");
+  const [drop, setDrop] = useState("01");
   const [level, setLevel] = useState("");
   const [workType, setWorkType] = useState("");
   const [seqNumber, setSeqNumber] = useState("01");
@@ -91,11 +135,11 @@ export default function DefectForm() {
 
   // Build the UID prefix from the components
   const uidPrefix = useMemo(() => {
-    if (!drop || !level || !workType) return "";
+    if (!elevation || !drop || !level || !workType) return "";
     const dd = drop.padStart(2, "0");
     const ll = level.padStart(2, "0");
-    return `${dd}-${ll}-${workType}`;
-  }, [drop, level, workType]);
+    return `${elevation}-${dd}-${ll}-${workType}`;
+  }, [elevation, drop, level, workType]);
 
   // Full assembled UID for display
   const assembledUid = useMemo(() => {
@@ -152,8 +196,19 @@ export default function DefectForm() {
         status: existingDefect.status,
       });
       setUid(existingDefect.uid);
+      if ((existingDefect as any).recordType) {
+        setRecordType((existingDefect as any).recordType);
+      }
       const parts = existingDefect.uid.split("-");
-      if (parts.length >= 4) {
+      if (parts.length >= 5) {
+        // New format: Elevation-Drop-Level-WorkType-Number
+        setElevation(parts[0]);
+        setDrop(parts[1]);
+        setLevel(parts[2]);
+        setWorkType(parts[3]);
+        setSeqNumber(parts[4]);
+      } else if (parts.length >= 4) {
+        // Old format: Drop-Level-WorkType-Number
         setDrop(parts[0]);
         setLevel(parts[1]);
         setWorkType(parts[2]);
@@ -181,13 +236,15 @@ export default function DefectForm() {
           ...form,
           uidPrefix,
           uidOverride: assembledUid,
+          recordType,
         });
         return res.json();
       }
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
-      toast({ title: isEdit ? "Defect updated" : "Defect created" });
+      const typeLabel = recordType === "observation" ? "Observation" : "Defect";
+      toast({ title: isEdit ? `${typeLabel} updated` : `${typeLabel} created` });
       if (!isEdit) {
         navigate(`/projects/${projectId}/defects/${data.id}`, { replace: true });
       }
@@ -222,6 +279,19 @@ export default function DefectForm() {
       });
       queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/photos`] });
       toast({ title: `Photo added to ${slot === "complete" ? "Complete" : slot.toUpperCase()}` });
+
+      // Auto-mark as complete when uploading to Complete slot
+      if (slot === "complete" && defectId) {
+        const dateClosed = new Date().toISOString().split("T")[0];
+        setForm((prev) => ({ ...prev, status: "complete", dateClosed }));
+        try {
+          await apiRequest("PATCH", `/api/defects/${defectId}`, { status: "complete", dateClosed });
+          queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
+          toast({ title: `${recordType === "observation" ? "Observation" : "Defect"} marked as complete` });
+        } catch {
+          toast({ title: "Photo uploaded but failed to auto-complete", variant: "destructive" });
+        }
+      }
     } catch {
       toast({ title: "Failed to upload photo", variant: "destructive" });
     } finally {
@@ -288,7 +358,7 @@ export default function DefectForm() {
   const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
-  const canSave = isEdit || (!!uidPrefix && !!seqNumber);
+  const canSave = isEdit || (!!elevation && !!uidPrefix && !!seqNumber);
   const isComplete = form.status === "complete";
 
   return (
@@ -304,7 +374,7 @@ export default function DefectForm() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold tracking-tight">
-            {isEdit ? "Edit Defect" : "New Defect"}
+            {isEdit ? `Edit ${recordType === "observation" ? "Observation" : "Defect"}` : `New ${recordType === "observation" ? "Observation" : "Defect"}`}
           </h1>
           {isEdit && (
             <Badge
@@ -343,7 +413,7 @@ export default function DefectForm() {
         onSubmit={(e) => {
           e.preventDefault();
           if (!canSave) {
-            toast({ title: "Fill in Drop, Level, and Work Type to generate the defect ID", variant: "destructive" });
+            toast({ title: "Fill in Elevation, Drop, Level, and Work Type to generate the defect ID", variant: "destructive" });
             return;
           }
           saveMutation.mutate();
@@ -360,7 +430,26 @@ export default function DefectForm() {
               </span>
             )}
           </div>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+            <div>
+              <Label htmlFor="elevation" className="text-xs">Elevation</Label>
+              <Select
+                value={elevation}
+                onValueChange={setElevation}
+                disabled={isEdit}
+              >
+                <SelectTrigger className="font-mono" data-testid="select-elevation">
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  {elevationOptions.map((el) => (
+                    <SelectItem key={el.code} value={el.code}>
+                      {el.code} — {el.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div>
               <Label htmlFor="drop" className="text-xs">Drop</Label>
               <Input
@@ -433,7 +522,7 @@ export default function DefectForm() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Format: Drop-Level-WorkType-Number. The number auto-suggests but you can change it.
+            Format: Elevation-Drop-Level-WorkType-Number. The number auto-suggests but you can change it.
           </p>
         </Card>
 
@@ -579,7 +668,7 @@ export default function DefectForm() {
             <div className="flex items-center gap-2">
               <Camera className="w-4 h-4 text-muted-foreground" />
               <h3 className="text-sm font-medium">Photos</h3>
-              <span className="text-xs text-muted-foreground">({photos.length}/4)</span>
+              <span className="text-xs text-muted-foreground">({photos.length}/6)</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -710,22 +799,6 @@ export default function DefectForm() {
           {saveMutation.isPending ? "Saving..." : isEdit ? "Update Defect" : "Save Defect"}
         </Button>
 
-        {/* New Defect button — shown when editing, navigates to new form with Drop prefilled */}
-        {isEdit && (
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full"
-            onClick={() => {
-              // Navigate to new defect form; pass current drop as query param
-              navigate(`/projects/${projectId}/defects/new?drop=${encodeURIComponent(drop)}`);
-            }}
-            data-testid="button-new-defect-inline"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            New Defect
-          </Button>
-        )}
       </form>
     </div>
   );

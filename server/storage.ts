@@ -28,9 +28,11 @@ sqlite.exec(`
     inspector TEXT NOT NULL,
     afc_reference TEXT DEFAULT '',
     revision TEXT DEFAULT '01',
-    project_number TEXT DEFAULT '',
+
     inspection_number TEXT DEFAULT '',
     inspection_date TEXT DEFAULT '',
+    locations_covered TEXT DEFAULT '',
+    elevations TEXT DEFAULT '[]',
     attendees TEXT DEFAULT '[]',
     created_at TEXT NOT NULL
   );
@@ -46,7 +48,8 @@ sqlite.exec(`
     due_date TEXT NOT NULL,
     verification_method TEXT NOT NULL,
     verification_person TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open'
+    status TEXT NOT NULL DEFAULT 'open',
+    record_type TEXT NOT NULL DEFAULT 'defect'
   );
   CREATE TABLE IF NOT EXISTS photos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +65,14 @@ sqlite.exec(`
     password TEXT NOT NULL
   );
 `);
+
+// Add new columns to existing tables (safe: ALTER TABLE ADD COLUMN IF NOT EXISTS via try/catch)
+const safeAddColumn = (table: string, col: string, colDef: string) => {
+  try { sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${colDef}`); } catch {}
+};
+safeAddColumn("projects", "locations_covered", "TEXT DEFAULT ''");
+safeAddColumn("projects", "elevations", "TEXT DEFAULT '[]'");
+safeAddColumn("defects", "record_type", "TEXT NOT NULL DEFAULT 'defect'");
 
 export const db = drizzle(sqlite);
 export { dataDir };

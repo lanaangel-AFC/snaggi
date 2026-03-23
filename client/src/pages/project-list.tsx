@@ -6,15 +6,23 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, X, Building2, MapPin, User, Calendar, ChevronRight, Trash2 } from "lucide-react";
 import type { Project } from "@shared/schema";
 import { useState } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
+
+const STANDARD_ELEVATIONS = [
+  "North", "North East", "East", "South East",
+  "South", "South West", "West", "North West",
+];
 
 export default function ProjectList() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", projectNumber: "", inspectionNumber: "", inspectionDate: "", attendees: "[]" });
+  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", inspectionNumber: "", inspectionDate: "", locationsCovered: "", elevations: "[]", attendees: "[]" });
+  const [customElevation, setCustomElevation] = useState("");
 
   const { data: projects, isLoading } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
@@ -31,7 +39,8 @@ export default function ProjectList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       setOpen(false);
-      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", projectNumber: "", inspectionNumber: "", inspectionDate: "", attendees: "[]" });
+      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", inspectionNumber: "", inspectionDate: "", locationsCovered: "", elevations: "[]", attendees: "[]" });
+      setCustomElevation("");
       toast({ title: "Project created" });
     },
   });
@@ -139,25 +148,14 @@ export default function ProjectList() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="projectNumber">Project Number</Label>
-                  <Input
-                    id="projectNumber"
-                    placeholder="e.g. PRJ-001"
-                    value={form.projectNumber}
-                    onChange={(e) => setForm({ ...form, projectNumber: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="inspectionNumber">Inspection Number</Label>
-                  <Input
-                    id="inspectionNumber"
-                    placeholder="e.g. INS-01"
-                    value={form.inspectionNumber}
-                    onChange={(e) => setForm({ ...form, inspectionNumber: e.target.value })}
-                  />
-                </div>
+              <div>
+                <Label htmlFor="inspectionNumber">Inspection Number</Label>
+                <Input
+                  id="inspectionNumber"
+                  placeholder="e.g. INS-01"
+                  value={form.inspectionNumber}
+                  onChange={(e) => setForm({ ...form, inspectionNumber: e.target.value })}
+                />
               </div>
               <div>
                 <Label htmlFor="inspectionDate">Inspection Date</Label>
@@ -167,6 +165,105 @@ export default function ProjectList() {
                   value={form.inspectionDate}
                   onChange={(e) => setForm({ ...form, inspectionDate: e.target.value })}
                 />
+              </div>
+              <div>
+                <Label htmlFor="locationsCovered">Locations Covered</Label>
+                <Textarea
+                  id="locationsCovered"
+                  placeholder="e.g. North elevation levels 1-5, East elevation levels 3-10"
+                  value={form.locationsCovered}
+                  onChange={(e) => setForm({ ...form, locationsCovered: e.target.value })}
+                  rows={2}
+                />
+              </div>
+              {/* Elevations picker */}
+              <div>
+                <Label className="mb-2 block">Elevations</Label>
+                <p className="text-xs text-muted-foreground mb-2">Select the elevations applicable to this project</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {STANDARD_ELEVATIONS.map((elev) => {
+                    const selected: string[] = JSON.parse(form.elevations);
+                    const isChecked = selected.includes(elev);
+                    return (
+                      <label key={elev} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={isChecked}
+                          onCheckedChange={(checked) => {
+                            const sel: string[] = JSON.parse(form.elevations);
+                            if (checked) {
+                              sel.push(elev);
+                            } else {
+                              const idx = sel.indexOf(elev);
+                              if (idx !== -1) sel.splice(idx, 1);
+                            }
+                            setForm({ ...form, elevations: JSON.stringify(sel) });
+                          }}
+                        />
+                        {elev}
+                      </label>
+                    );
+                  })}
+                </div>
+                {/* Custom elevations */}
+                {(() => {
+                  const selected: string[] = JSON.parse(form.elevations);
+                  const custom = selected.filter((e) => !STANDARD_ELEVATIONS.includes(e));
+                  return custom.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {custom.map((c) => (
+                        <span key={c} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs">
+                          {c}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const sel: string[] = JSON.parse(form.elevations);
+                              setForm({ ...form, elevations: JSON.stringify(sel.filter((e) => e !== c)) });
+                            }}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+                <div className="flex gap-2 mt-2">
+                  <Input
+                    placeholder="Add custom elevation..."
+                    value={customElevation}
+                    onChange={(e) => setCustomElevation(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && customElevation.trim()) {
+                        e.preventDefault();
+                        const sel: string[] = JSON.parse(form.elevations);
+                        if (!sel.includes(customElevation.trim())) {
+                          sel.push(customElevation.trim());
+                          setForm({ ...form, elevations: JSON.stringify(sel) });
+                        }
+                        setCustomElevation("");
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => {
+                      if (customElevation.trim()) {
+                        const sel: string[] = JSON.parse(form.elevations);
+                        if (!sel.includes(customElevation.trim())) {
+                          sel.push(customElevation.trim());
+                          setForm({ ...form, elevations: JSON.stringify(sel) });
+                        }
+                        setCustomElevation("");
+                      }
+                    }}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
               <div>
                 <Label>Attendees</Label>

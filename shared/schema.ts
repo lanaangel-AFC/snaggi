@@ -10,9 +10,11 @@ export const projects = sqliteTable("projects", {
   inspector: text("inspector").notNull(),
   afcReference: text("afc_reference").default(""),
   revision: text("revision").default("01"),
-  projectNumber: text("project_number").default(""),
+
   inspectionNumber: text("inspection_number").default(""),
   inspectionDate: text("inspection_date").default(""),
+  locationsCovered: text("locations_covered").default(""),
+  elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
   attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
   createdAt: text("created_at").notNull(),
 });
@@ -30,6 +32,7 @@ export const defects = sqliteTable("defects", {
   verificationMethod: text("verification_method").notNull(),
   verificationPerson: text("verification_person").notNull(),
   status: text("status").notNull().default("open"), // open, complete
+  recordType: text("record_type").notNull().default("defect"), // defect, observation
 });
 
 export const photos = sqliteTable("photos", {
@@ -37,7 +40,7 @@ export const photos = sqliteTable("photos", {
   defectId: integer("defect_id").notNull(),
   filename: text("filename").notNull(),
   caption: text("caption"),
-  slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, complete
+  slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, wip4, wip5, complete
   createdAt: text("created_at").notNull(),
 });
 
