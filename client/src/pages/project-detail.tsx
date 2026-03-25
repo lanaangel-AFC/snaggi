@@ -216,18 +216,33 @@ export default function ProjectDetail() {
     const slotOrder = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
     const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", wip4: "WIP 4", wip5: "WIP 5", complete: "Complete" };
 
-    // UID heading + status
+    // Type badge + UID heading + status
+    const typeLabel = (defect.recordType === "observation") ? "OBSERVATION" : "DEFECT";
+    const typeBgColor = (defect.recordType === "observation") ? [59, 130, 246] : [217, 119, 6]; // blue / amber
+
+    // Draw type badge
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    const badgeW = doc.getTextWidth(typeLabel) + 6;
+    doc.setFillColor(typeBgColor[0], typeBgColor[1], typeBgColor[2]);
+    doc.roundedRect(margin, y - 4, badgeW, 6, 1.5, 1.5, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.text(typeLabel, margin + 3, y);
+
+    // UID next to badge
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...DARK_TEXT);
-    doc.text(defect.uid, margin, y);
+    doc.text(defect.uid, margin + badgeW + 4, y);
+
+    // Status on the right
     const statusLabel = defect.status === "complete" ? "COMPLETE" : "OPEN";
     const statusColor = defect.status === "complete" ? [34, 139, 34] : [200, 150, 0];
     doc.setFontSize(10);
     doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
     doc.text(statusLabel, pageWidth - margin - doc.getTextWidth(statusLabel), y);
     doc.setTextColor(0);
-    y += 4;
+    y += 5;
 
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
@@ -905,9 +920,19 @@ export default function ProjectDetail() {
       const buildWordDefectPage = async (defect: any): Promise<any[]> => {
         const elements: any[] = [];
 
-        // UID heading with status
+        // Type badge + UID heading + status
+        const isObs = defect.recordType === "observation";
         elements.push(new Paragraph({
           children: [
+            new TextRun({
+              text: isObs ? " OBSERVATION " : " DEFECT ",
+              bold: true,
+              size: 16,
+              font: "Aptos",
+              color: "FFFFFF",
+              shading: { type: ShadingType.SOLID, color: isObs ? "3B82F6" : "D97706" },
+            }),
+            new TextRun({ text: "  " }),
             new TextRun({ text: defect.uid, bold: true, size: 28, font: "Aptos", color: CAPTION_BLUE }),
             new TextRun({ text: "    " }),
             new TextRun({
