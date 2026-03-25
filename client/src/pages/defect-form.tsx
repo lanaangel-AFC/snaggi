@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download } from "lucide-react";
 import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo, Project } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
@@ -719,6 +719,14 @@ export default function DefectForm() {
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
+                          <a
+                            href={`${API_BASE}/api/uploads/${photo.filename}`}
+                            download={`${uid || defectId}_${slot.key}.jpg`}
+                            className="absolute top-2 left-2 p-1 rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors"
+                            data-testid={`button-download-photo-${slot.key}`}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </a>
                           <div className={`absolute bottom-0 left-0 right-0 px-2 py-1.5 text-xs font-medium ${isCompleteSlot ? "bg-green-600/90 text-white" : "bg-black/50 text-white"}`}>
                             {slot.label}
                           </div>

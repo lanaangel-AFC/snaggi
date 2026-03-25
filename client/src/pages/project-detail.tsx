@@ -279,8 +279,8 @@ export default function ProjectDetail() {
       y += 4;
 
       const sortedPhotos = slotOrder.map((s: string) => defect.photos.find((p: any) => p.slot === s)).filter(Boolean);
-      const imgW = (contentWidth - 6) / 2;
-      const imgH = imgW * 0.65;
+      const imgW = 85; // 8.5cm in mm
+      const imgH = imgW * 0.75; // 4:3 aspect ratio
 
       for (let i = 0; i < sortedPhotos.length; i++) {
         const photo = sortedPhotos[i];
@@ -483,11 +483,34 @@ export default function ProjectDetail() {
       y = (doc as any).lastAutoTable.finalY + 10;
 
       // ======= SECTION 2 - DEFECT REGISTER & RECTIFICATION LOG =======
-      const allDefects = [...(data.defects || [])];
+      // Sort helper matching the in-app sort order
+      const sortByUidExport = (a: any, b: any): number => {
+        const pa = a.uid.split("-");
+        const pb = b.uid.split("-");
+        const aHasElev = pa.length >= 5;
+        const bHasElev = pb.length >= 5;
+        const aDrop = parseInt(pa[aHasElev ? 1 : 0] || "0", 10);
+        const bDrop = parseInt(pb[bHasElev ? 1 : 0] || "0", 10);
+        if (aDrop !== bDrop) return aDrop - bDrop;
+        const aLevel = parseInt(pa[aHasElev ? 2 : 1] || "0", 10);
+        const bLevel = parseInt(pb[bHasElev ? 2 : 1] || "0", 10);
+        if (aLevel !== bLevel) return bLevel - aLevel;
+        const aWork = pa[aHasElev ? 3 : 2] || "";
+        const bWork = pb[bHasElev ? 3 : 2] || "";
+        if (aWork !== bWork) return aWork.localeCompare(bWork);
+        const aNum = parseInt(pa[aHasElev ? 4 : 3] || "0", 10);
+        const bNum = parseInt(pb[bHasElev ? 4 : 3] || "0", 10);
+        return aNum - bNum;
+      };
+
+      const allDefects = [...(data.defects || [])].sort(sortByUidExport);
       const defectsOnly = allDefects.filter((d: any) => d.recordType !== "observation");
       const observationsOnly = allDefects.filter((d: any) => d.recordType === "observation");
-      const openData = defectsOnly.filter((d: any) => d.status !== "complete");
-      const completedData = defectsOnly.filter((d: any) => d.status === "complete");
+      const openData = defectsOnly.filter((d: any) => d.status !== "complete").sort(sortByUidExport);
+      const completedData = defectsOnly.filter((d: any) => d.status === "complete").sort((a: any, b: any) => {
+        const dc = (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "");
+        return dc !== 0 ? dc : sortByUidExport(a, b);
+      });
 
       doc.addPage();
       addHeader();
@@ -629,11 +652,27 @@ export default function ProjectDetail() {
 
       const logo = await loadAfcLogo();
 
-      const allDefects = data.defects || [];
+      // Sort helper matching the in-app sort order
+      const sortUid = (a: any, b: any): number => {
+        const pa = a.uid.split("-"); const pb = b.uid.split("-");
+        const ae = pa.length >= 5; const be = pb.length >= 5;
+        const ad = parseInt(pa[ae?1:0]||"0",10); const bd = parseInt(pb[be?1:0]||"0",10);
+        if (ad !== bd) return ad - bd;
+        const al = parseInt(pa[ae?2:1]||"0",10); const bl = parseInt(pb[be?2:1]||"0",10);
+        if (al !== bl) return bl - al;
+        const aw = pa[ae?3:2]||""; const bw = pb[be?3:2]||"";
+        if (aw !== bw) return aw.localeCompare(bw);
+        return parseInt(pa[ae?4:3]||"0",10) - parseInt(pb[be?4:3]||"0",10);
+      };
+
+      const allDefects = [...(data.defects || [])].sort(sortUid);
       const defectsOnly = allDefects.filter((d: any) => d.recordType !== "observation");
       const observationsOnly = allDefects.filter((d: any) => d.recordType === "observation");
-      const openData = defectsOnly.filter((d: any) => d.status !== "complete");
-      const completedData = defectsOnly.filter((d: any) => d.status === "complete");
+      const openData = defectsOnly.filter((d: any) => d.status !== "complete").sort(sortUid);
+      const completedData = defectsOnly.filter((d: any) => d.status === "complete").sort((a: any, b: any) => {
+        const dc = (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "");
+        return dc !== 0 ? dc : sortUid(a, b);
+      });
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
       const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
 
@@ -956,7 +995,7 @@ export default function ProjectDetail() {
                     children: [
                       new ImageRun({
                         data: buffer,
-                        transformation: { width: 220, height: 160 },
+                        transformation: { width: 241, height: 181 }, // 8.5cm ≈ 241px at 72dpi
                         type: "jpg",
                       }),
                     ],
