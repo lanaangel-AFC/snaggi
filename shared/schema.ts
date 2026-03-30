@@ -9,12 +9,17 @@ export const projects = sqliteTable("projects", {
   client: text("client").notNull(),
   inspector: text("inspector").notNull(),
   afcReference: text("afc_reference").default(""),
-  revision: text("revision").default("01"),
+  elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
+  createdAt: text("created_at").notNull(),
+});
 
+export const reports = sqliteTable("reports", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
   inspectionNumber: text("inspection_number").default(""),
   inspectionDate: text("inspection_date").default(""),
+  revision: text("revision").default("01"),
   locationsCovered: text("locations_covered").default(""),
-  elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
   attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
   createdAt: text("created_at").notNull(),
 });
@@ -22,6 +27,7 @@ export const projects = sqliteTable("projects", {
 export const defects = sqliteTable("defects", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   projectId: integer("project_id").notNull(),
+  reportId: integer("report_id"), // nullable for backward compat
   uid: text("uid").notNull(),
   dateOpened: text("date_opened").notNull(),
   dateClosed: text("date_closed"),
@@ -46,12 +52,15 @@ export const photos = sqliteTable("photos", {
 
 // Insert schemas
 export const insertProjectSchema = createInsertSchema(projects).omit({ id: true });
+export const insertReportSchema = createInsertSchema(reports).omit({ id: true });
 export const insertDefectSchema = createInsertSchema(defects).omit({ id: true });
 export const insertPhotoSchema = createInsertSchema(photos).omit({ id: true });
 
 // Types
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
+export type InsertReport = z.infer<typeof insertReportSchema>;
+export type Report = typeof reports.$inferSelect;
 export type InsertDefect = z.infer<typeof insertDefectSchema>;
 export type Defect = typeof defects.$inferSelect;
 export type InsertPhoto = z.infer<typeof insertPhotoSchema>;

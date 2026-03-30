@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, dataDir } from "./storage";
-import { insertProjectSchema, insertDefectSchema } from "@shared/schema";
+import { insertProjectSchema, insertDefectSchema, insertReportSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -86,9 +86,55 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
+  // === REPORTS ===
+  app.get("/api/projects/:projectId/reports", async (req, res) => {
+    const reports = await storage.getReportsByProject(Number(req.params.projectId));
+    res.json(reports);
+  });
+
+  app.get("/api/reports/:id", async (req, res) => {
+    const report = await storage.getReport(Number(req.params.id));
+    if (!report) return res.status(404).json({ message: "Report not found" });
+    res.json(report);
+  });
+
+  app.post("/api/projects/:projectId/reports", async (req, res) => {
+    const projectId = Number(req.params.projectId);
+    const data = { ...req.body, projectId, createdAt: new Date().toISOString() };
+    const parsed = insertReportSchema.safeParse(data);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+    const report = await storage.createReport(parsed.data);
+    res.status(201).json(report);
+  });
+
+  app.patch("/api/reports/:id", async (req, res) => {
+    const report = await storage.updateReport(Number(req.params.id), req.body);
+    if (!report) return res.status(404).json({ message: "Report not found" });
+    res.json(report);
+  });
+
+  app.delete("/api/reports/:id", async (req, res) => {
+    await storage.deleteReport(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  app.post("/api/reports/:id/copy", async (req, res) => {
+    try {
+      const newReport = await storage.copyReport(Number(req.params.id));
+      res.status(201).json(newReport);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
   // === DEFECTS ===
   app.get("/api/projects/:projectId/defects", async (req, res) => {
     const defects = await storage.getDefectsByProject(Number(req.params.projectId));
+    res.json(defects);
+  });
+
+  app.get("/api/reports/:reportId/defects", async (req, res) => {
+    const defects = await storage.getDefectsByReport(Number(req.params.reportId));
     res.json(defects);
   });
 
@@ -192,7 +238,23 @@ export async function registerRoutes(
     res.json({ uid });
   });
 
-  // === PDF REPORT DATA ===
+  // === PDF REPORT DATA (scoped to report) ===
+  app.get("/api/reports/:id/report-data", async (req, res) => {
+    const report = await storage.getReport(Number(req.params.id));
+    if (!report) return res.status(404).json({ message: "Report not found" });
+    const project = await storage.getProject(report.projectId);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const reportDefects = await storage.getDefectsByReport(report.id);
+    const defectsWithPhotos = await Promise.all(
+      reportDefects.map(async (d) => {
+        const defectPhotos = await storage.getPhotosByDefect(d.id);
+        return { ...d, photos: defectPhotos };
+      })
+    );
+    res.json({ project, report, defects: defectsWithPhotos });
+  });
+
+  // Legacy: project-level report-data (returns all defects across all reports)
   app.get("/api/projects/:id/report-data", async (req, res) => {
     const project = await storage.getProject(Number(req.params.id));
     if (!project) return res.status(404).json({ message: "Project not found" });

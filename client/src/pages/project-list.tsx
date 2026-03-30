@@ -6,7 +6,6 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, X, Building2, MapPin, User, Calendar, ChevronRight, Trash2 } from "lucide-react";
 import type { Project } from "@shared/schema";
@@ -21,7 +20,7 @@ const STANDARD_ELEVATIONS = [
 export default function ProjectList() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", inspectionNumber: "", inspectionDate: "", locationsCovered: "", elevations: "[]", attendees: "[]" });
+  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", elevations: "[]" });
   const [customElevation, setCustomElevation] = useState("");
 
   const { data: projects, isLoading } = useQuery<Project[]>({
@@ -39,7 +38,7 @@ export default function ProjectList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       setOpen(false);
-      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", revision: "01", inspectionNumber: "", inspectionDate: "", locationsCovered: "", elevations: "[]", attendees: "[]" });
+      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", elevations: "[]" });
       setCustomElevation("");
       toast({ title: "Project created" });
     },
@@ -126,54 +125,14 @@ export default function ProjectList() {
                   data-testid="input-project-inspector"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="afcReference">AFC Reference</Label>
-                  <Input
-                    id="afcReference"
-                    placeholder="AFC-24XXX"
-                    value={form.afcReference}
-                    onChange={(e) => setForm({ ...form, afcReference: e.target.value })}
-                    data-testid="input-project-afc-reference"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="revision">Revision</Label>
-                  <Input
-                    id="revision"
-                    placeholder="01"
-                    value={form.revision}
-                    onChange={(e) => setForm({ ...form, revision: e.target.value })}
-                    data-testid="input-project-revision"
-                  />
-                </div>
-              </div>
               <div>
-                <Label htmlFor="inspectionNumber">Inspection Number</Label>
+                <Label htmlFor="afcReference">AFC Reference</Label>
                 <Input
-                  id="inspectionNumber"
-                  placeholder="e.g. INS-01"
-                  value={form.inspectionNumber}
-                  onChange={(e) => setForm({ ...form, inspectionNumber: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="inspectionDate">Inspection Date</Label>
-                <Input
-                  id="inspectionDate"
-                  type="date"
-                  value={form.inspectionDate}
-                  onChange={(e) => setForm({ ...form, inspectionDate: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="locationsCovered">Locations Covered</Label>
-                <Textarea
-                  id="locationsCovered"
-                  placeholder="e.g. North elevation levels 1-5, East elevation levels 3-10"
-                  value={form.locationsCovered}
-                  onChange={(e) => setForm({ ...form, locationsCovered: e.target.value })}
-                  rows={2}
+                  id="afcReference"
+                  placeholder="AFC-24XXX"
+                  value={form.afcReference}
+                  onChange={(e) => setForm({ ...form, afcReference: e.target.value })}
+                  data-testid="input-project-afc-reference"
                 />
               </div>
               {/* Elevations picker */}
@@ -262,59 +221,6 @@ export default function ProjectList() {
                     }}
                   >
                     <Plus className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-              <div>
-                <Label>Attendees</Label>
-                <div className="space-y-2 mt-1">
-                  {(JSON.parse(form.attendees) as { name: string; company: string }[]).map((attendee, index) => (
-                    <div key={index} className="flex items-center gap-2">
-                      <Input
-                        placeholder="Name"
-                        value={attendee.name}
-                        onChange={(e) => {
-                          const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
-                          attendees[index].name = e.target.value;
-                          setForm({ ...form, attendees: JSON.stringify(attendees) });
-                        }}
-                      />
-                      <Input
-                        placeholder="Company / Role"
-                        value={attendee.company}
-                        onChange={(e) => {
-                          const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
-                          attendees[index].company = e.target.value;
-                          setForm({ ...form, attendees: JSON.stringify(attendees) });
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="shrink-0"
-                        onClick={() => {
-                          const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
-                          attendees.splice(index, 1);
-                          setForm({ ...form, attendees: JSON.stringify(attendees) });
-                        }}
-                      >
-                        <X className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  ))}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const attendees = JSON.parse(form.attendees) as { name: string; company: string }[];
-                      attendees.push({ name: "", company: "" });
-                      setForm({ ...form, attendees: JSON.stringify(attendees) });
-                    }}
-                  >
-                    <Plus className="w-4 h-4 mr-1" />
-                    Add Attendee
                   </Button>
                 </div>
               </div>

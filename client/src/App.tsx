@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import ProjectList from "@/pages/project-list";
 import ProjectDetail from "@/pages/project-detail";
+import ReportDetail from "@/pages/report-detail";
 import DefectForm from "@/pages/defect-form";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 
@@ -15,8 +16,9 @@ function AppRouter() {
     <Switch>
       <Route path="/" component={ProjectList} />
       <Route path="/projects/:id" component={ProjectDetail} />
-      <Route path="/projects/:projectId/defects/new" component={DefectForm} />
-      <Route path="/projects/:projectId/defects/:defectId" component={DefectForm} />
+      <Route path="/projects/:projectId/reports/:reportId" component={ReportDetail} />
+      <Route path="/projects/:projectId/reports/:reportId/defects/new" component={DefectForm} />
+      <Route path="/projects/:projectId/reports/:reportId/defects/:defectId" component={DefectForm} />
       <Route component={NotFound} />
     </Switch>
   );

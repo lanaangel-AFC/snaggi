@@ -71,7 +71,7 @@ const PHOTO_SLOTS = [
 type SlotKey = "wip1" | "wip2" | "wip3" | "wip4" | "wip5" | "complete";
 
 export default function DefectForm() {
-  const { projectId, defectId } = useParams<{ projectId: string; defectId?: string }>();
+  const { projectId, reportId, defectId } = useParams<{ projectId: string; reportId: string; defectId?: string }>();
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -234,6 +234,7 @@ export default function DefectForm() {
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
           ...form,
+          reportId: Number(reportId),
           uidPrefix,
           uidOverride: assembledUid,
           recordType,
@@ -242,11 +243,12 @@ export default function DefectForm() {
       }
     },
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
       const typeLabel = recordType === "observation" ? "Observation" : "Defect";
       toast({ title: isEdit ? `${typeLabel} updated` : `${typeLabel} created` });
       if (!isEdit) {
-        navigate(`/projects/${projectId}/defects/${data.id}`, { replace: true });
+        navigate(`/projects/${projectId}/reports/${reportId}/defects/${data.id}`, { replace: true });
       }
     },
     onError: (err: Error) => {
@@ -286,6 +288,7 @@ export default function DefectForm() {
         setForm((prev) => ({ ...prev, status: "complete", dateClosed }));
         try {
           await apiRequest("PATCH", `/api/defects/${defectId}`, { status: "complete", dateClosed });
+          queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
           queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
           toast({ title: `${recordType === "observation" ? "Observation" : "Defect"} marked as complete` });
         } catch {
@@ -364,10 +367,10 @@ export default function DefectForm() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 pb-24">
       {/* Header */}
-      <Link href={`/projects/${projectId}`}>
+      <Link href={`/projects/${projectId}/reports/${reportId}`}>
         <button className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4" data-testid="button-back-to-project">
           <ArrowLeft className="w-4 h-4" />
-          Back to Project
+          Back to Report
         </button>
       </Link>
 
