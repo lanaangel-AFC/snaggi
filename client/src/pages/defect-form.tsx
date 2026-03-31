@@ -127,34 +127,6 @@ export default function DefectForm() {
     return [];
   }, [report?.elevations, project?.elevations]);
 
-  // Fetch all project defects for text suggestions (across all reports)
-  const { data: allProjectDefects } = useQuery<Defect[]>({
-    queryKey: [`/api/projects/${projectId}/defects`],
-  });
-
-  // Build suggestion lists filtered by selected work type
-  const textSuggestions = useMemo(() => {
-    if (!allProjectDefects || !workType) return { comments: [], actions: [] };
-    // Filter to same work type by checking UID contains the work type code
-    const matching = allProjectDefects.filter((d) => {
-      const parts = d.uid.split("-");
-      // Work type is at index 2 (old 4-part) or index 3 (new 5-part with elevation)
-      const wt = parts.length >= 5 ? parts[3] : parts.length >= 4 ? parts[2] : "";
-      return wt === workType;
-    });
-    // Deduplicate and collect unique texts
-    const commentSet = new Set<string>();
-    const actionSet = new Set<string>();
-    matching.forEach((d) => {
-      if (d.comment?.trim()) commentSet.add(d.comment.trim());
-      if (d.actionRequired?.trim()) actionSet.add(d.actionRequired.trim());
-    });
-    return {
-      comments: Array.from(commentSet),
-      actions: Array.from(actionSet),
-    };
-  }, [allProjectDefects, workType]);
-
   const [elevation, setElevation] = useState("");
   const [drop, setDrop] = useState("01");
   const [level, setLevel] = useState("");
@@ -164,6 +136,28 @@ export default function DefectForm() {
   const [uid, setUid] = useState("");
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
+
+  // Fetch all project defects for text suggestions (across all reports)
+  const { data: allProjectDefects } = useQuery<Defect[]>({
+    queryKey: [`/api/projects/${projectId}/defects`],
+  });
+
+  // Build suggestion lists filtered by selected work type
+  const textSuggestions = useMemo(() => {
+    if (!allProjectDefects || !workType) return { comments: [], actions: [] };
+    const matching = allProjectDefects.filter((d) => {
+      const parts = d.uid.split("-");
+      const wt = parts.length >= 5 ? parts[3] : parts.length >= 4 ? parts[2] : "";
+      return wt === workType;
+    });
+    const commentSet = new Set<string>();
+    const actionSet = new Set<string>();
+    matching.forEach((d) => {
+      if (d.comment?.trim()) commentSet.add(d.comment.trim());
+      if (d.actionRequired?.trim()) actionSet.add(d.actionRequired.trim());
+    });
+    return { comments: Array.from(commentSet), actions: Array.from(actionSet) };
+  }, [allProjectDefects, workType]);
 
   // Build the UID prefix from the components
   const uidPrefix = useMemo(() => {
