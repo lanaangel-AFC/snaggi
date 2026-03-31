@@ -50,6 +50,7 @@ sqlite.exec(`
   CREATE TABLE IF NOT EXISTS defects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
+    report_id INTEGER,
     uid TEXT NOT NULL,
     date_opened TEXT NOT NULL,
     date_closed TEXT,

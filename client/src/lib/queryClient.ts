@@ -4,8 +4,25 @@ const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const text = await res.text();
+    // Try to extract a friendly message from JSON error responses
+    let message = `${res.status}: ${res.statusText}`;
+    if (text) {
+      try {
+        const json = JSON.parse(text);
+        message = json.message || message;
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message);
+  }
+  // Verify the response is actually JSON (not HTML from catch-all), skip for empty responses (204)
+  if (res.status !== 204) {
+    const contentType = res.headers.get("content-type");
+    if (contentType && !contentType.includes("application/json")) {
+      throw new Error("Server returned an unexpected response. Please try again.");
+    }
   }
 }
 
