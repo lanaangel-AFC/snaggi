@@ -20,6 +20,7 @@ export const reports = sqliteTable("reports", {
   inspectionDate: text("inspection_date").default(""),
   revision: text("revision").default("01"),
   locationsCovered: text("locations_covered").default(""),
+  elevations: text("elevations").default("[]"), // JSON array of strings: elevation labels for this report
   attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
   createdAt: text("created_at").notNull(),
 });

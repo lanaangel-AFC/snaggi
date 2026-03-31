@@ -106,27 +106,38 @@ export default function DefectForm() {
 
   const [recordType, setRecordType] = useState(() => hashParams.get("type") || "defect");
 
-  // Fetch project to get configured elevations
+  // Fetch project and report to get configured elevations
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
   });
 
-  // Build elevation options from project config
+  const { data: report } = useQuery<any>({
+    queryKey: ["/api/reports", reportId],
+    enabled: !!reportId,
+  });
+
+  // Build elevation options — prefer report-level, fall back to project-level
   const elevationOptions = useMemo(() => {
-    if (!project?.elevations) return [];
-    try {
-      const configured: string[] = JSON.parse(project.elevations as string);
-      // Map full names to short codes for UID
-      const codeMap: Record<string, string> = {
-        "North": "N", "South": "S", "East": "E", "West": "W",
-        "North East": "NE", "North West": "NW", "South East": "SE", "South West": "SW",
-      };
-      return configured.map((label) => ({
-        code: codeMap[label] || label.substring(0, 3).toUpperCase(),
-        label,
-      }));
-    } catch { return []; }
-  }, [project?.elevations]);
+    const codeMap: Record<string, string> = {
+      "North": "N", "South": "S", "East": "E", "West": "W",
+      "North East": "NE", "North West": "NW", "South East": "SE", "South West": "SW",
+    };
+    // Try report elevations first, then project
+    const sources = [report?.elevations, project?.elevations];
+    for (const src of sources) {
+      if (!src) continue;
+      try {
+        const configured: string[] = JSON.parse(src as string);
+        if (configured.length > 0) {
+          return configured.map((label) => ({
+            code: codeMap[label] || label.substring(0, 3).toUpperCase(),
+            label,
+          }));
+        }
+      } catch {}
+    }
+    return [];
+  }, [report?.elevations, project?.elevations]);
 
   const [elevation, setElevation] = useState("");
   const [drop, setDrop] = useState("01");

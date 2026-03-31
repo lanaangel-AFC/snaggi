@@ -22,8 +22,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Report, Defect, Photo } from "@shared/schema";
 import { useState, useMemo } from "react";
+
+const STANDARD_ELEVATIONS = [
+  "North", "North East", "East", "South East",
+  "South", "South West", "West", "North West",
+];
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -99,6 +105,7 @@ export default function ReportDetail() {
   const [generating, setGenerating] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [customElevation, setCustomElevation] = useState("");
 
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -119,8 +126,10 @@ export default function ReportDetail() {
       inspectionDate: report.inspectionDate || "",
       revision: report.revision || "01",
       locationsCovered: report.locationsCovered || "",
+      elevations: (report as any).elevations || project?.elevations || "[]",
       attendees: report.attendees || "[]",
     });
+    setCustomElevation("");
     setEditOpen(true);
   };
 
@@ -1233,6 +1242,64 @@ export default function ReportDetail() {
               <div>
                 <Label>Locations Covered</Label>
                 <Textarea value={editForm.locationsCovered || ""} onChange={(e) => setEditForm({ ...editForm, locationsCovered: e.target.value })} rows={2} />
+              </div>
+              {/* Elevations picker */}
+              <div>
+                <Label className="mb-2 block">Elevations</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {STANDARD_ELEVATIONS.map((elev) => {
+                    const selected: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                    return (
+                      <label key={elev} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={selected.includes(elev)}
+                          onCheckedChange={(checked) => {
+                            const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                            if (checked) { sel.push(elev); } else { const idx = sel.indexOf(elev); if (idx !== -1) sel.splice(idx, 1); }
+                            setEditForm({ ...editForm, elevations: JSON.stringify(sel) });
+                          }}
+                        />
+                        {elev}
+                      </label>
+                    );
+                  })}
+                </div>
+                {(() => {
+                  const selected: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                  const custom = selected.filter((e) => !STANDARD_ELEVATIONS.includes(e));
+                  return custom.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {custom.map((c) => (
+                        <span key={c} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs">
+                          {c}
+                          <button type="button" onClick={() => {
+                            const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                            setEditForm({ ...editForm, elevations: JSON.stringify(sel.filter((e) => e !== c)) });
+                          }} className="text-muted-foreground hover:text-destructive"><X className="w-3 h-3" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+                <div className="flex gap-2 mt-2">
+                  <Input placeholder="Add custom elevation..." value={customElevation} onChange={(e) => setCustomElevation(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && customElevation.trim()) {
+                        e.preventDefault();
+                        const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                        if (!sel.includes(customElevation.trim())) { sel.push(customElevation.trim()); setEditForm({ ...editForm, elevations: JSON.stringify(sel) }); }
+                        setCustomElevation("");
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => {
+                    if (customElevation.trim()) {
+                      const sel: string[] = (() => { try { return JSON.parse(editForm.elevations || "[]"); } catch { return []; } })();
+                      if (!sel.includes(customElevation.trim())) { sel.push(customElevation.trim()); setEditForm({ ...editForm, elevations: JSON.stringify(sel) }); }
+                      setCustomElevation("");
+                    }
+                  }}><Plus className="w-4 h-4" /></Button>
+                </div>
               </div>
               <div>
                 <Label>Attendees</Label>

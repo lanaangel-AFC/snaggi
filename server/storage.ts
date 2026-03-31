@@ -44,6 +44,7 @@ sqlite.exec(`
     inspection_date TEXT DEFAULT '',
     revision TEXT DEFAULT '01',
     locations_covered TEXT DEFAULT '',
+    elevations TEXT DEFAULT '[]',
     attendees TEXT DEFAULT '[]',
     created_at TEXT NOT NULL
   );
@@ -84,6 +85,7 @@ const safeAddColumn = (table: string, col: string, colDef: string) => {
 };
 safeAddColumn("projects", "locations_covered", "TEXT DEFAULT ''");
 safeAddColumn("projects", "elevations", "TEXT DEFAULT '[]'");
+safeAddColumn("reports", "elevations", "TEXT DEFAULT '[]'");
 safeAddColumn("defects", "record_type", "TEXT NOT NULL DEFAULT 'defect'");
 safeAddColumn("defects", "report_id", "INTEGER");
 
@@ -233,6 +235,7 @@ export class DatabaseStorage implements IStorage {
       inspectionDate: new Date().toISOString().split("T")[0],
       revision: "01",
       locationsCovered: source.locationsCovered,
+      elevations: source.elevations,
       attendees: source.attendees,
       createdAt: new Date().toISOString(),
     }).returning().get();
