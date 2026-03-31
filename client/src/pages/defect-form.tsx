@@ -91,12 +91,17 @@ export default function DefectForm() {
   });
 
   // Read query params from hash URL
+  // Read query params — check both hash fragment and regular search params
+  // (wouter sometimes places ?params before the # and sometimes after)
   const hashParams = useMemo(() => {
     if (typeof window === "undefined") return new URLSearchParams();
+    // Try hash first
     const hash = window.location.hash;
     const qIdx = hash.indexOf("?");
-    if (qIdx === -1) return new URLSearchParams();
-    return new URLSearchParams(hash.slice(qIdx));
+    if (qIdx !== -1) return new URLSearchParams(hash.slice(qIdx));
+    // Fall back to regular search params (before the #)
+    if (window.location.search) return new URLSearchParams(window.location.search);
+    return new URLSearchParams();
   }, []);
 
   const [recordType, setRecordType] = useState(() => hashParams.get("type") || "defect");

@@ -152,16 +152,18 @@ export async function registerRoutes(
       // Use the client-provided UID if they set a custom number, otherwise auto-generate
       const uid = req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix);
 
-      // Check for duplicate UID within this project
-      const existingDefects = await storage.getDefectsByProject(projectId);
-      const duplicate = existingDefects.find((d) => d.uid === uid);
-      if (duplicate) {
-        return res.status(400).json({ message: `UID "${uid}" is already in use in this project. Please change the Number field.` });
+      // Check for duplicate UID within the same report (not project-wide, since copies share UIDs)
+      const reportIdVal = req.body.reportId ? Number(req.body.reportId) : null;
+      if (reportIdVal) {
+        const existingInReport = await storage.getDefectsByReport(reportIdVal);
+        const duplicate = existingInReport.find((d) => d.uid === uid);
+        if (duplicate) {
+          return res.status(400).json({ message: `UID "${uid}" is already in use in this report. Please change the Number field.` });
+        }
       }
 
       const { uidPrefix: _removed, uidOverride: _removed2, ...rest } = req.body;
       const recordType = rest.recordType || "defect";
-      // Ensure reportId is a valid number or null
       const reportId = rest.reportId != null && !isNaN(Number(rest.reportId)) ? Number(rest.reportId) : null;
       const data = { ...rest, projectId, uid, recordType, reportId };
       const parsed = insertDefectSchema.safeParse(data);
