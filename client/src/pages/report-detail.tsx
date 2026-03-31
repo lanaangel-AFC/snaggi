@@ -1379,13 +1379,13 @@ export default function ReportDetail() {
 
       {/* Actions */}
       <div className="flex gap-3 mb-6">
-        <Link href={`/projects/${projectId}/reports/${reportId}/defects/new?type=defect`}>
+        <Link href={`/projects/${projectId}/reports/${reportId}/defects/new-defect`}>
           <Button>
             <Plus className="w-4 h-4 mr-2" />
             Add Defect
           </Button>
         </Link>
-        <Link href={`/projects/${projectId}/reports/${reportId}/defects/new?type=observation`}>
+        <Link href={`/projects/${projectId}/reports/${reportId}/defects/new-observation`}>
           <Button variant="secondary">
             <Plus className="w-4 h-4 mr-2" />
             Add Observation
@@ -1430,13 +1430,13 @@ export default function ReportDetail() {
             Start your inspection by adding defects or observations with photos and details.
           </p>
           <div className="flex gap-3">
-            <Link href={`/projects/${projectId}/reports/${reportId}/defects/new?type=defect`}>
+            <Link href={`/projects/${projectId}/reports/${reportId}/defects/new-defect`}>
               <Button>
                 <Plus className="w-4 h-4 mr-2" />
                 Add Defect
               </Button>
             </Link>
-            <Link href={`/projects/${projectId}/reports/${reportId}/defects/new?type=observation`}>
+            <Link href={`/projects/${projectId}/reports/${reportId}/defects/new-observation`}>
               <Button variant="secondary">
                 <Plus className="w-4 h-4 mr-2" />
                 Add Observation

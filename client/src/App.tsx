@@ -17,7 +17,8 @@ function AppRouter() {
       <Route path="/" component={ProjectList} />
       <Route path="/projects/:id" component={ProjectDetail} />
       <Route path="/projects/:projectId/reports/:reportId" component={ReportDetail} />
-      <Route path="/projects/:projectId/reports/:reportId/defects/new" component={DefectForm} />
+      <Route path="/projects/:projectId/reports/:reportId/defects/new-defect" component={DefectForm} />
+      <Route path="/projects/:projectId/reports/:reportId/defects/new-observation" component={DefectForm} />
       <Route path="/projects/:projectId/reports/:reportId/defects/:defectId" component={DefectForm} />
       <Route component={NotFound} />
     </Switch>

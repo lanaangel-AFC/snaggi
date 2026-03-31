@@ -76,7 +76,9 @@ export default function DefectForm() {
   const { toast } = useToast();
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const cameraInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const isEdit = !!defectId;
+  // Determine if editing or creating, and record type from URL path
+  const isEdit = !!defectId && defectId !== "new-defect" && defectId !== "new-observation";
+  const isNewObservation = defectId === "new-observation" || (typeof window !== "undefined" && window.location.hash.includes("/new-observation"));
 
   const [form, setForm] = useState({
     dateOpened: new Date().toISOString().split("T")[0],
@@ -90,21 +92,7 @@ export default function DefectForm() {
     status: "open",
   });
 
-  // Read query params from hash URL
-  // Read query params — check both hash fragment and regular search params
-  // (wouter sometimes places ?params before the # and sometimes after)
-  const hashParams = useMemo(() => {
-    if (typeof window === "undefined") return new URLSearchParams();
-    // Try hash first
-    const hash = window.location.hash;
-    const qIdx = hash.indexOf("?");
-    if (qIdx !== -1) return new URLSearchParams(hash.slice(qIdx));
-    // Fall back to regular search params (before the #)
-    if (window.location.search) return new URLSearchParams(window.location.search);
-    return new URLSearchParams();
-  }, []);
-
-  const [recordType, setRecordType] = useState(() => hashParams.get("type") || "defect");
+  const [recordType, setRecordType] = useState(() => isNewObservation ? "observation" : "defect");
 
   // Fetch project and report to get configured elevations
   const { data: project } = useQuery<Project>({
