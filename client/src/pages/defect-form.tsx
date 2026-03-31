@@ -139,6 +139,34 @@ export default function DefectForm() {
     return [];
   }, [report?.elevations, project?.elevations]);
 
+  // Fetch all project defects for text suggestions (across all reports)
+  const { data: allProjectDefects } = useQuery<Defect[]>({
+    queryKey: [`/api/projects/${projectId}/defects`],
+  });
+
+  // Build suggestion lists filtered by selected work type
+  const textSuggestions = useMemo(() => {
+    if (!allProjectDefects || !workType) return { comments: [], actions: [] };
+    // Filter to same work type by checking UID contains the work type code
+    const matching = allProjectDefects.filter((d) => {
+      const parts = d.uid.split("-");
+      // Work type is at index 2 (old 4-part) or index 3 (new 5-part with elevation)
+      const wt = parts.length >= 5 ? parts[3] : parts.length >= 4 ? parts[2] : "";
+      return wt === workType;
+    });
+    // Deduplicate and collect unique texts
+    const commentSet = new Set<string>();
+    const actionSet = new Set<string>();
+    matching.forEach((d) => {
+      if (d.comment?.trim()) commentSet.add(d.comment.trim());
+      if (d.actionRequired?.trim()) actionSet.add(d.actionRequired.trim());
+    });
+    return {
+      comments: Array.from(commentSet),
+      actions: Array.from(actionSet),
+    };
+  }, [allProjectDefects, workType]);
+
   const [elevation, setElevation] = useState("");
   const [drop, setDrop] = useState("01");
   const [level, setLevel] = useState("");
@@ -623,6 +651,24 @@ export default function DefectForm() {
               onTranscript={(text) => setForm((prev) => ({ ...prev, comment: prev.comment + (prev.comment ? " " : "") + text }))}
             />
           </div>
+          {textSuggestions.comments.length > 0 && !form.comment && (
+            <div className="mb-1.5">
+              <p className="text-[10px] text-muted-foreground mb-1">Previously used:</p>
+              <div className="flex flex-wrap gap-1">
+                {textSuggestions.comments.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, comment: s }))}
+                    className="text-xs px-2 py-1 rounded-md bg-accent hover:bg-accent/80 text-left truncate max-w-full border"
+                    title={s}
+                  >
+                    {s.length > 60 ? s.substring(0, 57) + "..." : s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <Textarea
             id="comment"
             placeholder="Describe the defect observed..."
@@ -642,6 +688,24 @@ export default function DefectForm() {
               onTranscript={(text) => setForm((prev) => ({ ...prev, actionRequired: prev.actionRequired + (prev.actionRequired ? " " : "") + text }))}
             />
           </div>
+          {textSuggestions.actions.length > 0 && !form.actionRequired && (
+            <div className="mb-1.5">
+              <p className="text-[10px] text-muted-foreground mb-1">Previously used:</p>
+              <div className="flex flex-wrap gap-1">
+                {textSuggestions.actions.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, actionRequired: s }))}
+                    className="text-xs px-2 py-1 rounded-md bg-accent hover:bg-accent/80 text-left truncate max-w-full border"
+                    title={s}
+                  >
+                    {s.length > 60 ? s.substring(0, 57) + "..." : s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <Textarea
             id="actionRequired"
             placeholder="What needs to be done to rectify this defect?"
