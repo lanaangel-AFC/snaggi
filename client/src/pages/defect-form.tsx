@@ -163,6 +163,30 @@ export default function DefectForm() {
     return `${uidPrefix}-${seqNumber.padStart(2, "0")}`;
   }, [uidPrefix, seqNumber]);
 
+  // Fetch all defects in this report to check for duplicate UIDs
+  const { data: reportDefects } = useQuery<Defect[]>({
+    queryKey: [`/api/reports/${reportId}/defects`],
+    enabled: !isEdit && !!reportId,
+  });
+
+  // Check if assembled UID matches an existing entry in this report
+  const [duplicateAlertShown, setDuplicateAlertShown] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isEdit || !assembledUid || !reportDefects || assembledUid === duplicateAlertShown) return;
+    const match = reportDefects.find((d) => d.uid === assembledUid);
+    if (match) {
+      setDuplicateAlertShown(assembledUid);
+      const typeLabel = (match as any).recordType === "observation" ? "observation" : "defect";
+      const confirmed = window.confirm(
+        `A ${typeLabel} with UID "${assembledUid}" already exists:\n\n"${match.comment?.substring(0, 80)}..."\n\nWould you like to open it instead?`
+      );
+      if (confirmed) {
+        navigate(`/projects/${projectId}/reports/${reportId}/defects/${match.id}`, { replace: true });
+      }
+    }
+  }, [assembledUid, reportDefects, isEdit, duplicateAlertShown]);
+
   // Fetch existing defect if editing
   const { data: existingDefect } = useQuery<Defect>({
     queryKey: ["/api/defects", defectId],
