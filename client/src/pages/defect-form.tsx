@@ -279,7 +279,9 @@ export default function DefectForm() {
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (isEdit) {
-        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, form);
+        // Include updated UID if the fields were changed (open items only)
+        const updatedUid = assembledUid || uid;
+        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { ...form, uid: updatedUid });
         return res.json();
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
@@ -510,7 +512,7 @@ export default function DefectForm() {
               <Select
                 value={elevation}
                 onValueChange={setElevation}
-                disabled={isEdit}
+                disabled={isEdit && isComplete}
               >
                 <SelectTrigger className="font-mono" data-testid="select-elevation">
                   <SelectValue placeholder="—" />
@@ -536,7 +538,7 @@ export default function DefectForm() {
                 }}
                 maxLength={2}
                 required
-                disabled={isEdit}
+                disabled={isEdit && isComplete}
                 className="font-mono text-center"
                 data-testid="input-drop"
               />
@@ -553,7 +555,7 @@ export default function DefectForm() {
                 }}
                 maxLength={2}
                 required
-                disabled={isEdit}
+                disabled={isEdit && isComplete}
                 className="font-mono text-center"
                 data-testid="input-level"
               />
@@ -563,7 +565,7 @@ export default function DefectForm() {
               <Select
                 value={workType}
                 onValueChange={setWorkType}
-                disabled={isEdit}
+                disabled={isEdit && isComplete}
               >
                 <SelectTrigger className="font-mono" data-testid="select-work-type">
                   <SelectValue placeholder="—" />
@@ -589,7 +591,7 @@ export default function DefectForm() {
                 }}
                 maxLength={2}
                 required
-                disabled={isEdit}
+                disabled={isEdit && isComplete}
                 className="font-mono text-center"
                 data-testid="input-seq-number"
               />
