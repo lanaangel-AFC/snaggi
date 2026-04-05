@@ -7,7 +7,7 @@ import {
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 
@@ -156,6 +156,7 @@ export interface IStorage {
   updateDefect(id: number, defect: Partial<InsertDefect>): Promise<Defect | undefined>;
   deleteDefect(id: number): Promise<void>;
   getNextDefectUid(projectId: number, prefix?: string): Promise<string>;
+  getDefectByUid(projectId: number, uid: string): Promise<Defect | undefined>;
   // Photos
   getPhotosByDefect(defectId: number): Promise<Photo[]>;
   createPhoto(photo: InsertPhoto): Promise<Photo>;
@@ -312,6 +313,17 @@ export class DatabaseStorage implements IStorage {
     const matching = existing.filter((d) => d.uid.startsWith(prefix + "-"));
     const num = matching.length + 1;
     return `${prefix}-${String(num).padStart(2, "0")}`;
+  }
+
+  async getDefectByUid(projectId: number, uid: string): Promise<Defect | undefined> {
+    // UIDs may appear in multiple reports (copies); return the most recent (highest reportId)
+    const results = db
+      .select()
+      .from(defects)
+      .where(and(eq(defects.projectId, projectId), eq(defects.uid, uid)))
+      .orderBy(desc(defects.reportId))
+      .all();
+    return results[0];
   }
 
   // Photos

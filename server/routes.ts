@@ -138,6 +138,13 @@ export async function registerRoutes(
     res.json(defects);
   });
 
+  // Lookup defect by UID within a project (for deep-linking from external apps)
+  app.get("/api/projects/:projectId/defects/by-uid/:uid", async (req, res) => {
+    const defect = await storage.getDefectByUid(Number(req.params.projectId), req.params.uid);
+    if (!defect) return res.status(404).json({ message: "Defect not found" });
+    res.json(defect);
+  });
+
   app.get("/api/defects/:id", async (req, res) => {
     const defect = await storage.getDefect(Number(req.params.id));
     if (!defect) return res.status(404).json({ message: "Defect not found" });

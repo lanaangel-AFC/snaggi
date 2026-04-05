@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import cors from "cors";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -21,6 +22,9 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+// Enable CORS on all /api routes so external apps can call the API cross-origin
+app.use("/api", cors());
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
