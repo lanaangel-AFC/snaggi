@@ -9,12 +9,12 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, MapPin, User, UserCheck, ChevronRight, Trash2,
-  Settings, X, FileText, Copy, Calendar
+  Settings, X, FileText, Copy, Calendar, Image, Upload
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import type { Project, Report, Defect } from "@shared/schema";
+import type { Project, Report, Defect, Elevation } from "@shared/schema";
 import { useState } from "react";
 
 const STANDARD_ELEVATIONS = [
@@ -37,6 +37,10 @@ export default function ProjectDetail() {
     locationsCovered: "",
     attendees: "[]",
   });
+  const [elevUploadOpen, setElevUploadOpen] = useState(false);
+  const [elevName, setElevName] = useState("");
+  const [elevFile, setElevFile] = useState<File | null>(null);
+  const [elevUploading, setElevUploading] = useState(false);
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", id],
@@ -44,6 +48,10 @@ export default function ProjectDetail() {
 
   const { data: reports, isLoading: reportsLoading } = useQuery<Report[]>({
     queryKey: [`/api/projects/${id}/reports`],
+  });
+
+  const { data: projectElevations = [], isLoading: elevationsLoading } = useQuery<Elevation[]>({
+    queryKey: [`/api/projects/${id}/elevations`],
   });
 
   const openEditDialog = () => {
@@ -105,6 +113,41 @@ export default function ProjectDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/reports`] });
       toast({ title: "Report deleted" });
+    },
+  });
+
+  const handleElevationUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!elevFile) return;
+    setElevUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", elevFile);
+      formData.append("name", elevName || elevFile.name);
+      const res = await fetch(`/api/projects/${id}/elevations`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) throw new Error("Upload failed");
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/elevations`] });
+      setElevUploadOpen(false);
+      setElevName("");
+      setElevFile(null);
+      toast({ title: "Elevation uploaded" });
+    } catch {
+      toast({ title: "Upload failed", variant: "destructive" });
+    } finally {
+      setElevUploading(false);
+    }
+  };
+
+  const deleteElevationMutation = useMutation({
+    mutationFn: async (elevId: number) => {
+      await apiRequest("DELETE", `/api/elevations/${elevId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/elevations`] });
+      toast({ title: "Elevation deleted" });
     },
   });
 
@@ -356,6 +399,103 @@ export default function ProjectDetail() {
           ))}
         </div>
       )}
+
+      {/* Elevations Section */}
+      <div className="mt-10">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">Elevations</h2>
+          <Button size="sm" onClick={() => setElevUploadOpen(true)}>
+            <Upload className="w-4 h-4 mr-2" />
+            Upload Elevation
+          </Button>
+        </div>
+
+        {/* Upload Dialog */}
+        <Dialog open={elevUploadOpen} onOpenChange={setElevUploadOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Upload Elevation</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleElevationUpload} className="space-y-4">
+              <div>
+                <Label>Name</Label>
+                <Input
+                  value={elevName}
+                  onChange={(e) => setElevName(e.target.value)}
+                  placeholder="e.g. North Elevation"
+                />
+              </div>
+              <div>
+                <Label>File (PDF or Image)</Label>
+                <Input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => setElevFile(e.target.files?.[0] || null)}
+                  required
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={elevUploading || !elevFile}>
+                {elevUploading ? "Uploading..." : "Upload"}
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {elevationsLoading ? (
+          <div className="space-y-3">
+            {[1, 2].map((i) => (
+              <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />
+            ))}
+          </div>
+        ) : !projectElevations.length ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <Image className="w-10 h-10 text-muted-foreground/40 mb-4" />
+            <h3 className="text-base font-medium mb-1">No elevations yet</h3>
+            <p className="text-sm text-muted-foreground mb-4 max-w-xs">
+              Upload elevation drawings (PDF or image) to annotate with defect markers.
+            </p>
+            <Button size="sm" onClick={() => setElevUploadOpen(true)}>
+              <Upload className="w-4 h-4 mr-2" />
+              Upload Elevation
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {projectElevations.map((elev) => (
+              <Card key={elev.id} className="group relative">
+                <Link href={`/projects/${id}/elevations/${elev.id}`}>
+                  <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-accent/50 rounded-lg transition-colors">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Image className="w-4 h-4 text-muted-foreground" />
+                        <span className="font-medium">{elev.name}</span>
+                        <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase">
+                          {elev.fileType}
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        {new Date(elev.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0 ml-3" />
+                  </div>
+                </Link>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm("Delete this elevation and all its markers?")) {
+                      deleteElevationMutation.mutate(elev.id);
+                    }
+                  }}
+                  className="absolute top-3 right-12 p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

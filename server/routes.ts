@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, dataDir } from "./storage";
-import { insertProjectSchema, insertDefectSchema, insertReportSchema } from "@shared/schema";
+import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -11,21 +11,36 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+const diskStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+    cb(null, name);
+  },
+});
+
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname);
-      const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-      cb(null, name);
-    },
-  }),
+  storage: diskStorage,
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/")) {
       cb(null, true);
     } else {
       cb(new Error("Only image files are allowed"));
+    }
+  },
+});
+
+// Separate multer for elevation uploads (accepts images + PDFs)
+const elevationUpload = multer({
+  storage: diskStorage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/") || file.mimetype === "application/pdf") {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image and PDF files are allowed"));
     }
   },
 });
@@ -282,6 +297,73 @@ export async function registerRoutes(
       })
     );
     res.json({ project, defects: defectsWithPhotos });
+  });
+
+  // === ELEVATIONS ===
+  app.get("/api/projects/:projectId/elevations", async (req, res) => {
+    const elev = await storage.getElevationsByProject(Number(req.params.projectId));
+    res.json(elev);
+  });
+
+  app.get("/api/elevations/:id", async (req, res) => {
+    const elev = await storage.getElevation(Number(req.params.id));
+    if (!elev) return res.status(404).json({ message: "Elevation not found" });
+    res.json(elev);
+  });
+
+  app.post("/api/projects/:projectId/elevations", elevationUpload.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const projectId = Number(req.params.projectId);
+    const name = req.body.name || req.file.originalname;
+    const fileType = req.file.mimetype === "application/pdf" ? "pdf" : "image";
+    const elev = await storage.createElevation({
+      projectId,
+      name,
+      filename: req.file.filename,
+      fileType,
+      createdAt: new Date().toISOString(),
+    });
+    res.status(201).json(elev);
+  });
+
+  app.delete("/api/elevations/:id", async (req, res) => {
+    const elev = await storage.getElevation(Number(req.params.id));
+    if (elev) {
+      const filePath = path.join(uploadDir, elev.filename);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+    await storage.deleteElevation(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  // === MARKERS ===
+  app.get("/api/elevations/:elevationId/markers", async (req, res) => {
+    const markerList = await storage.getMarkersByElevation(Number(req.params.elevationId));
+    res.json(markerList);
+  });
+
+  app.post("/api/elevations/:elevationId/markers", async (req, res) => {
+    const elevationId = Number(req.params.elevationId);
+    const data = {
+      ...req.body,
+      elevationId,
+      createdAt: new Date().toISOString(),
+    };
+    const parsed = insertMarkerSchema.safeParse(data);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+    const marker = await storage.createMarker(parsed.data);
+    res.status(201).json(marker);
+  });
+
+  app.patch("/api/markers/:id", async (req, res) => {
+    const marker = await storage.updateMarker(Number(req.params.id), req.body);
+    if (!marker) return res.status(404).json({ message: "Marker not found" });
+    res.json(marker);
+  });
+
+  app.delete("/api/markers/:id", async (req, res) => {
+    await storage.deleteMarker(Number(req.params.id));
+    res.status(204).end();
   });
 
   return httpServer;

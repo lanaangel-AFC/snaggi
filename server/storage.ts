@@ -4,6 +4,8 @@ import {
   type Report, type InsertReport, reports,
   type Defect, type InsertDefect, defects,
   type Photo, type InsertPhoto, photos,
+  type Elevation, type InsertElevation, elevations,
+  type Marker, type InsertMarker, markers,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -76,6 +78,27 @@ sqlite.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS elevations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS markers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    elevation_id INTEGER NOT NULL,
+    defect_id INTEGER,
+    defect_uid TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    note TEXT,
+    x_percent REAL NOT NULL,
+    y_percent REAL NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (elevation_id) REFERENCES elevations(id) ON DELETE CASCADE
   );
 `);
 
@@ -162,6 +185,17 @@ export interface IStorage {
   createPhoto(photo: InsertPhoto): Promise<Photo>;
   updatePhotoCaption(id: number, caption: string): Promise<Photo | undefined>;
   deletePhoto(id: number): Promise<Photo | undefined>;
+  // Elevations
+  getElevationsByProject(projectId: number): Promise<Elevation[]>;
+  getElevation(id: number): Promise<Elevation | undefined>;
+  createElevation(elevation: InsertElevation): Promise<Elevation>;
+  deleteElevation(id: number): Promise<void>;
+  // Markers
+  getMarkersByElevation(elevationId: number): Promise<Marker[]>;
+  getMarker(id: number): Promise<Marker | undefined>;
+  createMarker(marker: InsertMarker): Promise<Marker>;
+  updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined>;
+  deleteMarker(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -197,6 +231,12 @@ export class DatabaseStorage implements IStorage {
     }
     db.delete(defects).where(eq(defects.projectId, id)).run();
     db.delete(reports).where(eq(reports.projectId, id)).run();
+    // Delete markers and elevations for this project
+    const projectElevations = db.select().from(elevations).where(eq(elevations.projectId, id)).all();
+    for (const e of projectElevations) {
+      db.delete(markers).where(eq(markers.elevationId, e.id)).run();
+    }
+    db.delete(elevations).where(eq(elevations.projectId, id)).run();
     db.delete(projects).where(eq(projects.id, id)).run();
   }
 
@@ -342,6 +382,38 @@ export class DatabaseStorage implements IStorage {
       db.delete(photos).where(eq(photos.id, id)).run();
     }
     return photo;
+  }
+
+  // Elevations
+  async getElevationsByProject(projectId: number): Promise<Elevation[]> {
+    return db.select().from(elevations).where(eq(elevations.projectId, projectId)).orderBy(desc(elevations.id)).all();
+  }
+  async getElevation(id: number): Promise<Elevation | undefined> {
+    return db.select().from(elevations).where(eq(elevations.id, id)).get();
+  }
+  async createElevation(elevation: InsertElevation): Promise<Elevation> {
+    return db.insert(elevations).values(elevation).returning().get();
+  }
+  async deleteElevation(id: number): Promise<void> {
+    db.delete(markers).where(eq(markers.elevationId, id)).run();
+    db.delete(elevations).where(eq(elevations.id, id)).run();
+  }
+
+  // Markers
+  async getMarkersByElevation(elevationId: number): Promise<Marker[]> {
+    return db.select().from(markers).where(eq(markers.elevationId, elevationId)).all();
+  }
+  async getMarker(id: number): Promise<Marker | undefined> {
+    return db.select().from(markers).where(eq(markers.id, id)).get();
+  }
+  async createMarker(marker: InsertMarker): Promise<Marker> {
+    return db.insert(markers).values(marker).returning().get();
+  }
+  async updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined> {
+    return db.update(markers).set(marker).where(eq(markers.id, id)).returning().get();
+  }
+  async deleteMarker(id: number): Promise<void> {
+    db.delete(markers).where(eq(markers.id, id)).run();
   }
 }
 
