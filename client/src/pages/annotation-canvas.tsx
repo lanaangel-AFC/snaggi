@@ -268,11 +268,16 @@ export default function AnnotationCanvas() {
     if (value === "custom") {
       setFormUid("");
       setFormStatus("open");
+      setFormNote("");
     } else {
       const defect = defects.find((d) => String(d.id) === value);
       if (defect) {
         setFormUid(defect.uid);
         setFormStatus(defect.status === "complete" ? "complete" : "open");
+        // Auto-populate note from defect comment only for new markers
+        if (!markerDialog.editing) {
+          setFormNote(defect.comment || "");
+        }
       }
     }
   };
