@@ -124,7 +124,7 @@ export default function DefectForm() {
         }
       } catch {}
     }
-    return [];
+    return ELEVATIONS;
   }, [report?.elevations, project?.elevations]);
 
   const [elevation, setElevation] = useState("");
