@@ -30,6 +30,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ArrowLeft, ZoomIn, ZoomOut, RotateCcw, Crosshair, Eye } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import type { Elevation, Marker, Defect } from "@shared/schema";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -41,6 +42,16 @@ const STATUS_COLORS: Record<string, string> = {
 export default function AnnotationCanvas() {
   const { projectId, elevationId } = useParams<{ projectId: string; elevationId: string }>();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+
+  // Parse ?defect= from the hash (hash routing puts query params inside the hash)
+  const defectParam = (() => {
+    const hash = window.location.hash;
+    const qIndex = hash.indexOf("?");
+    if (qIndex === -1) return null;
+    const params = new URLSearchParams(hash.substring(qIndex));
+    return params.get("defect");
+  })();
 
   // State
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -91,6 +102,29 @@ export default function AnnotationCanvas() {
       return res.json();
     },
   });
+
+  // Auto-enter placing mode when arriving with ?defect= param
+  const [defectParamHandled, setDefectParamHandled] = useState(false);
+  useEffect(() => {
+    if (!defectParam || defectParamHandled || defects.length === 0) return;
+    setDefectParamHandled(true);
+
+    // Pre-select the defect in the form
+    const matchingDefect = defects.find((d) => d.uid === defectParam);
+    if (matchingDefect) {
+      setFormDefectId(String(matchingDefect.id));
+      setFormUid(matchingDefect.uid);
+      setFormStatus(matchingDefect.status === "complete" ? "complete" : "open");
+      setFormNote(matchingDefect.comment || "");
+    } else {
+      // Defect UID not found in list — use it as custom
+      setFormDefectId("custom");
+      setFormUid(defectParam);
+    }
+
+    setPlacingMode(true);
+    toast({ title: `Tap the drawing to mark the location of ${defectParam}` });
+  }, [defectParam, defects, defectParamHandled]);
 
   // Load image or PDF
   useEffect(() => {

@@ -9,9 +9,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DictationButton } from "@/components/DictationButton";
-import type { Defect, Photo, Project } from "@shared/schema";
+import type { Defect, Photo, Project, Elevation } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -136,6 +137,28 @@ export default function DefectForm() {
   const [uid, setUid] = useState("");
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
+
+  // "Mark on Elevation" state
+  const [elevationPickerOpen, setElevationPickerOpen] = useState(false);
+  const [projectElevations, setProjectElevations] = useState<Elevation[]>([]);
+
+  const handleMarkOnElevation = async () => {
+    try {
+      const res = await apiRequest("GET", `/api/projects/${projectId}/elevations`);
+      const elevations: Elevation[] = await res.json();
+      const defectUid = uid || assembledUid;
+      if (elevations.length === 0) {
+        toast({ title: "No elevations uploaded for this project yet. Upload one from the project page first.", variant: "destructive" });
+      } else if (elevations.length === 1) {
+        navigate(`/projects/${projectId}/elevations/${elevations[0].id}?defect=${encodeURIComponent(defectUid)}`);
+      } else {
+        setProjectElevations(elevations);
+        setElevationPickerOpen(true);
+      }
+    } catch {
+      toast({ title: "Failed to load elevations", variant: "destructive" });
+    }
+  };
 
   // Fetch all project defects for text suggestions (across all reports)
   const { data: allProjectDefects } = useQuery<Defect[]>({
@@ -484,6 +507,48 @@ export default function DefectForm() {
           </div>
         )}
       </div>
+
+      {/* Mark on Elevation — only for existing defects */}
+      {isEdit && (
+        <div className="mb-4">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={handleMarkOnElevation}
+            data-testid="button-mark-on-elevation"
+          >
+            <MapPin className="w-4 h-4" />
+            Mark on Elevation
+          </Button>
+        </div>
+      )}
+
+      {/* Elevation picker dialog (when multiple elevations exist) */}
+      <Dialog open={elevationPickerOpen} onOpenChange={setElevationPickerOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Choose Elevation</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            {projectElevations.map((el) => (
+              <Button
+                key={el.id}
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => {
+                  const defectUid = uid || assembledUid;
+                  setElevationPickerOpen(false);
+                  navigate(`/projects/${projectId}/elevations/${el.id}?defect=${encodeURIComponent(defectUid)}`);
+                }}
+              >
+                {el.name}
+              </Button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <form
         onSubmit={(e) => {
