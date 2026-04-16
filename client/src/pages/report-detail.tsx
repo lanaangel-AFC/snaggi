@@ -55,6 +55,59 @@ async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   return blob.arrayBuffer();
 }
 
+// Compress an image blob via Canvas — returns a smaller ArrayBuffer (for Word export)
+async function compressImageForExport(blob: Blob, maxWidth = 800, quality = 0.7): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (result) => {
+          if (result) result.arrayBuffer().then(resolve).catch(reject);
+          else reject(new Error('Canvas toBlob failed'));
+        },
+        'image/jpeg',
+        quality,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Image load failed'));
+    };
+    img.src = url;
+  });
+}
+
+// Compress an image blob via Canvas — returns a data URL string (for PDF export)
+async function compressImageForPdfExport(blob: Blob, maxWidth = 800, quality = 0.7): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Image load failed'));
+    };
+    img.src = url;
+  });
+}
+
 // Load the AFC logo
 async function loadAfcLogo(): Promise<{ dataUrl: string; buffer: ArrayBuffer } | null> {
   try {
@@ -290,7 +343,12 @@ export default function ReportDetail() {
 
         const blob = await loadImageBlob(photo.filename);
         if (blob) {
-          const dataUrl = await blobToDataUrl(blob);
+          let dataUrl: string;
+          try {
+            dataUrl = await compressImageForPdfExport(blob, 800, 0.7);
+          } catch {
+            dataUrl = await blobToDataUrl(blob);
+          }
           doc.addImage(dataUrl, "JPEG", x, y, imgW, imgH);
         } else {
           doc.setDrawColor(180);
@@ -715,9 +773,15 @@ export default function ReportDetail() {
       const coverChildren: any[] = [];
 
       if (logo) {
+        let logoBuffer: ArrayBuffer;
+        try {
+          logoBuffer = await compressImageForExport(new Blob([logo.buffer]), 360, 0.8);
+        } catch {
+          logoBuffer = logo.buffer;
+        }
         coverChildren.push(new Paragraph({
           children: [
-            new ImageRun({ data: logo.buffer, transformation: { width: 180, height: 58 }, type: "png" }),
+            new ImageRun({ data: logoBuffer, transformation: { width: 180, height: 58 }, type: "jpg" }),
           ],
           alignment: AlignmentType.RIGHT,
           spacing: { after: 600 },
@@ -928,7 +992,12 @@ export default function ReportDetail() {
                 const cellChildren: any[] = [];
 
                 if (blob) {
-                  const buffer = await blobToArrayBuffer(blob);
+                  let buffer: ArrayBuffer;
+                  try {
+                    buffer = await compressImageForExport(blob, 800, 0.7);
+                  } catch {
+                    buffer = await blobToArrayBuffer(blob);
+                  }
                   cellChildren.push(new Paragraph({
                     children: [
                       new ImageRun({ data: buffer, transformation: { width: 241, height: 181 }, type: "jpg" }),
