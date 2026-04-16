@@ -40,6 +40,7 @@ export const defects = sqliteTable("defects", {
   verificationPerson: text("verification_person").notNull(),
   status: text("status").notNull().default("open"), // open, complete
   recordType: text("record_type").notNull().default("defect"), // defect, observation
+  updatedAt: text("updated_at"),
 });
 
 export const photos = sqliteTable("photos", {

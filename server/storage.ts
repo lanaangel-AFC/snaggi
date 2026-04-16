@@ -64,7 +64,8 @@ sqlite.exec(`
     verification_method TEXT NOT NULL,
     verification_person TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open',
-    record_type TEXT NOT NULL DEFAULT 'defect'
+    record_type TEXT NOT NULL DEFAULT 'defect',
+    updated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS photos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +112,7 @@ safeAddColumn("projects", "elevations", "TEXT DEFAULT '[]'");
 safeAddColumn("reports", "elevations", "TEXT DEFAULT '[]'");
 safeAddColumn("defects", "record_type", "TEXT NOT NULL DEFAULT 'defect'");
 safeAddColumn("defects", "report_id", "INTEGER");
+safeAddColumn("defects", "updated_at", "TEXT");
 
 // Migration: for existing defects without reportId, create a default "Report 1" for each project
 {
@@ -196,6 +198,7 @@ export interface IStorage {
   createMarker(marker: InsertMarker): Promise<Marker>;
   updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined>;
   deleteMarker(id: number): Promise<void>;
+  updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -335,10 +338,10 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(defects).where(eq(defects.id, id)).get();
   }
   async createDefect(defect: InsertDefect): Promise<Defect> {
-    return db.insert(defects).values(defect).returning().get();
+    return db.insert(defects).values({ ...defect, updatedAt: new Date().toISOString() }).returning().get();
   }
   async updateDefect(id: number, defect: Partial<InsertDefect>): Promise<Defect | undefined> {
-    return db.update(defects).set(defect).where(eq(defects.id, id)).returning().get();
+    return db.update(defects).set({ ...defect, updatedAt: new Date().toISOString() }).where(eq(defects.id, id)).returning().get();
   }
   async deleteDefect(id: number): Promise<void> {
     db.delete(photos).where(eq(photos.defectId, id)).run();
@@ -414,6 +417,9 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteMarker(id: number): Promise<void> {
     db.delete(markers).where(eq(markers.id, id)).run();
+  }
+  async updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>): Promise<void> {
+    db.update(markers).set(updates).where(eq(markers.defectId, defectId)).run();
   }
 }
 

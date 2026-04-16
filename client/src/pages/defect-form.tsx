@@ -577,7 +577,7 @@ export default function DefectForm() {
               <Select
                 value={elevation}
                 onValueChange={setElevation}
-                disabled={isEdit && isComplete}
+
               >
                 <SelectTrigger className="font-mono" data-testid="select-elevation">
                   <SelectValue placeholder="—" />
@@ -603,7 +603,7 @@ export default function DefectForm() {
                 }}
                 maxLength={2}
                 required
-                disabled={isEdit && isComplete}
+
                 className="font-mono text-center"
                 data-testid="input-drop"
               />
@@ -620,7 +620,7 @@ export default function DefectForm() {
                 }}
                 maxLength={2}
                 required
-                disabled={isEdit && isComplete}
+
                 className="font-mono text-center"
                 data-testid="input-level"
               />
@@ -630,7 +630,7 @@ export default function DefectForm() {
               <Select
                 value={workType}
                 onValueChange={setWorkType}
-                disabled={isEdit && isComplete}
+
               >
                 <SelectTrigger className="font-mono" data-testid="select-work-type">
                   <SelectValue placeholder="—" />
@@ -656,7 +656,7 @@ export default function DefectForm() {
                 }}
                 maxLength={2}
                 required
-                disabled={isEdit && isComplete}
+
                 className="font-mono text-center"
                 data-testid="input-seq-number"
               />

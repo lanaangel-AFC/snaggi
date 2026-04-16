@@ -201,6 +201,15 @@ export async function registerRoutes(
   app.patch("/api/defects/:id", async (req, res) => {
     const defect = await storage.updateDefect(Number(req.params.id), req.body);
     if (!defect) return res.status(404).json({ message: "Defect not found" });
+
+    // Sync markers when uid or status changes
+    const markerUpdates: Record<string, string> = {};
+    if (req.body.uid) markerUpdates.defectUid = req.body.uid;
+    if (req.body.status) markerUpdates.status = req.body.status;
+    if (Object.keys(markerUpdates).length > 0) {
+      await storage.updateMarkersByDefectId(defect.id, markerUpdates);
+    }
+
     res.json(defect);
   });
 

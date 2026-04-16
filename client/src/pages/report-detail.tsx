@@ -554,6 +554,14 @@ export default function ReportDetail() {
         return dc !== 0 ? dc : sortByUidExport(a, b);
       });
 
+      // Inspection-scoped filtering: only generate detail pages for defects touched in this inspection
+      const reportCreatedAt = data.report.createdAt;
+      const allHaveNullUpdatedAt = allDefects.every((d: any) => !d.updatedAt);
+      const isCurrentInspection = (d: any) => allHaveNullUpdatedAt || (d.updatedAt && d.updatedAt >= reportCreatedAt);
+      const openDetailData = openData.filter(isCurrentInspection);
+      const completedDetailData = completedData.filter(isCurrentInspection);
+      const observationsDetailData = observationsOnly.filter(isCurrentInspection);
+
       doc.addPage();
       addHeader();
       addFooter();
@@ -613,8 +621,8 @@ export default function ReportDetail() {
         doc.text("No items recorded.", margin, y);
       }
 
-      if (openData.length > 0) {
-        for (const defect of openData) {
+      if (openDetailData.length > 0) {
+        for (const defect of openDetailData) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
       }
@@ -635,7 +643,7 @@ export default function ReportDetail() {
         doc.setTextColor(100);
         doc.text("All defects that have been rectified and verified.", margin, y);
 
-        for (const defect of completedData) {
+        for (const defect of completedDetailData) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
       }
@@ -657,7 +665,7 @@ export default function ReportDetail() {
         doc.setTextColor(100);
         doc.text("General observations noted during inspection.", margin, y);
 
-        for (const defect of observationsOnly) {
+        for (const defect of observationsDetailData) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
       }
@@ -710,6 +718,15 @@ export default function ReportDetail() {
         const dc = (b.dateClosed ?? "").localeCompare(a.dateClosed ?? "");
         return dc !== 0 ? dc : sortUid(a, b);
       });
+
+      // Inspection-scoped filtering: only generate detail pages for defects touched in this inspection
+      const reportCreatedAt = data.report.createdAt;
+      const allHaveNullUpdatedAt = allDefects.every((d: any) => !d.updatedAt);
+      const isCurrentInspection = (d: any) => allHaveNullUpdatedAt || (d.updatedAt && d.updatedAt >= reportCreatedAt);
+      const openDetailData = openData.filter(isCurrentInspection);
+      const completedDetailData = completedData.filter(isCurrentInspection);
+      const observationsDetailData = observationsOnly.filter(isCurrentInspection);
+
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
       const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
 
@@ -1122,11 +1139,11 @@ export default function ReportDetail() {
         }));
       }
 
-      for (let i = 0; i < openData.length; i++) {
+      for (let i = 0; i < openDetailData.length; i++) {
         if (i > 0 || defectsOnly.length > 0) {
           obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
         }
-        const defectEls = await buildWordDefectPage(openData[i]);
+        const defectEls = await buildWordDefectPage(openDetailData[i]);
         obsChildren.push(...defectEls);
       }
 
@@ -1144,11 +1161,11 @@ export default function ReportDetail() {
           spacing: { after: 200 },
         }));
 
-        for (let i = 0; i < completedData.length; i++) {
+        for (let i = 0; i < completedDetailData.length; i++) {
           if (i > 0) {
             completedChildren.push(new Paragraph({ children: [new PageBreak()] }));
           }
-          const defectEls = await buildWordDefectPage(completedData[i]);
+          const defectEls = await buildWordDefectPage(completedDetailData[i]);
           completedChildren.push(...defectEls);
         }
       }
@@ -1192,11 +1209,11 @@ export default function ReportDetail() {
           children: [new TextRun({ text: "General observations noted during inspection.", size: 18, color: "666666", italics: true, font: "Aptos" })],
           spacing: { after: 200 },
         }));
-        for (let i = 0; i < observationsOnly.length; i++) {
+        for (let i = 0; i < observationsDetailData.length; i++) {
           if (i > 0) {
             obsOnlyChildren.push(new Paragraph({ children: [new PageBreak()] }));
           }
-          const defectEls = await buildWordDefectPage(observationsOnly[i]);
+          const defectEls = await buildWordDefectPage(observationsDetailData[i]);
           obsOnlyChildren.push(...defectEls);
         }
         docSections.push({ properties: sectionProps, children: obsOnlyChildren });
