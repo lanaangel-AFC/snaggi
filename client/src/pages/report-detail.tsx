@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
-  ChevronDown, FileDown, Eye, Settings, X
+  ChevronDown, FileDown, Eye, Settings, X, ImageDown
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -34,9 +34,10 @@ const STANDARD_ELEVATIONS = [
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 // Helper to load an image as ArrayBuffer (for docx) or data URL (for pdf)
+// Load compressed thumbnail for report exports (smaller file size)
 async function loadImageBlob(filename: string): Promise<Blob | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/uploads/${filename}`);
+    const res = await fetch(`${API_BASE}/api/thumbs/${filename}`);
     return await res.blob();
   } catch {
     return null;
@@ -1497,6 +1498,12 @@ export default function ReportDetail() {
             <DropdownMenuItem onClick={handleGeneratePdf}>
               <FileText className="w-4 h-4 mr-2" />
               PDF (.pdf)
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => {
+              window.open(`${API_BASE}/api/reports/${reportId}/photos-zip`, "_blank");
+            }}>
+              <ImageDown className="w-4 h-4 mr-2" />
+              Export Images (.zip)
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -5,11 +5,13 @@ import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElev
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import sharp from "sharp";
+import archiver from "archiver";
 
 const uploadDir = path.join(dataDir, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const thumbDir = path.join(dataDir, "thumbs");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
 
 const diskStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
@@ -252,7 +254,62 @@ export async function registerRoutes(
       slot,
       createdAt: new Date().toISOString(),
     });
+    // Generate compressed thumbnail for report exports
+    try {
+      const origPath = path.join(uploadDir, req.file.filename);
+      const thumbPath = path.join(thumbDir, req.file.filename);
+      await sharp(origPath)
+        .resize(800, 600, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 70 })
+        .toFile(thumbPath);
+    } catch (err) {
+      console.warn("Thumbnail generation failed:", err);
+    }
+
     res.status(201).json(photo);
+  });
+
+  // Serve compressed thumbnails for report exports
+  app.use("/api/thumbs", (req, res, next) => {
+    const filePath = path.join(thumbDir, path.basename(req.path));
+    if (fs.existsSync(filePath)) {
+      res.sendFile(filePath);
+    } else {
+      const origPath = path.join(uploadDir, path.basename(req.path));
+      if (fs.existsSync(origPath)) res.sendFile(origPath);
+      else res.status(404).json({ message: "File not found" });
+    }
+  });
+
+  // Download all photos for a report as a zip
+  app.get("/api/reports/:reportId/photos-zip", async (req, res) => {
+    try {
+      const reportId = Number(req.params.reportId);
+      const report = await storage.getReport(reportId);
+      if (!report) return res.status(404).json({ message: "Report not found" });
+      const defects = await storage.getDefectsByReport(reportId);
+      
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="photos-report-${reportId}.zip"`);
+      
+      const archive = archiver("zip", { zlib: { level: 1 } });
+      archive.pipe(res);
+      
+      for (const defect of defects) {
+        const photos = await storage.getPhotosByDefect(defect.id);
+        for (const photo of photos) {
+          const filePath = path.join(uploadDir, photo.filename);
+          if (fs.existsSync(filePath)) {
+            archive.file(filePath, { name: `${defect.uid}_${photo.slot}.jpg` });
+          }
+        }
+      }
+      
+      await archive.finalize();
+    } catch (err: any) {
+      console.error("Zip error:", err);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to create zip" });
+    }
   });
 
   // Update photo caption
