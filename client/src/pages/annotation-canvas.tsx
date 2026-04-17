@@ -29,7 +29,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, ZoomIn, ZoomOut, RotateCcw, Crosshair, Eye } from "lucide-react";
+import { ArrowLeft, ZoomIn, ZoomOut, RotateCcw, Crosshair, Eye, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Elevation, Marker, Defect } from "@shared/schema";
 
@@ -349,6 +349,53 @@ export default function AnnotationCanvas() {
     }
   };
 
+  const [exporting, setExporting] = useState(false);
+
+  // Export elevation with markers as PNG
+  const handleExportElevation = async () => {
+    if (!containerRef.current || !imageRef.current) return;
+    setExporting(true);
+    try {
+      // Reset zoom/pan for a clean capture
+      const prevScale = scale;
+      const prevTranslate = { ...translate };
+      setScale(1);
+      setTranslate({ x: 0, y: 0 });
+
+      // Wait for re-render
+      await new Promise((r) => setTimeout(r, 300));
+
+      const html2canvas = (await import("html2canvas")).default;
+      // Capture the image container (the div that holds the image + markers)
+      const target = imageRef.current.parentElement;
+      if (!target) throw new Error("No target");
+
+      const canvas = await html2canvas(target as HTMLElement, {
+        useCORS: true,
+        allowTaint: true,
+        scale: 2, // 2x for good resolution
+        backgroundColor: "#ffffff",
+      });
+
+      // Restore zoom/pan
+      setScale(prevScale);
+      setTranslate(prevTranslate);
+
+      // Download
+      const link = document.createElement("a");
+      link.download = `${elevation?.name || "elevation"}_marked.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+
+      toast({ title: "Elevation exported" });
+    } catch (err) {
+      console.error("Export error:", err);
+      toast({ title: "Failed to export elevation", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Counts
   const counts = {
     open: markerList.filter((m) => m.status === "open").length,
@@ -380,6 +427,16 @@ export default function AnnotationCanvas() {
           </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={resetZoom}>
             <RotateCcw className="w-3.5 h-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleExportElevation}
+            disabled={exporting || !imageLoaded}
+            title="Export elevation with markers"
+          >
+            <Download className="w-4 h-4" />
           </Button>
         </div>
       </div>
