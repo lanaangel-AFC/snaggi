@@ -351,35 +351,79 @@ export default function AnnotationCanvas() {
 
   const [exporting, setExporting] = useState(false);
 
-  // Export elevation with markers as PNG
+  // Export elevation with markers as PNG — draw directly on canvas for reliability
   const handleExportElevation = async () => {
-    if (!containerRef.current || !imageRef.current) return;
+    if (!imageRef.current) return;
     setExporting(true);
     try {
-      // Reset zoom/pan for a clean capture
-      const prevScale = scale;
-      const prevTranslate = { ...translate };
-      setScale(1);
-      setTranslate({ x: 0, y: 0 });
+      const img = imageRef.current;
+      const canvas = document.createElement("canvas");
+      const scale2x = 2; // render at 2x for sharpness
+      canvas.width = img.naturalWidth * scale2x;
+      canvas.height = img.naturalHeight * scale2x;
+      const ctx = canvas.getContext("2d")!;
+      ctx.scale(scale2x, scale2x);
 
-      // Wait for re-render
-      await new Promise((r) => setTimeout(r, 300));
+      // Draw the elevation image
+      ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
 
-      const html2canvas = (await import("html2canvas")).default;
-      // Capture the image container (the div that holds the image + markers)
-      const target = imageRef.current.parentElement;
-      if (!target) throw new Error("No target");
+      // Draw each marker
+      const imgW = img.naturalWidth;
+      const imgH = img.naturalHeight;
 
-      const canvas = await html2canvas(target as HTMLElement, {
-        useCORS: true,
-        allowTaint: true,
-        scale: 2, // 2x for good resolution
-        backgroundColor: "#ffffff",
-      });
+      for (const marker of markerList) {
+        const mx = (marker.xPercent / 100) * imgW;
+        const my = (marker.yPercent / 100) * imgH;
+        const color = STATUS_COLORS[marker.status] || "#EF4444";
+        const label = marker.defectUid || "";
 
-      // Restore zoom/pan
-      setScale(prevScale);
-      setTranslate(prevTranslate);
+        // Pin drop shape
+        ctx.save();
+        ctx.translate(mx, my);
+
+        // Draw pin body
+        ctx.beginPath();
+        ctx.arc(0, -12, 8, Math.PI, 0, false);
+        ctx.quadraticCurveTo(8, -4, 0, 4);
+        ctx.quadraticCurveTo(-8, -4, -8, -12);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // White dot in pin
+        ctx.beginPath();
+        ctx.arc(0, -12, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+
+        // UID label above pin
+        ctx.font = "bold 11px monospace";
+        const textWidth = ctx.measureText(label).width;
+        const padX = 4;
+        const padY = 3;
+        const labelX = -textWidth / 2 - padX;
+        const labelY = -28;
+        const labelH = 16;
+
+        // Label background
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.roundRect(labelX, labelY, textWidth + padX * 2, labelH, 3);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+
+        // Label text
+        ctx.fillStyle = "#fff";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, labelX + padX, labelY + labelH / 2);
+
+        ctx.restore();
+      }
 
       // Download
       const link = document.createElement("a");
