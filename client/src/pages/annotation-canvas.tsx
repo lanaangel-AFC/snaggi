@@ -517,15 +517,17 @@ export default function AnnotationCanvas() {
                   {/* Pin */}
                   <div className="flex flex-col items-center cursor-pointer group">
                     <span
-                      className="text-[10px] font-mono font-semibold px-1 rounded whitespace-nowrap mb-0.5"
+                      className="text-xs font-mono font-bold px-1.5 py-0.5 rounded whitespace-nowrap mb-0.5 shadow-sm border border-white/30"
                       style={{
                         backgroundColor: STATUS_COLORS[marker.status] || "#EF4444",
                         color: "#fff",
+                        fontSize: "13px",
+                        letterSpacing: "0.02em",
                       }}
                     >
                       {marker.defectUid}
                     </span>
-                    <svg width="16" height="22" viewBox="0 0 16 22" fill="none">
+                    <svg width="18" height="24" viewBox="0 0 16 22" fill="none">
                       <path
                         d="M8 0C3.6 0 0 3.6 0 8c0 5.4 7.05 13.09 7.35 13.43a.87.87 0 001.3 0C8.95 21.09 16 13.4 16 8c0-4.4-3.6-8-8-8z"
                         fill={STATUS_COLORS[marker.status] || "#EF4444"}
