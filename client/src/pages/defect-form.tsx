@@ -144,6 +144,10 @@ export default function DefectForm() {
   const [uid, setUid] = useState("");
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
+  // Track whether we've already initialized the form from the loaded defect.
+  // Without this, refetches (e.g. on window focus after returning from the photo
+  // picker) would overwrite unsaved edits to Drop / Elevation / Level / Comment.
+  const hasInitializedRef = useRef(false);
 
   // "Mark on Elevation" state
   const [elevationPickerOpen, setElevationPickerOpen] = useState(false);
@@ -277,7 +281,12 @@ export default function DefectForm() {
   }, [nextUidData, isEdit]);
 
   useEffect(() => {
-    if (existingDefect) {
+    // Only seed the form from the server response on the FIRST load. Any
+    // subsequent refetch of `existingDefect` (e.g. React Query refetch-on-focus
+    // after picking a photo on mobile) must not clobber the user's in-progress
+    // edits to fields like Drop / Elevation / Level / Comment / Action.
+    if (existingDefect && !hasInitializedRef.current) {
+      hasInitializedRef.current = true;
       setForm({
         dateOpened: existingDefect.dateOpened,
         dateClosed: existingDefect.dateClosed || "",
@@ -310,6 +319,12 @@ export default function DefectForm() {
       }
     }
   }, [existingDefect]);
+
+  // When navigating between defects within the same form route, reset the
+  // initialization flag so the next defect's data does seed its form.
+  useEffect(() => {
+    hasInitializedRef.current = false;
+  }, [defectId]);
 
   useEffect(() => {
     if (existingPhotos) setPhotos(existingPhotos);
