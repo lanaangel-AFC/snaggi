@@ -1553,10 +1553,16 @@ export default function ReportDetail() {
               PDF (.pdf)
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => {
-              window.open(`${API_BASE}/api/reports/${reportId}/photos-zip`, "_blank");
+              window.open(`${API_BASE}/api/reports/${reportId}/photos-zip?scope=current`, "_blank");
             }}>
               <ImageDown className="w-4 h-4 mr-2" />
-              Export Images (.zip)
+              Export Images — this inspection (.zip)
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => {
+              window.open(`${API_BASE}/api/reports/${reportId}/photos-zip?scope=all`, "_blank");
+            }}>
+              <ImageDown className="w-4 h-4 mr-2" />
+              Export Images — all photos (.zip)
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

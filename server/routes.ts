@@ -333,30 +333,59 @@ export async function registerRoutes(
     }
   });
 
-  // Download all photos for a report as a zip
+  // Download photos for a report as a zip.
+  // By default, only photos uploaded during the current inspection are included
+  // (i.e. photo.createdAt >= report.createdAt). Pass ?scope=all to get every photo.
   app.get("/api/reports/:reportId/photos-zip", async (req, res) => {
     try {
       const reportId = Number(req.params.reportId);
       const report = await storage.getReport(reportId);
       if (!report) return res.status(404).json({ message: "Report not found" });
       const defects = await storage.getDefectsByReport(reportId);
-      
+      const scope = (req.query.scope as string) || "current";
+      const reportStart = report.createdAt ? new Date(report.createdAt).getTime() : 0;
+
+      const filenameSuffix = scope === "all" ? "all" : "current";
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="photos-report-${reportId}.zip"`);
-      
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="photos-report-${reportId}-${filenameSuffix}.zip"`,
+      );
+
       const archive = archiver("zip", { zlib: { level: 1 } });
       archive.pipe(res);
-      
+
+      let included = 0;
       for (const defect of defects) {
         const photos = await storage.getPhotosByDefect(defect.id);
         for (const photo of photos) {
+          if (scope !== "all") {
+            const photoTs = photo.createdAt ? new Date(photo.createdAt).getTime() : 0;
+            if (!photoTs || photoTs < reportStart) continue;
+          }
           const filePath = path.join(uploadDir, photo.filename);
           if (fs.existsSync(filePath)) {
             archive.file(filePath, { name: `${defect.uid}_${photo.slot}.jpg` });
+            included++;
           }
         }
       }
-      
+
+      // If the current-inspection scope is empty (e.g. legacy data with no
+      // photos uploaded after the report's createdAt), fall back to all photos
+      // so the user gets something useful instead of an empty zip.
+      if (included === 0 && scope !== "all") {
+        for (const defect of defects) {
+          const photos = await storage.getPhotosByDefect(defect.id);
+          for (const photo of photos) {
+            const filePath = path.join(uploadDir, photo.filename);
+            if (fs.existsSync(filePath)) {
+              archive.file(filePath, { name: `${defect.uid}_${photo.slot}.jpg` });
+            }
+          }
+        }
+      }
+
       await archive.finalize();
     } catch (err: any) {
       console.error("Zip error:", err);
