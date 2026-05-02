@@ -99,6 +99,32 @@ export type Elevation = typeof elevations.$inferSelect;
 export type InsertMarker = z.infer<typeof insertMarkerSchema>;
 export type Marker = typeof markers.$inferSelect;
 
+// Observation history (tracks prior observation text across inspections)
+export const observationHistory = sqliteTable("observation_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  defectId: integer("defect_id").notNull().references(() => defects.id, { onDelete: "cascade" }),
+  reportId: integer("report_id").notNull().references(() => reports.id),
+  text: text("text").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+// Action history (tracks prior action required text across inspections)
+export const actionHistory = sqliteTable("action_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  defectId: integer("defect_id").notNull().references(() => defects.id, { onDelete: "cascade" }),
+  reportId: integer("report_id").notNull().references(() => reports.id),
+  text: text("text").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertObservationHistorySchema = createInsertSchema(observationHistory).omit({ id: true });
+export const insertActionHistorySchema = createInsertSchema(actionHistory).omit({ id: true });
+
+export type InsertObservationHistory = z.infer<typeof insertObservationHistorySchema>;
+export type ObservationHistory = typeof observationHistory.$inferSelect;
+export type InsertActionHistory = z.infer<typeof insertActionHistorySchema>;
+export type ActionHistory = typeof actionHistory.$inferSelect;
+
 // Users (kept from template)
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -6,6 +6,8 @@ import {
   type Photo, type InsertPhoto, photos,
   type Elevation, type InsertElevation, elevations,
   type Marker, type InsertMarker, markers,
+  type ObservationHistory, type InsertObservationHistory, observationHistory,
+  type ActionHistory, type InsertActionHistory, actionHistory,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -100,6 +102,24 @@ sqlite.exec(`
     y_percent REAL NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (elevation_id) REFERENCES elevations(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS observation_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    defect_id INTEGER NOT NULL,
+    report_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE,
+    FOREIGN KEY (report_id) REFERENCES reports(id)
+  );
+  CREATE TABLE IF NOT EXISTS action_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    defect_id INTEGER NOT NULL,
+    report_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE,
+    FOREIGN KEY (report_id) REFERENCES reports(id)
   );
 `);
 
@@ -199,6 +219,11 @@ export interface IStorage {
   updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined>;
   deleteMarker(id: number): Promise<void>;
   updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>): Promise<void>;
+  // Observation/Action History
+  getObservationHistory(defectId: number): Promise<ObservationHistory[]>;
+  getActionHistory(defectId: number): Promise<ActionHistory[]>;
+  createObservationHistory(entry: InsertObservationHistory): Promise<ObservationHistory>;
+  createActionHistory(entry: InsertActionHistory): Promise<ActionHistory>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -302,6 +327,25 @@ export class DatabaseStorage implements IStorage {
         status: d.status,
         recordType: d.recordType,
       }).returning().get();
+
+      // Seed history rows for carried-forward text (so user sees "this came from Insp-N")
+      const now = new Date().toISOString();
+      if (d.comment?.trim()) {
+        db.insert(observationHistory).values({
+          defectId: newDefect.id,
+          reportId: source.id,
+          text: d.comment,
+          createdAt: now,
+        }).run();
+      }
+      if (d.actionRequired?.trim()) {
+        db.insert(actionHistory).values({
+          defectId: newDefect.id,
+          reportId: source.id,
+          text: d.actionRequired,
+          createdAt: now,
+        }).run();
+      }
 
       // Copy photos
       const defectPhotos = db.select().from(photos).where(eq(photos.defectId, d.id)).all();
@@ -420,6 +464,20 @@ export class DatabaseStorage implements IStorage {
   }
   async updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>): Promise<void> {
     db.update(markers).set(updates).where(eq(markers.defectId, defectId)).run();
+  }
+
+  // Observation/Action History
+  async getObservationHistory(defectId: number): Promise<ObservationHistory[]> {
+    return db.select().from(observationHistory).where(eq(observationHistory.defectId, defectId)).orderBy(desc(observationHistory.id)).all();
+  }
+  async getActionHistory(defectId: number): Promise<ActionHistory[]> {
+    return db.select().from(actionHistory).where(eq(actionHistory.defectId, defectId)).orderBy(desc(actionHistory.id)).all();
+  }
+  async createObservationHistory(entry: InsertObservationHistory): Promise<ObservationHistory> {
+    return db.insert(observationHistory).values(entry).returning().get();
+  }
+  async createActionHistory(entry: InsertActionHistory): Promise<ActionHistory> {
+    return db.insert(actionHistory).values(entry).returning().get();
   }
 }
 

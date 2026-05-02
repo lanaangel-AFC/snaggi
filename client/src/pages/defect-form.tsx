@@ -9,7 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin, ChevronDown, History, Copy, PenLine } from "lucide-react";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo, Project, Elevation } from "@shared/schema";
@@ -70,6 +71,12 @@ const PHOTO_SLOTS = [
 ] as const;
 
 type SlotKey = "wip1" | "wip2" | "wip3" | "wip4" | "wip5" | "complete";
+
+function formatHistoryDate(dateStr?: string): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  return d.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+}
 
 export default function DefectForm() {
   const { projectId, reportId, defectId } = useParams<{ projectId: string; reportId: string; defectId?: string }>();
@@ -141,6 +148,10 @@ export default function DefectForm() {
   // "Mark on Elevation" state
   const [elevationPickerOpen, setElevationPickerOpen] = useState(false);
   const [projectElevations, setProjectElevations] = useState<Elevation[]>([]);
+  const [obsHistoryOpen, setObsHistoryOpen] = useState(false);
+  const [actHistoryOpen, setActHistoryOpen] = useState(false);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+  const actionRef = useRef<HTMLTextAreaElement>(null);
 
   const handleMarkOnElevation = async () => {
     try {
@@ -229,6 +240,16 @@ export default function DefectForm() {
   // Fetch photos for existing defect
   const { data: existingPhotos } = useQuery<Photo[]>({
     queryKey: [`/api/defects/${defectId}/photos`],
+    enabled: isEdit,
+  });
+
+  // Fetch observation and action history for existing defect
+  const { data: obsHistory } = useQuery<Array<{ id: number; defectId: number; reportId: number; text: string; createdAt: string; reportName: string; reportDate: string }>>({
+    queryKey: [`/api/defects/${defectId}/observation-history`],
+    enabled: isEdit,
+  });
+  const { data: actHistory } = useQuery<Array<{ id: number; defectId: number; reportId: number; text: string; createdAt: string; reportName: string; reportDate: string }>>({
+    queryKey: [`/api/defects/${defectId}/action-history`],
     enabled: isEdit,
   });
 
@@ -720,6 +741,7 @@ export default function DefectForm() {
           )}
           <Textarea
             id="comment"
+            ref={commentRef}
             placeholder="Describe the defect observed..."
             value={form.comment}
             onChange={set("comment")}
@@ -727,6 +749,48 @@ export default function DefectForm() {
             required
             data-testid="input-comment"
           />
+          {isEdit && obsHistory && obsHistory.length > 0 && (
+            <Collapsible open={obsHistoryOpen} onOpenChange={setObsHistoryOpen} className="mt-2">
+              <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${obsHistoryOpen ? "rotate-0" : "-rotate-90"}`} />
+                <History className="w-3.5 h-3.5" />
+                History ({obsHistory.length} {obsHistory.length === 1 ? "entry" : "entries"})
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-2 space-y-2">
+                {obsHistory.map((entry) => (
+                  <div key={entry.id} className="rounded-md border bg-muted/40 p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {entry.reportName} — {formatHistoryDate(entry.reportDate)}
+                      </span>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setForm((prev) => ({ ...prev, comment: entry.text }))}
+                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
+                          title="Copy this text as the current observation"
+                        >
+                          <Copy className="w-3 h-3" /> Still applicable
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForm((prev) => ({ ...prev, comment: "" }));
+                            commentRef.current?.focus();
+                          }}
+                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
+                          title="Clear the field and write a new observation"
+                        >
+                          <PenLine className="w-3 h-3" /> Add new
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground whitespace-pre-wrap">{entry.text}</p>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
         </div>
 
         {/* Action Required */}
@@ -757,6 +821,7 @@ export default function DefectForm() {
           )}
           <Textarea
             id="actionRequired"
+            ref={actionRef}
             placeholder="What needs to be done to rectify this defect?"
             value={form.actionRequired}
             onChange={set("actionRequired")}
@@ -764,6 +829,48 @@ export default function DefectForm() {
             required
             data-testid="input-action-required"
           />
+          {isEdit && actHistory && actHistory.length > 0 && (
+            <Collapsible open={actHistoryOpen} onOpenChange={setActHistoryOpen} className="mt-2">
+              <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${actHistoryOpen ? "rotate-0" : "-rotate-90"}`} />
+                <History className="w-3.5 h-3.5" />
+                History ({actHistory.length} {actHistory.length === 1 ? "entry" : "entries"})
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-2 space-y-2">
+                {actHistory.map((entry) => (
+                  <div key={entry.id} className="rounded-md border bg-muted/40 p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {entry.reportName} — {formatHistoryDate(entry.reportDate)}
+                      </span>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setForm((prev) => ({ ...prev, actionRequired: entry.text }))}
+                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
+                          title="Copy this text as the current action"
+                        >
+                          <Copy className="w-3 h-3" /> Still applicable
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForm((prev) => ({ ...prev, actionRequired: "" }));
+                            actionRef.current?.focus();
+                          }}
+                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
+                          title="Clear the field and write a new action"
+                        >
+                          <PenLine className="w-3 h-3" /> Add new
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground whitespace-pre-wrap">{entry.text}</p>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
         </div>
 
         {/* By Whom / By When */}

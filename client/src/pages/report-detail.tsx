@@ -580,8 +580,21 @@ export default function ReportDetail() {
       doc.text("Based on our observations, we recommend the following actions.", margin, y);
       y += 8;
 
+      // Overdue detection: past due date AND not complete, evaluated against inspection date
+      const inspectionDate = new Date(data.report.inspectionDate || data.report.createdAt);
+      const isOverdue = (defect: any): boolean => {
+        if (defect.status === "complete") return false;
+        if (!defect.dueDate) return false;
+        return new Date(defect.dueDate) < inspectionDate;
+      };
+
+      // Sort overdue rows to top, preserving existing sort within each group
+      const overdueRows = allDefects.filter(isOverdue);
+      const onTimeRows = allDefects.filter((d: any) => !isOverdue(d));
+      const orderedForSummary = [...overdueRows, ...onTimeRows];
+
       const summaryHead = [["ID", "Type", "Location", "Observation", "Action Required", "By Date", "Status"]];
-      const summaryBody = allDefects.map((d: any) => [
+      const summaryBody = orderedForSummary.map((d: any) => [
         d.uid,
         d.recordType === "observation" ? "Obs" : "Defect",
         deriveLocation(d.uid),
@@ -590,6 +603,9 @@ export default function ReportDetail() {
         d.dueDate || "—",
         d.status === "complete" ? "Complete" : "Open",
       ]);
+
+      // Track which rows are overdue for red badge rendering
+      const overdueFlags = orderedForSummary.map(isOverdue);
 
       if (summaryBody.length > 0) {
         autoTable(doc, {
@@ -616,6 +632,18 @@ export default function ReportDetail() {
           },
           didDrawPage: () => { addHeader(); addFooter(); },
           rowPageBreak: "auto",
+          didDrawCell: (cellData: any) => {
+            // Append " • OVERDUE" in red bold to the Status cell for overdue rows
+            if (cellData.section === "body" && cellData.column.index === 6 && overdueFlags[cellData.row.index]) {
+              const cell = cellData.cell;
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(5.5);
+              doc.setTextColor(192, 57, 43); // #C0392B red
+              doc.text(" \u2022 OVERDUE", cell.x + 1, cell.y + cell.height - 1.5);
+              doc.setTextColor(0);
+              doc.setFont("helvetica", "normal");
+            }
+          },
         });
       } else {
         doc.setFontSize(9);
@@ -1100,10 +1128,24 @@ export default function ReportDetail() {
         ),
       }));
 
-      for (const defect of allDefects) {
+      // Overdue detection for Word export
+      const wordInspectionDate = new Date(data.report.inspectionDate || data.report.createdAt);
+      const isOverdueWord = (defect: any): boolean => {
+        if (defect.status === "complete") return false;
+        if (!defect.dueDate) return false;
+        return new Date(defect.dueDate) < wordInspectionDate;
+      };
+
+      // Sort overdue rows to top for summary table
+      const wordOverdueRows = allDefects.filter(isOverdueWord);
+      const wordOnTimeRows = allDefects.filter((d: any) => !isOverdueWord(d));
+      const wordOrderedForSummary = [...wordOverdueRows, ...wordOnTimeRows];
+
+      for (const defect of wordOrderedForSummary) {
         const statusText = defect.status === "complete" ? "Complete" : "Open";
         const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
         const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
+        const overdue = isOverdueWord(defect);
         const cellTexts = [
           defect.uid, typeText, deriveLocation(defect.uid),
           defect.comment.length > 60 ? defect.comment.substring(0, 57) + "..." : defect.comment,
@@ -1115,11 +1157,22 @@ export default function ReportDetail() {
             new TableCell({
               width: { size: summaryHeaderWidths[i], type: WidthType.DXA },
               children: [new Paragraph({
-                children: [new TextRun({
-                  text, size: 14, font: "Aptos",
-                  color: i === 6 ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined),
-                  bold: i === 0,
-                })],
+                children: i === 6 && overdue
+                  ? [
+                      new TextRun({
+                        text, size: 14, font: "Aptos",
+                        color: "C89600",
+                      }),
+                      new TextRun({
+                        text: " \u2022 OVERDUE", size: 14, font: "Aptos",
+                        color: "C0392B", bold: true,
+                      }),
+                    ]
+                  : [new TextRun({
+                      text, size: 14, font: "Aptos",
+                      color: i === 6 ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined),
+                      bold: i === 0,
+                    })],
                 spacing: { before: 25, after: 25 },
               })],
               borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },

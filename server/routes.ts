@@ -201,7 +201,31 @@ export async function registerRoutes(
   });
 
   app.patch("/api/defects/:id", async (req, res) => {
-    const defect = await storage.updateDefect(Number(req.params.id), req.body);
+    const defectId = Number(req.params.id);
+
+    // Capture history BEFORE applying the update
+    const existing = await storage.getDefect(defectId);
+    if (!existing) return res.status(404).json({ message: "Defect not found" });
+
+    const now = new Date().toISOString();
+    if (req.body.comment !== undefined && req.body.comment !== existing.comment && existing.comment?.trim()) {
+      await storage.createObservationHistory({
+        defectId,
+        reportId: existing.reportId!,
+        text: existing.comment,
+        createdAt: now,
+      });
+    }
+    if (req.body.actionRequired !== undefined && req.body.actionRequired !== existing.actionRequired && existing.actionRequired?.trim()) {
+      await storage.createActionHistory({
+        defectId,
+        reportId: existing.reportId!,
+        text: existing.actionRequired,
+        createdAt: now,
+      });
+    }
+
+    const defect = await storage.updateDefect(defectId, req.body);
     if (!defect) return res.status(404).json({ message: "Defect not found" });
 
     // Sync markers when uid or status changes
@@ -213,6 +237,34 @@ export async function registerRoutes(
     }
 
     res.json(defect);
+  });
+
+  // === HISTORY ===
+  app.get("/api/defects/:id/observation-history", async (req, res) => {
+    const entries = await storage.getObservationHistory(Number(req.params.id));
+    // Join report info for each entry
+    const result = await Promise.all(entries.map(async (entry) => {
+      const report = await storage.getReport(entry.reportId);
+      return {
+        ...entry,
+        reportName: report ? `Insp-${report.inspectionNumber || "01"}` : "Unknown",
+        reportDate: report?.inspectionDate || report?.createdAt || "",
+      };
+    }));
+    res.json(result);
+  });
+
+  app.get("/api/defects/:id/action-history", async (req, res) => {
+    const entries = await storage.getActionHistory(Number(req.params.id));
+    const result = await Promise.all(entries.map(async (entry) => {
+      const report = await storage.getReport(entry.reportId);
+      return {
+        ...entry,
+        reportName: report ? `Insp-${report.inspectionNumber || "01"}` : "Unknown",
+        reportDate: report?.inspectionDate || report?.createdAt || "",
+      };
+    }));
+    res.json(result);
   });
 
   app.delete("/api/defects/:id", async (req, res) => {
