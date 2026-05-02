@@ -44,13 +44,13 @@ export default function AnnotationCanvas() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
-  // Parse ?defect= from the hash (hash routing puts query params inside the hash)
-  const defectParam = (() => {
+  // Parse ?defect= and ?locationId= from the hash (hash routing puts query params inside the hash)
+  const { defectParam, locationIdParam } = (() => {
     const hash = window.location.hash;
     const qIndex = hash.indexOf("?");
-    if (qIndex === -1) return null;
+    if (qIndex === -1) return { defectParam: null, locationIdParam: null };
     const params = new URLSearchParams(hash.substring(qIndex));
-    return params.get("defect");
+    return { defectParam: params.get("defect"), locationIdParam: params.get("locationId") };
   })();
 
   // State
@@ -113,13 +113,18 @@ export default function AnnotationCanvas() {
     const matchingDefect = defects.find((d) => d.uid === defectParam);
     if (matchingDefect) {
       setFormDefectId(String(matchingDefect.id));
-      setFormUid(matchingDefect.uid);
+      setFormUid(defectParam); // Use the param UID (may be location UID)
       setFormStatus(matchingDefect.status === "complete" ? "complete" : "open");
       setFormNote(matchingDefect.comment || "");
     } else {
       // Defect UID not found in list — use it as custom
       setFormDefectId("custom");
       setFormUid(defectParam);
+    }
+
+    // If locationId is provided, set it for marker creation
+    if (locationIdParam) {
+      setFormLocationId(Number(locationIdParam));
     }
 
     setPlacingMode(true);
@@ -163,7 +168,7 @@ export default function AnnotationCanvas() {
 
   // Mutations
   const createMarkerMut = useMutation({
-    mutationFn: async (data: { defectId?: number | null; defectUid: string; status: string; note: string; xPercent: number; yPercent: number }) => {
+    mutationFn: async (data: { defectId?: number | null; defectUid: string; status: string; note: string; xPercent: number; yPercent: number; locationId?: number }) => {
       const res = await apiRequest("POST", `/api/elevations/${elevationId}/markers`, data);
       return res.json();
     },
@@ -324,6 +329,9 @@ export default function AnnotationCanvas() {
     return defects.find((d) => d.uid === marker.defectUid);
   };
 
+  // Track locationId for marker placement (from URL param or editing existing marker)
+  const [formLocationId, setFormLocationId] = useState<number | null>(null);
+
   // Form submit
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -345,6 +353,7 @@ export default function AnnotationCanvas() {
         note: formNote.trim(),
         xPercent: markerDialog.x,
         yPercent: markerDialog.y,
+        ...(formLocationId ? { locationId: formLocationId } : {}),
       });
     }
   };

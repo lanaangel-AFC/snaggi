@@ -122,6 +122,22 @@ async function loadAfcLogo(): Promise<{ dataUrl: string; buffer: ArrayBuffer } |
   }
 }
 
+// Work type code to human-readable label
+const WORK_TYPE_LABELS: Record<string, string> = {
+  CR: "Concrete Repair", CK: "Caulking", PT: "Painting", WP: "Waterproofing",
+  GL: "Glazing", CL: "Cladding", ST: "Structural", SE: "Sealant",
+  FL: "Flashing", RR: "Render Repair", GK: "Gasket", SR: "Steel Repair",
+  SM: "Steel Removal", BR: "Brick Repair", LR: "Lintel Repair",
+  SS: "Sill Stabilisation", GW: "General Works", OT: "Other",
+};
+
+// Parse work type label from UID
+function getWorkTypeLabel(uid: string): string {
+  const parts = uid.split("-");
+  const code = parts.length >= 5 ? parts[3] : parts.length >= 4 ? parts[2] : "";
+  return WORK_TYPE_LABELS[code] || code;
+}
+
 // Elevation code to full name mapping
 const ELEVATION_NAMES: Record<string, string> = {
   N: "North", S: "South", E: "East", W: "West",
@@ -284,6 +300,16 @@ export default function ReportDetail() {
     doc.setTextColor(100);
     doc.text(deriveLocation(defect.uid), margin, y);
     y += 5;
+
+    // Show additional locations if any
+    if (defect.locations && defect.locations.length > 0) {
+      doc.setFontSize(7.5);
+      doc.setFont("helvetica", "italic");
+      doc.setTextColor(120);
+      const locList = defect.locations.map((l: any) => l.uid || "—").join(", ");
+      doc.text(`Other locations: ${locList}`, margin, y);
+      y += 4;
+    }
 
     autoTable(doc, {
       startY: y,
@@ -593,19 +619,39 @@ export default function ReportDetail() {
       const onTimeRows = allDefects.filter((d: any) => !isOverdue(d));
       const orderedForSummary = [...overdueRows, ...onTimeRows];
 
-      const summaryHead = [["ID", "Type", "Location", "Observation", "Action Required", "By Date", "Status"]];
-      const summaryBody = orderedForSummary.map((d: any) => [
-        d.uid,
-        d.recordType === "observation" ? "Obs" : "Defect",
-        deriveLocation(d.uid),
-        d.comment.length > 45 ? d.comment.substring(0, 42) + "..." : d.comment,
-        d.actionRequired.length > 35 ? d.actionRequired.substring(0, 32) + "..." : d.actionRequired,
-        d.dueDate || "—",
-        d.status === "complete" ? "Complete" : "Open",
-      ]);
+      // Build summary rows: one row per defect + one row per additional location
+      const summaryHead = [["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"]];
+      const summaryBody: string[][] = [];
+      const overdueFlags: boolean[] = [];
 
-      // Track which rows are overdue for red badge rendering
-      const overdueFlags = orderedForSummary.map(isOverdue);
+      for (const d of orderedForSummary) {
+        summaryBody.push([
+          d.uid,
+          d.recordType === "observation" ? "Obs" : "Defect",
+          deriveLocation(d.uid),
+          getWorkTypeLabel(d.uid),
+          d.assignedTo || "—",
+          d.dueDate || "—",
+          d.status === "complete" ? "Complete" : "Open",
+        ]);
+        overdueFlags.push(isOverdue(d));
+        // Additional location rows
+        if (d.locations && d.locations.length > 0) {
+          for (const loc of d.locations) {
+            const locUid = loc.uid || "";
+            summaryBody.push([
+              locUid,
+              d.recordType === "observation" ? "Obs" : "Defect",
+              locUid ? deriveLocation(locUid) : "",
+              getWorkTypeLabel(d.uid),
+              d.assignedTo || "—",
+              d.dueDate || "—",
+              d.status === "complete" ? "Complete" : "Open",
+            ]);
+            overdueFlags.push(isOverdue(d));
+          }
+        }
+      }
 
       if (summaryBody.length > 0) {
         autoTable(doc, {
@@ -625,10 +671,10 @@ export default function ReportDetail() {
             0: { cellWidth: 20 },
             1: { cellWidth: 12 },
             2: { cellWidth: 24 },
-            3: { cellWidth: 42 },
-            4: { cellWidth: 34 },
-            5: { cellWidth: 18 },
-            6: { cellWidth: 16 },
+            3: { cellWidth: 34 },
+            4: { cellWidth: 30 },
+            5: { cellWidth: 26 },
+            6: { cellWidth: 20 },
           },
           didDrawPage: () => { addHeader(); addFooter(); },
           rowPageBreak: "auto",
@@ -973,8 +1019,17 @@ export default function ReportDetail() {
 
         elements.push(new Paragraph({
           children: [new TextRun({ text: deriveLocation(defect.uid), size: 18, font: "Aptos", color: "666666" })],
-          spacing: { after: 200 },
+          spacing: { after: defect.locations && defect.locations.length > 0 ? 40 : 200 },
         }));
+
+        // Show additional locations if any
+        if (defect.locations && defect.locations.length > 0) {
+          const locList = defect.locations.map((l: any) => l.uid || "—").join(", ");
+          elements.push(new Paragraph({
+            children: [new TextRun({ text: `Other locations: ${locList}`, size: 15, font: "Aptos", color: "888888", italics: true })],
+            spacing: { after: 200 },
+          }));
+        }
 
         const infoRows = [
           ["Date Opened", defect.dateOpened],
@@ -1106,8 +1161,8 @@ export default function ReportDetail() {
         spacing: { after: 200 },
       }));
 
-      const summaryHeaderLabels = ["ID", "Type", "Location", "Observation", "Action Required", "By Date", "Status"];
-      const summaryHeaderWidths = [850, 600, 1200, 2800, 2300, 1000, 950];
+      const summaryHeaderLabels = ["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"];
+      const summaryHeaderWidths = [950, 600, 1300, 2300, 1850, 1300, 1400];
 
       const summaryTableRows: any[] = [];
 
@@ -1141,18 +1196,18 @@ export default function ReportDetail() {
       const wordOnTimeRows = allDefects.filter((d: any) => !isOverdueWord(d));
       const wordOrderedForSummary = [...wordOverdueRows, ...wordOnTimeRows];
 
-      for (const defect of wordOrderedForSummary) {
+      // Helper to build a summary row for Word export
+      const buildWordSummaryRow = (rowUid: string, defect: any, overdue: boolean) => {
         const statusText = defect.status === "complete" ? "Complete" : "Open";
         const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
         const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
-        const overdue = isOverdueWord(defect);
         const cellTexts = [
-          defect.uid, typeText, deriveLocation(defect.uid),
-          defect.comment.length > 60 ? defect.comment.substring(0, 57) + "..." : defect.comment,
-          defect.actionRequired.length > 45 ? defect.actionRequired.substring(0, 42) + "..." : defect.actionRequired,
+          rowUid, typeText, deriveLocation(rowUid),
+          getWorkTypeLabel(defect.uid),
+          defect.assignedTo || "\u2014",
           defect.dueDate || "\u2014", statusText,
         ];
-        summaryTableRows.push(new TableRow({
+        return new TableRow({
           children: cellTexts.map((text: string, i: number) =>
             new TableCell({
               width: { size: summaryHeaderWidths[i], type: WidthType.DXA },
@@ -1178,7 +1233,18 @@ export default function ReportDetail() {
               borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
             })
           ),
-        }));
+        });
+      };
+
+      for (const defect of wordOrderedForSummary) {
+        const overdue = isOverdueWord(defect);
+        summaryTableRows.push(buildWordSummaryRow(defect.uid, defect, overdue));
+        // Additional location rows
+        if (defect.locations && defect.locations.length > 0) {
+          for (const loc of defect.locations) {
+            summaryTableRows.push(buildWordSummaryRow(loc.uid || "", defect, overdue));
+          }
+        }
       }
 
       if (allDefects.length > 0) {

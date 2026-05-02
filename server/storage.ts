@@ -8,6 +8,7 @@ import {
   type Marker, type InsertMarker, markers,
   type ObservationHistory, type InsertObservationHistory, observationHistory,
   type ActionHistory, type InsertActionHistory, actionHistory,
+  type DefectLocation, type InsertDefectLocation, defectLocations,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -121,6 +122,18 @@ sqlite.exec(`
     FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE,
     FOREIGN KEY (report_id) REFERENCES reports(id)
   );
+  CREATE TABLE IF NOT EXISTS defect_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    defect_id INTEGER NOT NULL,
+    uid TEXT DEFAULT '',
+    "drop" TEXT DEFAULT '',
+    elevation TEXT DEFAULT '',
+    level TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    display_order INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE
+  );
 `);
 
 // Add new columns to existing tables (safe: ALTER TABLE ADD COLUMN IF NOT EXISTS via try/catch)
@@ -133,6 +146,7 @@ safeAddColumn("reports", "elevations", "TEXT DEFAULT '[]'");
 safeAddColumn("defects", "record_type", "TEXT NOT NULL DEFAULT 'defect'");
 safeAddColumn("defects", "report_id", "INTEGER");
 safeAddColumn("defects", "updated_at", "TEXT");
+safeAddColumn("markers", "location_id", "INTEGER");
 
 // Migration: for existing defects without reportId, create a default "Report 1" for each project
 {
@@ -224,6 +238,12 @@ export interface IStorage {
   getActionHistory(defectId: number): Promise<ActionHistory[]>;
   createObservationHistory(entry: InsertObservationHistory): Promise<ObservationHistory>;
   createActionHistory(entry: InsertActionHistory): Promise<ActionHistory>;
+  // Defect Locations
+  getDefectLocations(defectId: number): Promise<DefectLocation[]>;
+  getDefectLocation(id: number): Promise<DefectLocation | undefined>;
+  createDefectLocation(input: InsertDefectLocation): Promise<DefectLocation>;
+  updateDefectLocation(id: number, patch: Partial<InsertDefectLocation>): Promise<DefectLocation | undefined>;
+  deleteDefectLocation(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -478,6 +498,25 @@ export class DatabaseStorage implements IStorage {
   }
   async createActionHistory(entry: InsertActionHistory): Promise<ActionHistory> {
     return db.insert(actionHistory).values(entry).returning().get();
+  }
+
+  // Defect Locations
+  async getDefectLocations(defectId: number): Promise<DefectLocation[]> {
+    return db.select().from(defectLocations).where(eq(defectLocations.defectId, defectId)).orderBy(defectLocations.displayOrder).all();
+  }
+  async getDefectLocation(id: number): Promise<DefectLocation | undefined> {
+    return db.select().from(defectLocations).where(eq(defectLocations.id, id)).get();
+  }
+  async createDefectLocation(input: InsertDefectLocation): Promise<DefectLocation> {
+    return db.insert(defectLocations).values(input).returning().get();
+  }
+  async updateDefectLocation(id: number, patch: Partial<InsertDefectLocation>): Promise<DefectLocation | undefined> {
+    return db.update(defectLocations).set(patch).where(eq(defectLocations.id, id)).returning().get();
+  }
+  async deleteDefectLocation(id: number): Promise<void> {
+    // Unlink any markers referencing this location
+    sqlite.prepare(`UPDATE markers SET location_id = NULL WHERE location_id = ?`).run(id);
+    db.delete(defectLocations).where(eq(defectLocations.id, id)).run();
   }
 }
 

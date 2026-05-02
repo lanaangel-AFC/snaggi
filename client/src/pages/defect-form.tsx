@@ -9,11 +9,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin, ChevronDown, History, Copy, PenLine } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin, ChevronDown, History, Copy, PenLine, Plus, Trash2 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DictationButton } from "@/components/DictationButton";
-import type { Defect, Photo, Project, Elevation } from "@shared/schema";
+import type { Defect, Photo, Project, Elevation, DefectLocation } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -156,6 +156,116 @@ export default function DefectForm() {
   const [actHistoryOpen, setActHistoryOpen] = useState(false);
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const actionRef = useRef<HTMLTextAreaElement>(null);
+
+  // === Additional Locations ===
+  const { data: existingLocations } = useQuery<DefectLocation[]>({
+    queryKey: [`/api/defects/${defectId}/locations`],
+    enabled: isEdit,
+  });
+  const [additionalLocations, setAdditionalLocations] = useState<DefectLocation[]>([]);
+  const locationPatchTimers = useRef<Record<number, NodeJS.Timeout>>({});
+
+  useEffect(() => {
+    if (existingLocations) {
+      setAdditionalLocations(existingLocations);
+    }
+  }, [existingLocations]);
+
+  // Compute a suggested UID for a location based on parent defect's work type/number
+  const computeLocationUid = (locElevation: string, locDrop: string, locLevel: string): string => {
+    const wt = workType || "";
+    const num = seqNumber || "01";
+    if (!locElevation && !locDrop && !locLevel) return "";
+    const elev = locElevation || elevation || "";
+    const dd = (locDrop || "01").padStart(2, "0");
+    const ll = (locLevel || "01").padStart(2, "0");
+    if (!wt) return "";
+    return `${elev}-${dd}-${ll}-${wt}-${num.padStart(2, "0")}`;
+  };
+
+  const addAdditionalLocation = async () => {
+    if (!defectId || defectId === "new-defect" || defectId === "new-observation") {
+      toast({ title: "Save the defect first before adding locations", variant: "destructive" });
+      return;
+    }
+    try {
+      const res = await apiRequest("POST", `/api/defects/${defectId}/locations`, {
+        drop: "", elevation: "", level: "", description: "", uid: "",
+      });
+      const newLoc: DefectLocation = await res.json();
+      setAdditionalLocations(prev => [...prev, newLoc]);
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/locations`] });
+    } catch (err: any) {
+      toast({ title: err.message || "Failed to add location", variant: "destructive" });
+    }
+  };
+
+  const updateLocationField = (locId: number, field: string, value: string) => {
+    setAdditionalLocations(prev => prev.map(l => {
+      if (l.id !== locId) return l;
+      const updated = { ...l, [field]: value };
+      // Auto-compute UID when drop/elevation/level change
+      if (field === "drop" || field === "elevation" || field === "level") {
+        updated.uid = computeLocationUid(
+          field === "elevation" ? value : (l.elevation || ""),
+          field === "drop" ? value : (l.drop || ""),
+          field === "level" ? value : (l.level || ""),
+        );
+      }
+      return updated;
+    }));
+    // Debounced PATCH
+    if (locationPatchTimers.current[locId]) clearTimeout(locationPatchTimers.current[locId]);
+    locationPatchTimers.current[locId] = setTimeout(async () => {
+      const loc = additionalLocations.find(l => l.id === locId);
+      if (!loc) return;
+      const patch: Record<string, string> = { [field]: value };
+      if (field === "drop" || field === "elevation" || field === "level") {
+        patch.uid = computeLocationUid(
+          field === "elevation" ? value : (loc.elevation || ""),
+          field === "drop" ? value : (loc.drop || ""),
+          field === "level" ? value : (loc.level || ""),
+        );
+      }
+      try {
+        await apiRequest("PATCH", `/api/defect-locations/${locId}`, patch);
+      } catch {}
+    }, 800);
+  };
+
+  const deleteAdditionalLocation = async (locId: number) => {
+    if (!confirm("Delete this location?")) return;
+    try {
+      await apiRequest("DELETE", `/api/defect-locations/${locId}`);
+      setAdditionalLocations(prev => prev.filter(l => l.id !== locId));
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/locations`] });
+      toast({ title: "Location removed" });
+    } catch (err: any) {
+      toast({ title: err.message || "Failed to remove location", variant: "destructive" });
+    }
+  };
+
+  const handleMarkLocationOnElevation = async (loc: DefectLocation) => {
+    try {
+      const res = await apiRequest("GET", `/api/projects/${projectId}/elevations`);
+      const elevationsList: Elevation[] = await res.json();
+      const locUid = loc.uid || computeLocationUid(loc.elevation || "", loc.drop || "", loc.level || "");
+      if (elevationsList.length === 0) {
+        toast({ title: "No elevations uploaded for this project yet.", variant: "destructive" });
+      } else if (elevationsList.length === 1) {
+        navigate(`/projects/${projectId}/elevations/${elevationsList[0].id}?defect=${encodeURIComponent(locUid)}&locationId=${loc.id}`);
+      } else {
+        setProjectElevations(elevationsList);
+        setLocationPickerTarget(loc);
+        setElevationPickerOpen(true);
+      }
+    } catch {
+      toast({ title: "Failed to load elevations", variant: "destructive" });
+    }
+  };
+
+  // Track which location triggered the elevation picker (null = parent defect)
+  const [locationPickerTarget, setLocationPickerTarget] = useState<DefectLocation | null>(null);
 
   const handleMarkOnElevation = async () => {
     try {
@@ -562,7 +672,7 @@ export default function DefectForm() {
       )}
 
       {/* Elevation picker dialog (when multiple elevations exist) */}
-      <Dialog open={elevationPickerOpen} onOpenChange={setElevationPickerOpen}>
+      <Dialog open={elevationPickerOpen} onOpenChange={(v) => { setElevationPickerOpen(v); if (!v) setLocationPickerTarget(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Choose Elevation</DialogTitle>
@@ -574,9 +684,15 @@ export default function DefectForm() {
                 variant="outline"
                 className="w-full justify-start"
                 onClick={() => {
-                  const defectUid = uid || assembledUid;
                   setElevationPickerOpen(false);
-                  navigate(`/projects/${projectId}/elevations/${el.id}?defect=${encodeURIComponent(defectUid)}`);
+                  if (locationPickerTarget) {
+                    const locUid = locationPickerTarget.uid || computeLocationUid(locationPickerTarget.elevation || "", locationPickerTarget.drop || "", locationPickerTarget.level || "");
+                    navigate(`/projects/${projectId}/elevations/${el.id}?defect=${encodeURIComponent(locUid)}&locationId=${locationPickerTarget.id}`);
+                    setLocationPickerTarget(null);
+                  } else {
+                    const defectUid = uid || assembledUid;
+                    navigate(`/projects/${projectId}/elevations/${el.id}?defect=${encodeURIComponent(defectUid)}`);
+                  }
                 }}
               >
                 {el.name}
@@ -959,6 +1075,116 @@ export default function DefectForm() {
             </div>
           </div>
         </Card>
+
+        {/* Additional Locations */}
+        {isEdit && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">Additional Locations</h3>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={addAdditionalLocation}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Location
+              </Button>
+            </div>
+            {additionalLocations.length === 0 && (
+              <p className="text-xs text-muted-foreground bg-accent/40 p-3 rounded-lg">
+                No additional locations yet. Add a location if this defect occurs at multiple places.
+              </p>
+            )}
+            {additionalLocations.map((loc) => {
+              const locUid = loc.uid || computeLocationUid(loc.elevation || "", loc.drop || "", loc.level || "");
+              return (
+                <Card key={loc.id} className="p-4 space-y-3 bg-accent/20">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-xs font-semibold text-primary">
+                      {locUid || "—"}
+                    </span>
+                    <div className="flex gap-1.5">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleMarkLocationOnElevation(loc)}
+                        title="Mark on Elevation"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 hover:text-destructive"
+                        onClick={() => deleteAdditionalLocation(loc.id)}
+                        title="Delete Location"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <Label className="text-xs">Elevation</Label>
+                      <Select
+                        value={loc.elevation || ""}
+                        onValueChange={(v) => updateLocationField(loc.id, "elevation", v)}
+                      >
+                        <SelectTrigger className="font-mono h-8 text-xs">
+                          <SelectValue placeholder="—" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {elevationOptions.map((el) => (
+                            <SelectItem key={el.code} value={el.code}>{el.code}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Drop</Label>
+                      <Input
+                        value={loc.drop || ""}
+                        onChange={(e) => updateLocationField(loc.id, "drop", e.target.value.replace(/\D/g, "").slice(0, 2))}
+                        placeholder="01"
+                        maxLength={2}
+                        className="font-mono text-center h-8 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Level</Label>
+                      <Input
+                        value={loc.level || ""}
+                        onChange={(e) => updateLocationField(loc.id, "level", e.target.value.replace(/\D/g, "").slice(0, 2))}
+                        placeholder="01"
+                        maxLength={2}
+                        className="font-mono text-center h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Description</Label>
+                    <Input
+                      value={loc.description || ""}
+                      onChange={(e) => updateLocationField(loc.id, "description", e.target.value)}
+                      placeholder="Optional note about this location..."
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+        {!isEdit && (
+          <p className="text-xs text-muted-foreground bg-accent/40 p-3 rounded-lg">
+            Save the defect first, then you can add additional locations.
+          </p>
+        )}
 
         {/* Photo slots — only shown when editing (defect must exist first) */}
         {isEdit && (

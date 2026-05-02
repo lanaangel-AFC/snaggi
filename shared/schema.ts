@@ -125,6 +125,23 @@ export type ObservationHistory = typeof observationHistory.$inferSelect;
 export type InsertActionHistory = z.infer<typeof insertActionHistorySchema>;
 export type ActionHistory = typeof actionHistory.$inferSelect;
 
+// Defect Locations (additional locations for a defect)
+export const defectLocations = sqliteTable("defect_locations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  defectId: integer("defect_id").notNull().references(() => defects.id, { onDelete: "cascade" }),
+  uid: text("uid").default(""),
+  drop: text("drop").default(""),
+  elevation: text("elevation").default(""),
+  level: text("level").default(""),
+  description: text("description").default(""),
+  displayOrder: integer("display_order").default(0),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertDefectLocationSchema = createInsertSchema(defectLocations).omit({ id: true });
+export type InsertDefectLocation = z.infer<typeof insertDefectLocationSchema>;
+export type DefectLocation = typeof defectLocations.$inferSelect;
+
 // Users (kept from template)
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),

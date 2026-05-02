@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, dataDir } from "./storage";
-import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema } from "@shared/schema";
+import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -426,7 +426,8 @@ export async function registerRoutes(
     const defectsWithPhotos = await Promise.all(
       reportDefects.map(async (d) => {
         const defectPhotos = await storage.getPhotosByDefect(d.id);
-        return { ...d, photos: defectPhotos };
+        const locations = await storage.getDefectLocations(d.id);
+        return { ...d, photos: defectPhotos, locations };
       })
     );
     res.json({ project, report, defects: defectsWithPhotos });
@@ -440,7 +441,8 @@ export async function registerRoutes(
     const defectsWithPhotos = await Promise.all(
       projectDefects.map(async (d) => {
         const defectPhotos = await storage.getPhotosByDefect(d.id);
-        return { ...d, photos: defectPhotos };
+        const locations = await storage.getDefectLocations(d.id);
+        return { ...d, photos: defectPhotos, locations };
       })
     );
     res.json({ project, defects: defectsWithPhotos });
@@ -510,6 +512,47 @@ export async function registerRoutes(
 
   app.delete("/api/markers/:id", async (req, res) => {
     await storage.deleteMarker(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  // === DEFECT LOCATIONS ===
+  app.get("/api/defects/:defectId/locations", async (req, res) => {
+    const locations = await storage.getDefectLocations(Number(req.params.defectId));
+    res.json(locations);
+  });
+
+  app.post("/api/defects/:defectId/locations", async (req, res) => {
+    try {
+      const defectId = Number(req.params.defectId);
+      const defect = await storage.getDefect(defectId);
+      if (!defect) return res.status(404).json({ message: "Defect not found" });
+
+      const existing = await storage.getDefectLocations(defectId);
+      const displayOrder = req.body.displayOrder ?? existing.length;
+
+      const data = {
+        ...req.body,
+        defectId,
+        displayOrder,
+        createdAt: new Date().toISOString(),
+      };
+      const parsed = insertDefectLocationSchema.safeParse(data);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const location = await storage.createDefectLocation(parsed.data);
+      res.status(201).json(location);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to create location" });
+    }
+  });
+
+  app.patch("/api/defect-locations/:id", async (req, res) => {
+    const location = await storage.updateDefectLocation(Number(req.params.id), req.body);
+    if (!location) return res.status(404).json({ message: "Location not found" });
+    res.json(location);
+  });
+
+  app.delete("/api/defect-locations/:id", async (req, res) => {
+    await storage.deleteDefectLocation(Number(req.params.id));
     res.status(204).end();
   });
 
