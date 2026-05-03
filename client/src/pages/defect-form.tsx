@@ -157,12 +157,21 @@ export default function DefectForm() {
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const actionRef = useRef<HTMLTextAreaElement>(null);
 
+  // Autosave for comment/actionRequired fields
+  const formRef = useRef(form);
+  useEffect(() => { formRef.current = form; }, [form]);
+  const autosaveTimer = useRef<NodeJS.Timeout | null>(null);
+  const [autosaveStatus, setAutosaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+
   // === Additional Locations ===
   const { data: existingLocations } = useQuery<DefectLocation[]>({
     queryKey: [`/api/defects/${defectId}/locations`],
     enabled: isEdit,
   });
   const [additionalLocations, setAdditionalLocations] = useState<DefectLocation[]>([]);
+  const additionalLocationsRef = useRef<DefectLocation[]>([]);
+  // Keep the ref in sync with state so debounced callbacks always read current values
+  useEffect(() => { additionalLocationsRef.current = additionalLocations; }, [additionalLocations]);
   const locationPatchTimers = useRef<Record<number, NodeJS.Timeout>>({});
 
   useEffect(() => {
@@ -214,10 +223,10 @@ export default function DefectForm() {
       }
       return updated;
     }));
-    // Debounced PATCH
+    // Debounced PATCH — read from ref inside the timer to avoid stale closures
     if (locationPatchTimers.current[locId]) clearTimeout(locationPatchTimers.current[locId]);
     locationPatchTimers.current[locId] = setTimeout(async () => {
-      const loc = additionalLocations.find(l => l.id === locId);
+      const loc = additionalLocationsRef.current.find(l => l.id === locId);
       if (!loc) return;
       const patch: Record<string, string> = { [field]: value };
       if (field === "drop" || field === "elevation" || field === "level") {
@@ -232,6 +241,54 @@ export default function DefectForm() {
       } catch {}
     }, 800);
   };
+
+  // Flush all pending debounced location PATCHes immediately (awaitable).
+  // Must be called before the parent defect save so location writes complete first.
+  const flushPendingLocationPatches = useCallback(async () => {
+    const timerIds = Object.keys(locationPatchTimers.current).map(Number);
+    if (timerIds.length === 0) return;
+    const promises: Promise<void>[] = [];
+    for (const locId of timerIds) {
+      clearTimeout(locationPatchTimers.current[locId]);
+      delete locationPatchTimers.current[locId];
+      const loc = additionalLocationsRef.current.find(l => l.id === locId);
+      if (!loc) continue;
+      // Send full location state so nothing is lost
+      const patch: Record<string, string> = {};
+      if (loc.elevation) patch.elevation = loc.elevation;
+      if (loc.drop) patch.drop = loc.drop;
+      if (loc.level) patch.level = loc.level;
+      if (loc.description) patch.description = loc.description;
+      patch.uid = loc.uid || computeLocationUid(loc.elevation || "", loc.drop || "", loc.level || "");
+      promises.push(
+        apiRequest("PATCH", `/api/defect-locations/${locId}`, patch).then(() => {}).catch(() => {}),
+      );
+    }
+    await Promise.all(promises);
+  }, []);
+
+  // Debounced autosave for comment and actionRequired — fires 800ms after last keystroke
+  const triggerAutosave = useCallback(() => {
+    if (!isEdit || !defectId) return;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(async () => {
+      const current = formRef.current;
+      setAutosaveStatus("saving");
+      try {
+        await apiRequest("PATCH", `/api/defects/${defectId}`, {
+          comment: current.comment,
+          actionRequired: current.actionRequired,
+        });
+        setAutosaveStatus("saved");
+        setTimeout(() => setAutosaveStatus("idle"), 2000);
+      } catch {
+        setAutosaveStatus("idle");
+      }
+    }, 800);
+  }, [isEdit, defectId]);
+
+  // Cancel autosave timer on unmount
+  useEffect(() => () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); }, []);
 
   const deleteAdditionalLocation = async (locId: number) => {
     if (!confirm("Delete this location?")) return;
@@ -466,6 +523,10 @@ export default function DefectForm() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
+      // Invalidate the singular defect query so the form's source of truth stays consistent
+      if (isEdit && defectId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
+      }
       const typeLabel = recordType === "observation" ? "Observation" : "Defect";
       toast({ title: isEdit ? `${typeLabel} updated` : `${typeLabel} created` });
       if (!isEdit) {
@@ -579,8 +640,10 @@ export default function DefectForm() {
     }));
   };
 
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
+    if (field === "comment" || field === "actionRequired") triggerAutosave();
+  };
 
   const canSave = isEdit || (!!elevation && !!uidPrefix && !!seqNumber);
   const isComplete = form.status === "complete";
@@ -703,12 +766,16 @@ export default function DefectForm() {
       </Dialog>
 
       <form
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
           if (!canSave) {
             toast({ title: "Fill in Elevation, Drop, Level, and Work Type to generate the defect ID", variant: "destructive" });
             return;
           }
+          // Cancel any pending autosave — the explicit save covers everything
+          if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+          // Flush pending location PATCHes so they complete before the parent save
+          await flushPendingLocationPatches();
           saveMutation.mutate();
         }}
         className="space-y-6"
@@ -849,8 +916,14 @@ export default function DefectForm() {
           <div className="flex items-center gap-2 mb-1">
             <Label htmlFor="comment">Observation</Label>
             <DictationButton
-              onTranscript={(text) => setForm((prev) => ({ ...prev, comment: prev.comment + (prev.comment ? " " : "") + text }))}
+              onTranscript={(text) => { setForm((prev) => ({ ...prev, comment: prev.comment + (prev.comment ? " " : "") + text })); triggerAutosave(); }}
             />
+            {isEdit && autosaveStatus === "saving" && (
+              <span className="text-[10px] text-muted-foreground animate-pulse">Saving...</span>
+            )}
+            {isEdit && autosaveStatus === "saved" && (
+              <span className="text-[10px] text-green-600">Saved</span>
+            )}
           </div>
           {textSuggestions.comments.length > 0 && !form.comment && (
             <div className="mb-1.5">
@@ -860,7 +933,7 @@ export default function DefectForm() {
                   <button
                     key={i}
                     type="button"
-                    onClick={() => setForm((prev) => ({ ...prev, comment: s }))}
+                    onClick={() => { setForm((prev) => ({ ...prev, comment: s })); triggerAutosave(); }}
                     className="text-xs px-2 py-1 rounded-md bg-accent hover:bg-accent/80 text-left truncate max-w-full border"
                     title={s}
                   >
@@ -897,7 +970,7 @@ export default function DefectForm() {
                       <div className="flex gap-1">
                         <button
                           type="button"
-                          onClick={() => setForm((prev) => ({ ...prev, comment: entry.text }))}
+                          onClick={() => { setForm((prev) => ({ ...prev, comment: entry.text })); triggerAutosave(); }}
                           className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
                           title="Copy this text as the current observation"
                         >
@@ -929,7 +1002,7 @@ export default function DefectForm() {
           <div className="flex items-center gap-2 mb-1">
             <Label htmlFor="actionRequired">Action Required</Label>
             <DictationButton
-              onTranscript={(text) => setForm((prev) => ({ ...prev, actionRequired: prev.actionRequired + (prev.actionRequired ? " " : "") + text }))}
+              onTranscript={(text) => { setForm((prev) => ({ ...prev, actionRequired: prev.actionRequired + (prev.actionRequired ? " " : "") + text })); triggerAutosave(); }}
             />
           </div>
           {textSuggestions.actions.length > 0 && !form.actionRequired && (
@@ -940,7 +1013,7 @@ export default function DefectForm() {
                   <button
                     key={i}
                     type="button"
-                    onClick={() => setForm((prev) => ({ ...prev, actionRequired: s }))}
+                    onClick={() => { setForm((prev) => ({ ...prev, actionRequired: s })); triggerAutosave(); }}
                     className="text-xs px-2 py-1 rounded-md bg-accent hover:bg-accent/80 text-left truncate max-w-full border"
                     title={s}
                   >
@@ -977,7 +1050,7 @@ export default function DefectForm() {
                       <div className="flex gap-1">
                         <button
                           type="button"
-                          onClick={() => setForm((prev) => ({ ...prev, actionRequired: entry.text }))}
+                          onClick={() => { setForm((prev) => ({ ...prev, actionRequired: entry.text })); triggerAutosave(); }}
                           className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
                           title="Copy this text as the current action"
                         >
