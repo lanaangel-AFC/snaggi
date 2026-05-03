@@ -257,102 +257,23 @@ export default function ReportDetail() {
     }),
     [defects]);
 
-  // ==================== SHARED: Render a single defect page (PDF) ====================
-  const renderDefectPagePdf = async (
-    doc: any, defect: any, margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
-    addHeader: () => void, addFooter: () => void,
-    autoTable: any, DARK_TEXT: readonly number[], CAPTION_BLUE: readonly number[],
-  ) => {
-    doc.addPage();
-    addHeader();
-    addFooter();
-    let y = 20;
-
+  // ==================== SHARED: Render photos grid (PDF) ====================
+  const renderPhotosPdf = async (
+    doc: any, photoList: any[], margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
+    addHeader: () => void, addFooter: () => void, DARK_TEXT: readonly number[], startY: number,
+  ): Promise<number> => {
+    let y = startY;
     const slotOrder = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
     const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", wip4: "WIP 4", wip5: "WIP 5", complete: "Complete" };
 
-    const typeLabel = (defect.recordType === "observation") ? "OBSERVATION" : "DEFECT";
-    const typeBgColor = (defect.recordType === "observation") ? [59, 130, 246] : [217, 119, 6];
-
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "bold");
-    const badgeW = doc.getTextWidth(typeLabel) + 6;
-    doc.setFillColor(typeBgColor[0], typeBgColor[1], typeBgColor[2]);
-    doc.roundedRect(margin, y - 4, badgeW, 6, 1.5, 1.5, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.text(typeLabel, margin + 3, y);
-
-    doc.setFontSize(14);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(...DARK_TEXT);
-    doc.text(defect.uid, margin + badgeW + 4, y);
-
-    const statusLabel = defect.status === "complete" ? "COMPLETE" : "OPEN";
-    const statusColor = defect.status === "complete" ? [34, 139, 34] : [200, 150, 0];
-    doc.setFontSize(10);
-    doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
-    doc.text(statusLabel, pageWidth - margin - doc.getTextWidth(statusLabel), y);
-    doc.setTextColor(0);
-    y += 5;
-
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(100);
-    doc.text(deriveLocation(defect.uid), margin, y);
-    y += 5;
-
-    // Show additional locations if any
-    if (defect.locations && defect.locations.length > 0) {
-      doc.setFontSize(7.5);
-      doc.setFont("helvetica", "italic");
-      doc.setTextColor(120);
-      const locList = defect.locations.map((l: any) => l.uid || "—").join(", ");
-      doc.text(`Other locations: ${locList}`, margin, y);
-      y += 4;
-    }
-
-    autoTable(doc, {
-      startY: y,
-      body: [
-        ["Date Opened", defect.dateOpened],
-        ["Date Completed", defect.dateClosed || "\u2014"],
-        ["Observation", defect.comment],
-        ["Action Required", defect.actionRequired],
-        ["Assigned To", defect.assignedTo],
-        ["Due Date", defect.dueDate],
-        ["Verification Method", defect.verificationMethod],
-        ["Verification Person", defect.verificationPerson],
-      ],
-      margin: { left: margin, right: margin },
-      styles: { fontSize: 8, cellPadding: 2.5 },
-      columnStyles: {
-        0: { fontStyle: "bold", cellWidth: 38 },
-        1: { cellWidth: contentWidth - 38 },
-      },
-      theme: "plain",
-      didDrawCell: (cellData: any) => {
-        if (cellData.column.index === 0) {
-          doc.setDrawColor(220);
-          doc.line(
-            cellData.cell.x,
-            cellData.cell.y + cellData.cell.height,
-            cellData.cell.x + contentWidth,
-            cellData.cell.y + cellData.cell.height
-          );
-        }
-      },
-    });
-
-    y = (doc as any).lastAutoTable.finalY + 6;
-
-    if (defect.photos && defect.photos.length > 0) {
+    if (photoList.length > 0) {
       doc.setFontSize(9);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(...DARK_TEXT);
       doc.text("Photos", margin, y);
       y += 4;
 
-      const sortedPhotos = slotOrder.map((s: string) => defect.photos.find((p: any) => p.slot === s)).filter(Boolean);
+      const sortedPhotos = slotOrder.map((s: string) => photoList.find((p: any) => p.slot === s)).filter(Boolean);
       const imgW = 85;
       const imgH = imgW * 0.75;
 
@@ -392,6 +313,185 @@ export default function ReportDetail() {
         doc.text(photoLabel + photoCaption, x, y + imgH + 3);
         doc.setTextColor(0);
       }
+      y += (sortedPhotos.length > 0 ? 85 * 0.75 + 12 : 0);
+    }
+    return y;
+  };
+
+  // ==================== SHARED: Render a single defect page (PDF) ====================
+  const renderDefectPagePdf = async (
+    doc: any, defect: any, margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
+    addHeader: () => void, addFooter: () => void,
+    autoTable: any, DARK_TEXT: readonly number[], CAPTION_BLUE: readonly number[],
+  ) => {
+    const hasMultipleLocations = defect.locations && defect.locations.length > 0;
+
+    doc.addPage();
+    addHeader();
+    addFooter();
+    let y = 20;
+
+    const typeLabel = (defect.recordType === "observation") ? "OBSERVATION" : "DEFECT";
+    const typeBgColor = (defect.recordType === "observation") ? [59, 130, 246] : [217, 119, 6];
+
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    const badgeW = doc.getTextWidth(typeLabel) + 6;
+    doc.setFillColor(typeBgColor[0], typeBgColor[1], typeBgColor[2]);
+    doc.roundedRect(margin, y - 4, badgeW, 6, 1.5, 1.5, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.text(typeLabel, margin + 3, y);
+
+    if (hasMultipleLocations) {
+      // Replace parent UID with "Multiple Entries for {workTypeLabel}"
+      const workTypeLabel = getWorkTypeLabel(defect.uid);
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...DARK_TEXT);
+      doc.text(`Multiple Entries for ${workTypeLabel}`, margin + badgeW + 4, y);
+    } else {
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...DARK_TEXT);
+      doc.text(defect.uid, margin + badgeW + 4, y);
+    }
+
+    const statusLabel = defect.status === "complete" ? "COMPLETE" : "OPEN";
+    const statusColor = defect.status === "complete" ? [34, 139, 34] : [200, 150, 0];
+    doc.setFontSize(10);
+    doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
+    doc.text(statusLabel, pageWidth - margin - doc.getTextWidth(statusLabel), y);
+    doc.setTextColor(0);
+    y += 5;
+
+    if (!hasMultipleLocations) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100);
+      doc.text(deriveLocation(defect.uid), margin, y);
+      y += 5;
+    } else {
+      y += 2;
+    }
+
+    // Summary table (shared fields for the defect)
+    autoTable(doc, {
+      startY: y,
+      body: [
+        ["Date Opened", defect.dateOpened],
+        ["Date Completed", defect.dateClosed || "\u2014"],
+        ["Observation", defect.comment],
+        ["Action Required", defect.actionRequired],
+        ["Assigned To", defect.assignedTo],
+        ["Due Date", defect.dueDate],
+        ["Verification Method", defect.verificationMethod],
+        ["Verification Person", defect.verificationPerson],
+      ],
+      margin: { left: margin, right: margin },
+      styles: { fontSize: 8, cellPadding: 2.5 },
+      columnStyles: {
+        0: { fontStyle: "bold", cellWidth: 38 },
+        1: { cellWidth: contentWidth - 38 },
+      },
+      theme: "plain",
+      didDrawCell: (cellData: any) => {
+        if (cellData.column.index === 0) {
+          doc.setDrawColor(220);
+          doc.line(
+            cellData.cell.x,
+            cellData.cell.y + cellData.cell.height,
+            cellData.cell.x + contentWidth,
+            cellData.cell.y + cellData.cell.height
+          );
+        }
+      },
+    });
+
+    y = (doc as any).lastAutoTable.finalY + 6;
+
+    if (hasMultipleLocations) {
+      // Render each location as a consecutive sub-section
+      // Parent location first, then additional locations in display order
+      const parentLoc = {
+        uid: defect.uid,
+        description: defect.comment,
+        elevation: "",
+        photos: defect.photos || [],
+      };
+      const allLocs = [
+        parentLoc,
+        ...defect.locations.map((l: any) => ({
+          uid: l.uid || "",
+          description: l.description || "",
+          elevation: l.elevation || "",
+          photos: [] as any[], // Additional locations don't have separate photos in current data model
+        })),
+      ];
+
+      for (let li = 0; li < allLocs.length; li++) {
+        const loc = allLocs[li];
+
+        // Page break check
+        if (y + 30 > pageHeight - 20) {
+          doc.addPage();
+          addHeader();
+          addFooter();
+          y = 20;
+        }
+
+        // Separator line between locations
+        if (li > 0) {
+          doc.setDrawColor(180);
+          doc.setLineWidth(0.3);
+          doc.line(margin, y, pageWidth - margin, y);
+          y += 6;
+        }
+
+        // Location UID heading
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...CAPTION_BLUE);
+        doc.text(loc.uid || "\u2014", margin, y);
+        y += 5;
+
+        // Location derived location
+        if (loc.uid) {
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(100);
+          doc.text(deriveLocation(loc.uid), margin, y);
+          y += 4;
+        }
+
+        // Location description (for additional locations; parent uses defect.comment already in summary table)
+        if (li > 0 && loc.description) {
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(60);
+          const descLines = doc.splitTextToSize(loc.description, contentWidth);
+          doc.text(descLines, margin, y);
+          y += descLines.length * 4 + 2;
+        }
+
+        // Location elevation
+        if (loc.elevation) {
+          doc.setFontSize(7.5);
+          doc.setFont("helvetica", "italic");
+          doc.setTextColor(120);
+          doc.text(`Elevation: ${ELEVATION_NAMES[loc.elevation] || loc.elevation}`, margin, y);
+          y += 4;
+        }
+
+        // Photos for this location (only parent has photos in current model)
+        if (loc.photos && loc.photos.length > 0) {
+          y = await renderPhotosPdf(doc, loc.photos, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, DARK_TEXT, y);
+        }
+
+        y += 4;
+      }
+    } else {
+      // Single-location: render photos as before
+      y = await renderPhotosPdf(doc, defect.photos || [], margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, DARK_TEXT, y);
     }
   };
 
@@ -581,13 +681,28 @@ export default function ReportDetail() {
         return dc !== 0 ? dc : sortByUidExport(a, b);
       });
 
-      // Inspection-scoped filtering: only generate detail pages for defects touched in this inspection
+      // Inspection-scoped filtering: only generate detail pages for defects with substantive changes
+      // Excludes defects where the only change was dueDate, assignedTo, status, etc.
       const reportCreatedAt = data.report.createdAt;
-      const allHaveNullUpdatedAt = allDefects.every((d: any) => !d.updatedAt);
-      const isCurrentInspection = (d: any) => allHaveNullUpdatedAt || (d.updatedAt && d.updatedAt >= reportCreatedAt);
-      const openDetailData = openData.filter(isCurrentInspection);
-      const completedDetailData = completedData.filter(isCurrentInspection);
-      const observationsDetailData = observationsOnly.filter(isCurrentInspection);
+      const hasSubstantiveChange = (d: any): boolean => {
+        // (a) New defect created during this report window
+        if (d.createdAt && d.createdAt >= reportCreatedAt) return true;
+        // (b) Observation text changed since report was created
+        if (d.observationHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
+        // (c) Action text changed since report was created
+        if (d.actionHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
+        // (d) Photo added/replaced since report was created
+        if (d.photos?.some((p: any) => p.createdAt && p.createdAt >= reportCreatedAt)) return true;
+        // (e) Additional location added since report was created
+        if (d.locations?.some((l: any) => l.createdAt && l.createdAt >= reportCreatedAt)) return true;
+        return false;
+      };
+      // Fallback: if no defect qualifies (e.g. legacy data with no timestamps), include all
+      const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
+      const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
+      const openDetailData = openData.filter(qualifiesForDetail);
+      const completedDetailData = completedData.filter(qualifiesForDetail);
+      const observationsDetailData = observationsOnly.filter(qualifiesForDetail);
 
       doc.addPage();
       addHeader();
@@ -794,13 +909,21 @@ export default function ReportDetail() {
         return dc !== 0 ? dc : sortUid(a, b);
       });
 
-      // Inspection-scoped filtering: only generate detail pages for defects touched in this inspection
+      // Inspection-scoped filtering: only generate detail pages for defects with substantive changes
       const reportCreatedAt = data.report.createdAt;
-      const allHaveNullUpdatedAt = allDefects.every((d: any) => !d.updatedAt);
-      const isCurrentInspection = (d: any) => allHaveNullUpdatedAt || (d.updatedAt && d.updatedAt >= reportCreatedAt);
-      const openDetailData = openData.filter(isCurrentInspection);
-      const completedDetailData = completedData.filter(isCurrentInspection);
-      const observationsDetailData = observationsOnly.filter(isCurrentInspection);
+      const hasSubstantiveChange = (d: any): boolean => {
+        if (d.createdAt && d.createdAt >= reportCreatedAt) return true;
+        if (d.observationHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
+        if (d.actionHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
+        if (d.photos?.some((p: any) => p.createdAt && p.createdAt >= reportCreatedAt)) return true;
+        if (d.locations?.some((l: any) => l.createdAt && l.createdAt >= reportCreatedAt)) return true;
+        return false;
+      };
+      const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
+      const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
+      const openDetailData = openData.filter(qualifiesForDetail);
+      const completedDetailData = completedData.filter(qualifiesForDetail);
+      const observationsDetailData = observationsOnly.filter(qualifiesForDetail);
 
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
       const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
@@ -993,11 +1116,93 @@ export default function ReportDetail() {
 
       introChildren.push(new Paragraph({ spacing: { before: 200 } }));
 
+      // ======= HELPER: Build Word photo grid =======
+      const buildWordPhotos = async (photoList: any[]): Promise<any[]> => {
+        const photoElements: any[] = [];
+        if (photoList.length === 0) return photoElements;
+
+        photoElements.push(new Paragraph({
+          children: [new TextRun({ text: "Photos", bold: true, size: 20, font: "Aptos" })],
+          spacing: { before: 100, after: 80 },
+        }));
+
+        const sortedPhotos = slotOrder
+          .map((s: string) => photoList.find((p: any) => p.slot === s))
+          .filter(Boolean);
+
+        for (let i = 0; i < sortedPhotos.length; i += 2) {
+          const photoCells: any[] = [];
+
+          for (let j = 0; j < 2; j++) {
+            const photo = sortedPhotos[i + j];
+            if (photo) {
+              const blob = await loadImageBlob(photo.filename);
+              const cellChildren: any[] = [];
+
+              if (blob) {
+                let buffer: ArrayBuffer;
+                try {
+                  buffer = await compressImageForExport(blob, 800, 0.7);
+                } catch {
+                  buffer = await blobToArrayBuffer(blob);
+                }
+                cellChildren.push(new Paragraph({
+                  children: [
+                    new ImageRun({ data: buffer, transformation: { width: 241, height: 181 }, type: "jpg" }),
+                  ],
+                  alignment: AlignmentType.CENTER,
+                }));
+              }
+
+              const captionText = photo.caption ? ` \u2014 ${photo.caption}` : "";
+              cellChildren.push(new Paragraph({
+                children: [
+                  new TextRun({
+                    text: slotLabels[photo.slot] || photo.slot,
+                    bold: true, size: 16, font: "Aptos",
+                    color: photo.slot === "complete" ? "228B22" : "666666",
+                  }),
+                  ...(captionText ? [new TextRun({ text: captionText, size: 14, font: "Aptos", color: "888888" })] : []),
+                ],
+                alignment: AlignmentType.CENTER,
+                spacing: { before: 40 },
+              }));
+
+              photoCells.push(new TableCell({
+                width: { size: 50, type: WidthType.PERCENTAGE },
+                children: cellChildren,
+                borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
+              }));
+            } else {
+              photoCells.push(new TableCell({
+                width: { size: 50, type: WidthType.PERCENTAGE },
+                children: [new Paragraph("")],
+                borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
+              }));
+            }
+          }
+
+          photoElements.push(new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            layout: TableLayoutType.FIXED,
+            rows: [new TableRow({ children: photoCells })],
+          }));
+          photoElements.push(new Paragraph({ spacing: { before: 60 } }));
+        }
+
+        return photoElements;
+      };
+
       // ======= HELPER: Build 1 defect page for Word =======
       const buildWordDefectPage = async (defect: any): Promise<any[]> => {
         const elements: any[] = [];
+        const hasMultipleLocations = defect.locations && defect.locations.length > 0;
 
         const isObs = defect.recordType === "observation";
+        const headingText = hasMultipleLocations
+          ? `Multiple Entries for ${getWorkTypeLabel(defect.uid)}`
+          : defect.uid;
+
         elements.push(new Paragraph({
           children: [
             new TextRun({
@@ -1006,7 +1211,7 @@ export default function ReportDetail() {
               shading: { type: ShadingType.SOLID, color: isObs ? "3B82F6" : "D97706" },
             }),
             new TextRun({ text: "  " }),
-            new TextRun({ text: defect.uid, bold: true, size: 28, font: "Aptos", color: CAPTION_BLUE }),
+            new TextRun({ text: headingText, bold: true, size: 28, font: "Aptos", color: CAPTION_BLUE }),
             new TextRun({ text: "    " }),
             new TextRun({
               text: defect.status === "complete" ? "COMPLETE" : "OPEN",
@@ -1017,20 +1222,16 @@ export default function ReportDetail() {
           spacing: { after: 40 },
         }));
 
-        elements.push(new Paragraph({
-          children: [new TextRun({ text: deriveLocation(defect.uid), size: 18, font: "Aptos", color: "666666" })],
-          spacing: { after: defect.locations && defect.locations.length > 0 ? 40 : 200 },
-        }));
-
-        // Show additional locations if any
-        if (defect.locations && defect.locations.length > 0) {
-          const locList = defect.locations.map((l: any) => l.uid || "—").join(", ");
+        if (!hasMultipleLocations) {
           elements.push(new Paragraph({
-            children: [new TextRun({ text: `Other locations: ${locList}`, size: 15, font: "Aptos", color: "888888", italics: true })],
+            children: [new TextRun({ text: deriveLocation(defect.uid), size: 18, font: "Aptos", color: "666666" })],
             spacing: { after: 200 },
           }));
+        } else {
+          elements.push(new Paragraph({ spacing: { after: 100 } }));
         }
 
+        // Summary table (shared defect info)
         const infoRows = [
           ["Date Opened", defect.dateOpened],
           ["Date Completed", defect.dateClosed || "\u2014"],
@@ -1073,75 +1274,75 @@ export default function ReportDetail() {
 
         elements.push(new Paragraph({ spacing: { before: 150 } }));
 
-        if (defect.photos && defect.photos.length > 0) {
-          elements.push(new Paragraph({
-            children: [new TextRun({ text: "Photos", bold: true, size: 20, font: "Aptos" })],
-            spacing: { before: 100, after: 80 },
-          }));
+        if (hasMultipleLocations) {
+          // Render each location as a consecutive sub-section
+          // Parent location first, then additional locations
+          const allLocs = [
+            { uid: defect.uid, description: defect.comment, elevation: "", photos: defect.photos || [] },
+            ...defect.locations.map((l: any) => ({
+              uid: l.uid || "",
+              description: l.description || "",
+              elevation: l.elevation || "",
+              photos: [] as any[],
+            })),
+          ];
 
-          const sortedPhotos = slotOrder
-            .map((s: string) => defect.photos.find((p: any) => p.slot === s))
-            .filter(Boolean);
+          for (let li = 0; li < allLocs.length; li++) {
+            const loc = allLocs[li];
 
-          for (let i = 0; i < sortedPhotos.length; i += 2) {
-            const photoCells: any[] = [];
-
-            for (let j = 0; j < 2; j++) {
-              const photo = sortedPhotos[i + j];
-              if (photo) {
-                const blob = await loadImageBlob(photo.filename);
-                const cellChildren: any[] = [];
-
-                if (blob) {
-                  let buffer: ArrayBuffer;
-                  try {
-                    buffer = await compressImageForExport(blob, 800, 0.7);
-                  } catch {
-                    buffer = await blobToArrayBuffer(blob);
-                  }
-                  cellChildren.push(new Paragraph({
-                    children: [
-                      new ImageRun({ data: buffer, transformation: { width: 241, height: 181 }, type: "jpg" }),
-                    ],
-                    alignment: AlignmentType.CENTER,
-                  }));
-                }
-
-                const captionText = photo.caption ? ` \u2014 ${photo.caption}` : "";
-                cellChildren.push(new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: slotLabels[photo.slot] || photo.slot,
-                      bold: true, size: 16, font: "Aptos",
-                      color: photo.slot === "complete" ? "228B22" : "666666",
-                    }),
-                    ...(captionText ? [new TextRun({ text: captionText, size: 14, font: "Aptos", color: "888888" })] : []),
-                  ],
-                  alignment: AlignmentType.CENTER,
-                  spacing: { before: 40 },
-                }));
-
-                photoCells.push(new TableCell({
-                  width: { size: 50, type: WidthType.PERCENTAGE },
-                  children: cellChildren,
-                  borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
-                }));
-              } else {
-                photoCells.push(new TableCell({
-                  width: { size: 50, type: WidthType.PERCENTAGE },
-                  children: [new Paragraph("")],
-                  borders: { top: noBorder, left: noBorder, right: noBorder, bottom: noBorder },
-                }));
-              }
+            // Separator between locations
+            if (li > 0) {
+              elements.push(new Paragraph({
+                children: [],
+                spacing: { before: 100 },
+                border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" } },
+              }));
+              elements.push(new Paragraph({ spacing: { before: 60 } }));
             }
 
-            elements.push(new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              layout: TableLayoutType.FIXED,
-              rows: [new TableRow({ children: photoCells })],
+            // Location UID heading
+            elements.push(new Paragraph({
+              children: [new TextRun({ text: loc.uid || "\u2014", bold: true, size: 22, font: "Aptos", color: CAPTION_BLUE })],
+              spacing: { after: 30 },
             }));
-            elements.push(new Paragraph({ spacing: { before: 60 } }));
+
+            // Location derived location
+            if (loc.uid) {
+              elements.push(new Paragraph({
+                children: [new TextRun({ text: deriveLocation(loc.uid), size: 16, font: "Aptos", color: "666666" })],
+                spacing: { after: 40 },
+              }));
+            }
+
+            // Description for additional locations (parent uses defect.comment already in summary)
+            if (li > 0 && loc.description) {
+              elements.push(new Paragraph({
+                children: [new TextRun({ text: loc.description, size: 18, font: "Aptos" })],
+                spacing: { after: 60 },
+              }));
+            }
+
+            // Elevation reference
+            if (loc.elevation) {
+              elements.push(new Paragraph({
+                children: [new TextRun({
+                  text: `Elevation: ${ELEVATION_NAMES[loc.elevation] || loc.elevation}`,
+                  size: 15, font: "Aptos", color: "888888", italics: true,
+                })],
+                spacing: { after: 60 },
+              }));
+            }
+
+            // Photos for this location (only parent has photos in current model)
+            if (loc.photos && loc.photos.length > 0) {
+              const photoEls = await buildWordPhotos(loc.photos);
+              elements.push(...photoEls);
+            }
           }
+        } else {
+          // Single-location: render photos as before
+          const photoEls = await buildWordPhotos(defect.photos || []);
+          elements.push(...photoEls);
         }
 
         return elements;

@@ -41,6 +41,7 @@ export const defects = sqliteTable("defects", {
   status: text("status").notNull().default("open"), // open, complete
   recordType: text("record_type").notNull().default("defect"), // defect, observation
   updatedAt: text("updated_at"),
+  createdAt: text("created_at"),
 });
 
 export const photos = sqliteTable("photos", {

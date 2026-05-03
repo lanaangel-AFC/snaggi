@@ -427,7 +427,9 @@ export async function registerRoutes(
       reportDefects.map(async (d) => {
         const defectPhotos = await storage.getPhotosByDefect(d.id);
         const locations = await storage.getDefectLocations(d.id);
-        return { ...d, photos: defectPhotos, locations };
+        const obsHistory = await storage.getObservationHistory(d.id);
+        const actHistory = await storage.getActionHistory(d.id);
+        return { ...d, photos: defectPhotos, locations, observationHistory: obsHistory, actionHistory: actHistory };
       })
     );
     res.json({ project, report, defects: defectsWithPhotos });

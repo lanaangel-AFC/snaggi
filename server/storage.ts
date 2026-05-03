@@ -146,6 +146,7 @@ safeAddColumn("reports", "elevations", "TEXT DEFAULT '[]'");
 safeAddColumn("defects", "record_type", "TEXT NOT NULL DEFAULT 'defect'");
 safeAddColumn("defects", "report_id", "INTEGER");
 safeAddColumn("defects", "updated_at", "TEXT");
+safeAddColumn("defects", "created_at", "TEXT");
 safeAddColumn("markers", "location_id", "INTEGER");
 
 // Migration: for existing defects without reportId, create a default "Report 1" for each project
@@ -402,7 +403,8 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(defects).where(eq(defects.id, id)).get();
   }
   async createDefect(defect: InsertDefect): Promise<Defect> {
-    return db.insert(defects).values({ ...defect, updatedAt: new Date().toISOString() }).returning().get();
+    const now = new Date().toISOString();
+    return db.insert(defects).values({ ...defect, updatedAt: now, createdAt: defect.createdAt || now }).returning().get();
   }
   async updateDefect(id: number, defect: Partial<InsertDefect>): Promise<Defect | undefined> {
     return db.update(defects).set({ ...defect, updatedAt: new Date().toISOString() }).where(eq(defects.id, id)).returning().get();
