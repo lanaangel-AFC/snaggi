@@ -442,7 +442,9 @@ export async function registerRoutes(
         return { ...d, photos: defectPhotos, locations, observationHistory: obsHistory, actionHistory: actHistory };
       })
     );
-    res.json({ project, report, defects: defectsWithPhotos });
+    // Include all project defects for the cumulative summary section
+    const allProjectDefects = await storage.getDefectsByProject(project.id);
+    res.json({ project, report, defects: defectsWithPhotos, allProjectDefects });
   });
 
   // Legacy: project-level report-data (returns all defects across all reports)
