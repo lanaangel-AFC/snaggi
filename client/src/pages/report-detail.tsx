@@ -170,6 +170,31 @@ function formatReportDate(dateStr?: string): string {
   return d.toLocaleDateString("en-AU", { day: "2-digit", month: "long", year: "numeric" });
 }
 
+function extractWorkTypeFromUid(uid: string): string {
+  const parts = uid.split("-");
+  for (const part of parts) {
+    if (/^[A-Z]{2,3}$/.test(part)) return part;
+  }
+  return "";
+}
+
+function classifyComplexity(comment: string): "standard" | "complex" {
+  if (!comment) return "standard";
+  const c = comment.toLowerCase();
+  const complexKeywords = [
+    "major", "extensive", "significant", "severe", "deflection", "deflected",
+    "structural", "multiple", "throughout", "all", "complex", "deep",
+    "widespread", "advanced", "spalling extensive", "rebar", "exposed",
+  ];
+  return complexKeywords.some((kw) => c.includes(kw)) ? "complex" : "standard";
+}
+
+function getBriefDescription(defect: any, workTypeLabel: string): string {
+  if (!defect.comment) return workTypeLabel;
+  const complexity = classifyComplexity(defect.comment);
+  return `${workTypeLabel} \u2014 ${complexity}`;
+}
+
 export default function ReportDetail() {
   const { projectId, reportId } = useParams<{ projectId: string; reportId: string }>();
   const [, navigate] = useLocation();
@@ -512,6 +537,12 @@ export default function ReportDetail() {
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
+
+      const globalRes = await apiRequest("GET", "/api/global-settings");
+      const globalSettingsData = await globalRes.json();
+      const workTypeMap = new Map<string, string>();
+      (globalSettingsData.workTypes || []).forEach((wt: any) => workTypeMap.set(wt.code, wt.label));
+      try { const customWT = JSON.parse(data.project.customWorkTypes || "[]"); customWT.forEach((wt: any) => workTypeMap.set(wt.code, wt.label)); } catch {}
 
       const { default: jsPDF } = await import("jspdf");
       const autoTable = (await import("jspdf-autotable")).default;
@@ -872,6 +903,57 @@ export default function ReportDetail() {
         }
       }
 
+      // ======= PROJECT SUMMARY — CUMULATIVE REGISTER =======
+      const allProjectItems = (data.allProjectDefects || []).slice().sort(sortByUidExport);
+      if (allProjectItems.length > 0) {
+        doc.addPage();
+        addHeader();
+        addFooter();
+        let sy = 20;
+
+        doc.setFontSize(18);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...DARK_TEXT);
+        doc.text("Project Summary \u2014 Cumulative Register", margin, sy);
+        sy += 7;
+
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+        doc.text("Complete list of all defects and observations created across this project.", margin, sy);
+        sy += 8;
+
+        const summaryHead = [["#", "UID", "Description", "Status", "Date Completed"]];
+        const summaryBody = allProjectItems.map((d: any, i: number) => {
+          const wtCode = extractWorkTypeFromUid(d.uid);
+          const wtLabel = workTypeMap.get(wtCode) || wtCode;
+          return [
+            String(i + 1),
+            d.uid,
+            getBriefDescription(d, wtLabel),
+            d.status === "complete" ? "Complete" : "Open",
+            d.status === "complete" ? (d.dateClosed || "") : "",
+          ];
+        });
+
+        autoTable(doc, {
+          startY: sy,
+          head: summaryHead,
+          body: summaryBody,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 8, cellPadding: 2.5 },
+          headStyles: { fillColor: [255, 255, 255], textColor: [...CAPTION_BLUE], fontStyle: "bold", lineWidth: { bottom: 0.5 }, lineColor: [...DARK_TEXT] },
+          columnStyles: {
+            0: { cellWidth: 10 },
+            1: { cellWidth: 28 },
+            2: { cellWidth: 75 },
+            3: { cellWidth: 20 },
+            4: { cellWidth: 25 },
+          },
+          didDrawPage: () => { addHeader(); addFooter(); },
+        });
+      }
+
       doc.save(`${data.project.name.replace(/[^a-zA-Z0-9]/g, "_")}_SVR.pdf`);
       toast({ title: "PDF report downloaded" });
     } catch (err) {
@@ -888,6 +970,12 @@ export default function ReportDetail() {
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
+
+      const globalResW = await apiRequest("GET", "/api/global-settings");
+      const globalSettingsW = await globalResW.json();
+      const workTypeMapW = new Map<string, string>();
+      (globalSettingsW.workTypes || []).forEach((wt: any) => workTypeMapW.set(wt.code, wt.label));
+      try { const customWTW = JSON.parse(data.project.customWorkTypes || "[]"); customWTW.forEach((wt: any) => workTypeMapW.set(wt.code, wt.label)); } catch {}
 
       const docxLib = await import("docx");
       const { saveAs } = await import("file-saver");
@@ -1558,6 +1646,57 @@ export default function ReportDetail() {
           obsOnlyChildren.push(...defectEls);
         }
         docSections.push({ properties: sectionProps, children: obsOnlyChildren });
+      }
+
+      // ======= PROJECT SUMMARY — CUMULATIVE REGISTER (Word) =======
+      const allProjectItemsW = (data.allProjectDefects || []).slice().sort(sortUid);
+      if (allProjectItemsW.length > 0) {
+        const projSummaryRows: any[] = [];
+        projSummaryRows.push(new TableRow({
+          tableHeader: true,
+          children: ["#", "UID", "Description", "Status", "Date Completed"].map((label) =>
+            new TableCell({
+              width: { size: 100 / 5, type: WidthType.PERCENTAGE },
+              children: [new Paragraph({ children: [new TextRun({ text: label, size: 16, font: "Aptos", bold: true, color: CAPTION_BLUE })] })],
+              borders: { top: noBorder, left: noBorder, right: noBorder, bottom: { style: BorderStyle.SINGLE, size: 4, color: DARK_TEXT } },
+            })
+          ),
+        }));
+
+        allProjectItemsW.forEach((d: any, i: number) => {
+          const wtCode = extractWorkTypeFromUid(d.uid);
+          const wtLabel = workTypeMapW.get(wtCode) || wtCode;
+          const cells = [
+            String(i + 1),
+            d.uid,
+            getBriefDescription(d, wtLabel),
+            d.status === "complete" ? "Complete" : "Open",
+            d.status === "complete" ? (d.dateClosed || "") : "",
+          ];
+          const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
+          projSummaryRows.push(new TableRow({
+            children: cells.map((text) => new TableCell({
+              width: { size: 100 / 5, type: WidthType.PERCENTAGE },
+              children: [new Paragraph({ children: [new TextRun({ text, size: 14, font: "Aptos" })] })],
+              borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
+            })),
+          }));
+        });
+
+        const projSummaryChildren: any[] = [
+          new Paragraph({
+            children: [new TextRun({ text: "Project Summary \u2014 Cumulative Register", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+            heading: HeadingLevel.HEADING_1,
+            spacing: { after: 80 },
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: "Complete list of all defects and observations across this project.", size: 18, italics: true, color: "666666", font: "Aptos" })],
+            spacing: { after: 200 },
+          }),
+          new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED, rows: projSummaryRows }),
+        ];
+
+        docSections.push({ properties: sectionProps, children: projSummaryChildren });
       }
 
       const wordDoc = new Document({
