@@ -131,10 +131,11 @@ const WORK_TYPE_LABELS: Record<string, string> = {
   SS: "Sill Stabilisation", GW: "General Works", OT: "Other",
 };
 
-// Parse work type label from UID
+// Parse work type label from UID (variable-length)
 function getWorkTypeLabel(uid: string): string {
   const parts = uid.split("-");
-  const code = parts.length >= 5 ? parts[3] : parts.length >= 4 ? parts[2] : "";
+  const wtIdx = parts.findIndex((p) => /^[A-Z]{2,3}$/i.test(p));
+  const code = wtIdx >= 0 ? parts[wtIdx] : "";
   return WORK_TYPE_LABELS[code] || code;
 }
 
@@ -144,21 +145,22 @@ const ELEVATION_NAMES: Record<string, string> = {
   NE: "North East", NW: "North West", SE: "South East", SW: "South West",
 };
 
-// Derive location string from defect UID
+// Derive location string from defect UID (variable-length)
 function deriveLocation(uid: string): string {
   const parts = uid.split("-");
-  if (parts.length >= 5) {
-    const elevName = ELEVATION_NAMES[parts[0]] || parts[0];
-    const drop = parseInt(parts[1], 10);
-    const level = parseInt(parts[2], 10);
-    return `${elevName} Elevation, Drop ${drop}, Level ${level}`;
-  }
-  if (parts.length >= 2) {
-    const drop = parseInt(parts[0], 10);
-    const level = parseInt(parts[1], 10);
-    return `Drop ${drop}, Level ${level}`;
-  }
-  return "";
+  const wtIdx = parts.findIndex((p) => /^[A-Z]{2,3}$/i.test(p));
+  if (wtIdx < 0) return "";
+  const before = parts.slice(0, wtIdx);
+  const alphaIdx = before.findIndex((p) => /^[A-Z]+$/i.test(p));
+  const elevation = alphaIdx >= 0 ? before[alphaIdx] : "";
+  const numerics = before.filter((_, i) => i !== alphaIdx);
+  const dropVal = numerics[0] || "";
+  const levelVal = numerics[1] || "";
+  const segments: string[] = [];
+  if (elevation) { segments.push(`${ELEVATION_NAMES[elevation] || elevation} Elevation`); }
+  if (dropVal) segments.push(`Drop ${parseInt(dropVal, 10) || dropVal}`);
+  if (levelVal) segments.push(`Level ${parseInt(levelVal, 10) || levelVal}`);
+  return segments.join(", ");
 }
 
 // Format date for report
@@ -225,24 +227,33 @@ export default function ReportDetail() {
     },
   });
 
-  // Sort by: Drop (asc), Level (desc/highest first), WorkType (grouped), Number (asc)
+  // Parse variable-length UID into sortable parts
+  const parseUidParts = (uid: string) => {
+    const parts = uid.split("-");
+    const wtIdx = parts.findIndex((p) => /^[A-Z]{2,3}$/i.test(p));
+    if (wtIdx < 0) return { elev: "", drop: 0, level: 0, work: "", num: 0 };
+    const before = parts.slice(0, wtIdx);
+    const alphaIdx = before.findIndex((p) => /^[A-Z]+$/i.test(p));
+    const elev = alphaIdx >= 0 ? before[alphaIdx] : "";
+    const numerics = before.filter((_, i) => i !== alphaIdx);
+    return {
+      elev,
+      drop: parseInt(numerics[0] || "0", 10),
+      level: parseInt(numerics[1] || "0", 10),
+      work: parts[wtIdx] || "",
+      num: parseInt(parts[wtIdx + 1] || "0", 10),
+    };
+  };
+
+  // Sort by: Elevation, Drop (asc), Level (desc/highest first), WorkType (grouped), Number (asc)
   const sortByUid = (a: Defect, b: Defect): number => {
-    const pa = a.uid.split("-");
-    const pb = b.uid.split("-");
-    const aHasElev = pa.length >= 5;
-    const bHasElev = pb.length >= 5;
-    const aDrop = parseInt(pa[aHasElev ? 1 : 0] || "0", 10);
-    const bDrop = parseInt(pb[bHasElev ? 1 : 0] || "0", 10);
-    if (aDrop !== bDrop) return aDrop - bDrop;
-    const aLevel = parseInt(pa[aHasElev ? 2 : 1] || "0", 10);
-    const bLevel = parseInt(pb[bHasElev ? 2 : 1] || "0", 10);
-    if (aLevel !== bLevel) return bLevel - aLevel;
-    const aWork = pa[aHasElev ? 3 : 2] || "";
-    const bWork = pb[bHasElev ? 3 : 2] || "";
-    if (aWork !== bWork) return aWork.localeCompare(bWork);
-    const aNum = parseInt(pa[aHasElev ? 4 : 3] || "0", 10);
-    const bNum = parseInt(pb[bHasElev ? 4 : 3] || "0", 10);
-    return aNum - bNum;
+    const ap = parseUidParts(a.uid);
+    const bp = parseUidParts(b.uid);
+    if (ap.elev !== bp.elev) return ap.elev.localeCompare(bp.elev);
+    if (ap.drop !== bp.drop) return ap.drop - bp.drop;
+    if (ap.level !== bp.level) return bp.level - ap.level;
+    if (ap.work !== bp.work) return ap.work.localeCompare(bp.work);
+    return ap.num - bp.num;
   };
 
   const activeDefects = useMemo(() =>
@@ -653,23 +664,24 @@ export default function ReportDetail() {
       y = (doc as any).lastAutoTable.finalY + 10;
 
       // ======= SECTION 2 - DEFECT REGISTER & RECTIFICATION LOG =======
+      const parseUidPartsExport = (uid: string) => {
+        const parts = uid.split("-");
+        const wtIdx = parts.findIndex((p: string) => /^[A-Z]{2,3}$/i.test(p));
+        if (wtIdx < 0) return { elev: "", drop: 0, level: 0, work: "", num: 0 };
+        const before = parts.slice(0, wtIdx);
+        const alphaIdx = before.findIndex((p: string) => /^[A-Z]+$/i.test(p));
+        const elev = alphaIdx >= 0 ? before[alphaIdx] : "";
+        const numerics = before.filter((_: string, i: number) => i !== alphaIdx);
+        return { elev, drop: parseInt(numerics[0] || "0", 10), level: parseInt(numerics[1] || "0", 10), work: parts[wtIdx] || "", num: parseInt(parts[wtIdx + 1] || "0", 10) };
+      };
       const sortByUidExport = (a: any, b: any): number => {
-        const pa = a.uid.split("-");
-        const pb = b.uid.split("-");
-        const aHasElev = pa.length >= 5;
-        const bHasElev = pb.length >= 5;
-        const aDrop = parseInt(pa[aHasElev ? 1 : 0] || "0", 10);
-        const bDrop = parseInt(pb[bHasElev ? 1 : 0] || "0", 10);
-        if (aDrop !== bDrop) return aDrop - bDrop;
-        const aLevel = parseInt(pa[aHasElev ? 2 : 1] || "0", 10);
-        const bLevel = parseInt(pb[bHasElev ? 2 : 1] || "0", 10);
-        if (aLevel !== bLevel) return bLevel - aLevel;
-        const aWork = pa[aHasElev ? 3 : 2] || "";
-        const bWork = pb[bHasElev ? 3 : 2] || "";
-        if (aWork !== bWork) return aWork.localeCompare(bWork);
-        const aNum = parseInt(pa[aHasElev ? 4 : 3] || "0", 10);
-        const bNum = parseInt(pb[bHasElev ? 4 : 3] || "0", 10);
-        return aNum - bNum;
+        const ap = parseUidPartsExport(a.uid);
+        const bp = parseUidPartsExport(b.uid);
+        if (ap.elev !== bp.elev) return ap.elev.localeCompare(bp.elev);
+        if (ap.drop !== bp.drop) return ap.drop - bp.drop;
+        if (ap.level !== bp.level) return bp.level - ap.level;
+        if (ap.work !== bp.work) return ap.work.localeCompare(bp.work);
+        return ap.num - bp.num;
       };
 
       const allDefects = [...(data.defects || [])].sort(sortByUidExport);
@@ -888,16 +900,24 @@ export default function ReportDetail() {
 
       const logo = await loadAfcLogo();
 
+      const parseUidWord = (uid: string) => {
+        const parts = uid.split("-");
+        const wtIdx = parts.findIndex((p: string) => /^[A-Z]{2,3}$/i.test(p));
+        if (wtIdx < 0) return { elev: "", drop: 0, level: 0, work: "", num: 0 };
+        const before = parts.slice(0, wtIdx);
+        const alphaIdx = before.findIndex((p: string) => /^[A-Z]+$/i.test(p));
+        const elev = alphaIdx >= 0 ? before[alphaIdx] : "";
+        const numerics = before.filter((_: string, i: number) => i !== alphaIdx);
+        return { elev, drop: parseInt(numerics[0] || "0", 10), level: parseInt(numerics[1] || "0", 10), work: parts[wtIdx] || "", num: parseInt(parts[wtIdx + 1] || "0", 10) };
+      };
       const sortUid = (a: any, b: any): number => {
-        const pa = a.uid.split("-"); const pb = b.uid.split("-");
-        const ae = pa.length >= 5; const be = pb.length >= 5;
-        const ad = parseInt(pa[ae?1:0]||"0",10); const bd = parseInt(pb[be?1:0]||"0",10);
-        if (ad !== bd) return ad - bd;
-        const al = parseInt(pa[ae?2:1]||"0",10); const bl = parseInt(pb[be?2:1]||"0",10);
-        if (al !== bl) return bl - al;
-        const aw = pa[ae?3:2]||""; const bw = pb[be?3:2]||"";
-        if (aw !== bw) return aw.localeCompare(bw);
-        return parseInt(pa[ae?4:3]||"0",10) - parseInt(pb[be?4:3]||"0",10);
+        const ap = parseUidWord(a.uid);
+        const bp = parseUidWord(b.uid);
+        if (ap.elev !== bp.elev) return ap.elev.localeCompare(bp.elev);
+        if (ap.drop !== bp.drop) return ap.drop - bp.drop;
+        if (ap.level !== bp.level) return bp.level - ap.level;
+        if (ap.work !== bp.work) return ap.work.localeCompare(bp.work);
+        return ap.num - bp.num;
       };
 
       const allDefects = [...(data.defects || [])].sort(sortUid);

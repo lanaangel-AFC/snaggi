@@ -10,6 +10,9 @@ export const projects = sqliteTable("projects", {
   inspector: text("inspector").notNull(),
   afcReference: text("afc_reference").default(""),
   elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
+  customDrops: text("custom_drops").default("[]"), // JSON array of strings
+  customLevels: text("custom_levels").default("[]"), // JSON array of strings
+  customWorkTypes: text("custom_work_types").default("[]"), // JSON array of {code, label}
   createdAt: text("created_at").notNull(),
 });
 

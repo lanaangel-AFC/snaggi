@@ -88,6 +88,9 @@ export default function DefectForm() {
   const isEdit = !!defectId && defectId !== "new-defect" && defectId !== "new-observation";
   const isNewObservation = defectId === "new-observation" || (typeof window !== "undefined" && window.location.hash.includes("/new-observation"));
 
+  // Two-step flow: Step 1 = pick work type, Step 2 = full form
+  const [formStep, setFormStep] = useState<"workType" | "form">(isEdit ? "form" : "workType");
+
   const [form, setForm] = useState({
     dateOpened: new Date().toISOString().split("T")[0],
     dateClosed: "",
@@ -186,10 +189,10 @@ export default function DefectForm() {
     const num = seqNumber || "01";
     if (!locElevation && !locDrop && !locLevel) return "";
     const elev = locElevation || elevation || "";
-    const dd = (locDrop || "01").padStart(2, "0");
-    const ll = (locLevel || "01").padStart(2, "0");
-    if (!wt) return "";
-    return `${elev}-${dd}-${ll}-${wt}-${num.padStart(2, "0")}`;
+    const dd = locDrop ? locDrop.padStart(2, "0") : "";
+    const ll = locLevel ? locLevel.padStart(2, "0") : "";
+    const segments = [elev, dd, ll, wt, num ? num.padStart(2, "0") : ""].filter((s) => s !== "");
+    return segments.join("-");
   };
 
   const addAdditionalLocation = async () => {
@@ -352,8 +355,7 @@ export default function DefectForm() {
     if (!allProjectDefects || !workType) return { comments: [], actions: [] };
     const matching = allProjectDefects.filter((d) => {
       const parts = d.uid.split("-");
-      const wt = parts.length >= 5 ? parts[3] : parts.length >= 4 ? parts[2] : "";
-      return wt === workType;
+      return parts.some((p) => p === workType);
     });
     const commentSet = new Set<string>();
     const actionSet = new Set<string>();
@@ -364,19 +366,52 @@ export default function DefectForm() {
     return { comments: Array.from(commentSet), actions: Array.from(actionSet) };
   }, [allProjectDefects, workType]);
 
-  // Build the UID prefix from the components
+  // Build custom option lists from project
+  const dropOptions = useMemo(() => {
+    try {
+      const custom: string[] = JSON.parse((project as any)?.customDrops || "[]");
+      if (custom.length > 0) return custom;
+    } catch {}
+    return Array.from({ length: 10 }, (_, i) => String(i + 1).padStart(2, "0"));
+  }, [(project as any)?.customDrops]);
+
+  const levelOptions = useMemo(() => {
+    try {
+      const custom: string[] = JSON.parse((project as any)?.customLevels || "[]");
+      if (custom.length > 0) return custom;
+    } catch {}
+    return Array.from({ length: 20 }, (_, i) => String(i + 1).padStart(2, "0"));
+  }, [(project as any)?.customLevels]);
+
+  const allWorkTypes = useMemo(() => {
+    const custom: { code: string; label: string }[] = (() => {
+      try { return JSON.parse((project as any)?.customWorkTypes || "[]"); } catch { return []; }
+    })();
+    return [...WORK_TYPES, ...custom];
+  }, [(project as any)?.customWorkTypes]);
+
+  // Flexible UID builder — only includes present segments
   const uidPrefix = useMemo(() => {
-    if (!elevation || !drop || !level || !workType) return "";
-    const dd = drop.padStart(2, "0");
-    const ll = level.padStart(2, "0");
-    return `${elevation}-${dd}-${ll}-${workType}`;
+    const segments = [
+      elevation || "",
+      drop ? drop.padStart(2, "0") : "",
+      level ? level.padStart(2, "0") : "",
+      workType || "",
+    ].filter((s) => s !== "");
+    return segments.join("-");
   }, [elevation, drop, level, workType]);
 
-  // Full assembled UID for display
+  // Full assembled UID — includes number if present
   const assembledUid = useMemo(() => {
-    if (!uidPrefix) return "";
-    return `${uidPrefix}-${seqNumber.padStart(2, "0")}`;
-  }, [uidPrefix, seqNumber]);
+    const segments = [
+      elevation || "",
+      drop ? drop.padStart(2, "0") : "",
+      level ? level.padStart(2, "0") : "",
+      workType || "",
+      seqNumber ? seqNumber.padStart(2, "0") : "",
+    ].filter((s) => s !== "");
+    return segments.join("-");
+  }, [elevation, drop, level, workType, seqNumber]);
 
   // Fetch all defects in this report to check for duplicate UIDs
   const { data: reportDefects } = useQuery<Defect[]>({
@@ -424,28 +459,24 @@ export default function DefectForm() {
     enabled: isEdit,
   });
 
-  // Fetch next sequence number when prefix changes (new defect only)
-  const { data: nextUidData } = useQuery<{ uid: string }>({
-    queryKey: [`/api/projects/${projectId}/next-uid`, uidPrefix],
-    queryFn: async () => {
-      if (!uidPrefix) return { uid: "" };
-      const res = await fetch(`${API_BASE}/api/projects/${projectId}/next-uid?prefix=${encodeURIComponent(uidPrefix)}`);
-      if (!res.ok) throw new Error("Failed to fetch next UID");
-      return res.json();
-    },
-    enabled: !isEdit && !!uidPrefix,
-  });
-
-  // When we get the next UID from the server, extract the sequence number
+  // Auto-suggest next number when workType changes (based on existing defects in report)
   useEffect(() => {
-    if (nextUidData?.uid && !isEdit) {
-      setUid(nextUidData.uid);
-      const parts = nextUidData.uid.split("-");
-      if (parts.length >= 4) {
-        setSeqNumber(parts[parts.length - 1]);
-      }
-    }
-  }, [nextUidData, isEdit]);
+    if (isEdit || !workType || !reportDefects) return;
+    // Find existing defects with this workType and compute next number
+    const existingNums = reportDefects
+      .filter((d) => {
+        const parts = d.uid.split("-");
+        return parts.some((p) => p === workType);
+      })
+      .map((d) => {
+        const parts = d.uid.split("-");
+        const lastPart = parts[parts.length - 1];
+        return parseInt(lastPart, 10);
+      })
+      .filter((n) => !isNaN(n));
+    const next = existingNums.length > 0 ? Math.max(...existingNums) + 1 : 1;
+    setSeqNumber(String(next).padStart(2, "0"));
+  }, [workType, reportDefects, isEdit]);
 
   useEffect(() => {
     // Only seed the form from the server response on the FIRST load. Any
@@ -469,21 +500,25 @@ export default function DefectForm() {
       if ((existingDefect as any).recordType) {
         setRecordType((existingDefect as any).recordType);
       }
+      // Parse variable-length UID into components
       const parts = existingDefect.uid.split("-");
-      if (parts.length >= 5) {
-        // New format: Elevation-Drop-Level-WorkType-Number
-        setElevation(parts[0]);
-        setDrop(parts[1]);
-        setLevel(parts[2]);
-        setWorkType(parts[3]);
-        setSeqNumber(parts[4]);
-      } else if (parts.length >= 4) {
-        // Old format: Drop-Level-WorkType-Number
-        setDrop(parts[0]);
-        setLevel(parts[1]);
-        setWorkType(parts[2]);
-        setSeqNumber(parts[3]);
+      // Detect which part is the work type (2-3 alpha chars)
+      const wtIdx = parts.findIndex((p) => /^[A-Z]{2,3}$/i.test(p));
+      if (wtIdx >= 0) {
+        setWorkType(parts[wtIdx]);
+        // Number is always after work type
+        if (wtIdx + 1 < parts.length) setSeqNumber(parts[wtIdx + 1]);
+        // Parts before work type: Elevation (alpha), Drop (numeric), Level (numeric)
+        const before = parts.slice(0, wtIdx);
+        const alphaIdx = before.findIndex((p) => /^[A-Z]+$/i.test(p));
+        if (alphaIdx >= 0) { setElevation(before[alphaIdx]); before.splice(alphaIdx, 1); }
+        if (before.length >= 2) { setDrop(before[0]); setLevel(before[1]); }
+        else if (before.length === 1) { setDrop(before[0]); }
+      } else {
+        // Fallback: just set the last part as number
+        if (parts.length > 0) setSeqNumber(parts[parts.length - 1]);
       }
+      setFormStep("form");
     }
   }, [existingDefect]);
 
@@ -645,7 +680,51 @@ export default function DefectForm() {
     if (field === "comment" || field === "actionRequired") triggerAutosave();
   };
 
-  const canSave = isEdit || (!!elevation && !!uidPrefix && !!seqNumber);
+  // Helpers to add custom values to project lists
+  const addCustomElevation = async () => {
+    const val = window.prompt("Custom elevation label (e.g. Podium, Roof):");
+    if (!val || !val.trim()) return;
+    const trimmed = val.trim();
+    try {
+      const elevs: string[] = (() => { try { return JSON.parse((project as any)?.elevations || "[]"); } catch { return []; } })();
+      if (!elevs.includes(trimmed)) { elevs.push(trimmed); }
+      await apiRequest("PATCH", `/api/projects/${projectId}`, { elevations: JSON.stringify(elevs) });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      const codeMap: Record<string, string> = {
+        "North": "N", "South": "S", "East": "E", "West": "W",
+        "North East": "NE", "North West": "NW", "South East": "SE", "South West": "SW",
+      };
+      setElevation(codeMap[trimmed] || trimmed.substring(0, 3).toUpperCase());
+    } catch { toast({ title: "Failed to add custom elevation", variant: "destructive" }); }
+  };
+
+  const addCustomDrop = async () => {
+    const val = window.prompt("Custom drop value (e.g. Podium, Roof, 15):");
+    if (!val || !val.trim()) return;
+    const trimmed = val.trim();
+    try {
+      const drops: string[] = (() => { try { return JSON.parse((project as any)?.customDrops || "[]"); } catch { return []; } })();
+      if (!drops.includes(trimmed)) { drops.push(trimmed); }
+      await apiRequest("PATCH", `/api/projects/${projectId}`, { customDrops: JSON.stringify(drops) });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      setDrop(trimmed);
+    } catch { toast({ title: "Failed to add custom drop", variant: "destructive" }); }
+  };
+
+  const addCustomLevel = async () => {
+    const val = window.prompt("Custom level value (e.g. Basement, Roof, 25):");
+    if (!val || !val.trim()) return;
+    const trimmed = val.trim();
+    try {
+      const levels: string[] = (() => { try { return JSON.parse((project as any)?.customLevels || "[]"); } catch { return []; } })();
+      if (!levels.includes(trimmed)) { levels.push(trimmed); }
+      await apiRequest("PATCH", `/api/projects/${projectId}`, { customLevels: JSON.stringify(levels) });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      setLevel(trimmed);
+    } catch { toast({ title: "Failed to add custom level", variant: "destructive" }); }
+  };
+
+  const canSave = isEdit || !!assembledUid;
   const isComplete = form.status === "complete";
 
   return (
@@ -769,7 +848,7 @@ export default function DefectForm() {
         onSubmit={async (e) => {
           e.preventDefault();
           if (!canSave) {
-            toast({ title: "Fill in Elevation, Drop, Level, and Work Type to generate the defect ID", variant: "destructive" });
+            toast({ title: "Select a Work Type to generate the entry ID", variant: "destructive" });
             return;
           }
           // Cancel any pending autosave — the explicit save covers everything
@@ -780,7 +859,53 @@ export default function DefectForm() {
         }}
         className="space-y-6"
       >
-        {/* Defect ID builder */}
+        {/* Step 1: Work Type Picker (shown for new entries) */}
+        {formStep === "workType" && (
+          <Card className="p-5 space-y-4">
+            <h3 className="text-sm font-medium">Select Work Type</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {allWorkTypes.map((wt) => (
+                <button
+                  key={wt.code}
+                  type="button"
+                  onClick={() => { setWorkType(wt.code); setFormStep("form"); }}
+                  className="flex flex-col items-start p-3 rounded-lg border hover:bg-accent/60 transition-colors text-left"
+                >
+                  <span className="font-mono font-semibold text-sm">{wt.code}</span>
+                  <span className="text-xs text-muted-foreground">{wt.label}</span>
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={async () => {
+                  const code = window.prompt("Work type code (2-3 letters, e.g. MR):");
+                  if (!code || !code.trim()) return;
+                  const label = window.prompt("Work type label (e.g. Masonry Repair):");
+                  if (!label || !label.trim()) return;
+                  const trimCode = code.trim().toUpperCase();
+                  const trimLabel = label.trim();
+                  try {
+                    const existing: { code: string; label: string }[] = (() => {
+                      try { return JSON.parse((project as any)?.customWorkTypes || "[]"); } catch { return []; }
+                    })();
+                    existing.push({ code: trimCode, label: trimLabel });
+                    await apiRequest("PATCH", `/api/projects/${projectId}`, { customWorkTypes: JSON.stringify(existing) });
+                    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+                    setWorkType(trimCode);
+                    setFormStep("form");
+                  } catch { toast({ title: "Failed to add custom work type", variant: "destructive" }); }
+                }}
+                className="flex flex-col items-center justify-center p-3 rounded-lg border border-dashed hover:bg-accent/40 transition-colors"
+              >
+                <Plus className="w-5 h-5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground mt-1">Add Custom</span>
+              </button>
+            </div>
+          </Card>
+        )}
+
+        {/* Step 2: UID builder + full form */}
+        {formStep === "form" && (<>
         <Card className="p-4 space-y-4 bg-accent/30">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">Defect ID</h3>
@@ -796,7 +921,6 @@ export default function DefectForm() {
               <Select
                 value={elevation}
                 onValueChange={setElevation}
-
               >
                 <SelectTrigger className="font-mono" data-testid="select-elevation">
                   <SelectValue placeholder="—" />
@@ -809,59 +933,46 @@ export default function DefectForm() {
                   ))}
                 </SelectContent>
               </Select>
+              <button type="button" onClick={addCustomElevation} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
             </div>
             <div>
               <Label htmlFor="drop" className="text-xs">Drop</Label>
-              <Input
-                id="drop"
-                placeholder="01"
-                value={drop}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "").slice(0, 2);
-                  setDrop(v);
-                }}
-                maxLength={2}
-                required
-
-                className="font-mono text-center"
-                data-testid="input-drop"
-              />
-            </div>
-            <div>
-              <Label htmlFor="level" className="text-xs">Level</Label>
-              <Input
-                id="level"
-                placeholder="13"
-                value={level}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "").slice(0, 2);
-                  setLevel(v);
-                }}
-                maxLength={2}
-                required
-
-                className="font-mono text-center"
-                data-testid="input-level"
-              />
-            </div>
-            <div>
-              <Label htmlFor="workType" className="text-xs">Work Type</Label>
-              <Select
-                value={workType}
-                onValueChange={setWorkType}
-
-              >
-                <SelectTrigger className="font-mono" data-testid="select-work-type">
+              <Select value={drop} onValueChange={setDrop}>
+                <SelectTrigger className="font-mono" data-testid="input-drop">
                   <SelectValue placeholder="—" />
                 </SelectTrigger>
                 <SelectContent>
-                  {WORK_TYPES.map((wt) => (
-                    <SelectItem key={wt.code} value={wt.code}>
-                      {wt.code} — {wt.label}
-                    </SelectItem>
+                  {dropOptions.map((d) => (
+                    <SelectItem key={d} value={d}>{d}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <button type="button" onClick={addCustomDrop} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
+            </div>
+            <div>
+              <Label htmlFor="level" className="text-xs">Level</Label>
+              <Select value={level} onValueChange={setLevel}>
+                <SelectTrigger className="font-mono" data-testid="input-level">
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  {levelOptions.map((l) => (
+                    <SelectItem key={l} value={l}>{l}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <button type="button" onClick={addCustomLevel} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
+            </div>
+            <div>
+              <Label htmlFor="workType" className="text-xs">Work Type</Label>
+              <button
+                type="button"
+                onClick={() => setFormStep("workType")}
+                className="w-full h-9 px-3 rounded-md border bg-background text-left font-mono text-sm hover:bg-accent/40 transition-colors"
+                data-testid="select-work-type"
+              >
+                {workType || "—"}
+              </button>
             </div>
             <div>
               <Label htmlFor="seqNum" className="text-xs">Number</Label>
@@ -874,15 +985,13 @@ export default function DefectForm() {
                   setSeqNumber(v);
                 }}
                 maxLength={2}
-                required
-
                 className="font-mono text-center"
                 data-testid="input-seq-number"
               />
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Format: Elevation-Drop-Level-WorkType-Number. The number auto-suggests but you can change it.
+            All fields optional — empty segments are skipped. The number auto-suggests but you can change it.
           </p>
         </Card>
 
@@ -1404,6 +1513,7 @@ export default function DefectForm() {
           {saveMutation.isPending ? "Saving..." : isEdit ? "Update Defect" : "Save Defect"}
         </Button>
 
+        </>)}
       </form>
     </div>
   );
