@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage, dataDir } from "./storage";
+import { storage, dataDir, getGlobalSettings, addGlobalWorkType } from "./storage";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
@@ -71,6 +71,16 @@ export async function registerRoutes(
     } else {
       res.status(404).json({ message: "File not found" });
     }
+  });
+
+  // === GLOBAL SETTINGS ===
+  app.get("/api/global-settings", async (_req, res) => {
+    res.json(getGlobalSettings());
+  });
+
+  app.post("/api/global-settings/work-types", async (req, res) => {
+    addGlobalWorkType(req.body);
+    res.json({ ok: true });
   });
 
   // === PROJECTS ===

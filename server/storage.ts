@@ -134,6 +134,10 @@ sqlite.exec(`
     created_at TEXT NOT NULL,
     FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE
   );
+  CREATE TABLE IF NOT EXISTS global_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_types TEXT DEFAULT '[]'
+  );
 `);
 
 // Add new columns to existing tables (safe: ALTER TABLE ADD COLUMN IF NOT EXISTS via try/catch)
@@ -151,6 +155,24 @@ safeAddColumn("defects", "report_id", "INTEGER");
 safeAddColumn("defects", "updated_at", "TEXT");
 safeAddColumn("defects", "created_at", "TEXT");
 safeAddColumn("markers", "location_id", "INTEGER");
+safeAddColumn("projects", "enabled_uid_parts", `TEXT DEFAULT '{"elevation":true,"drop":true,"level":true,"workType":true}'`);
+safeAddColumn("projects", "primary_work_types", "TEXT DEFAULT '[]'");
+
+// Seed global_settings with default work types if empty
+{
+  const existing = sqlite.prepare("SELECT id FROM global_settings LIMIT 1").get();
+  if (!existing) {
+    const defaultWorkTypes = [
+      {code:"CR",label:"Concrete Repair"},{code:"CK",label:"Caulking"},{code:"PT",label:"Painting"},
+      {code:"WP",label:"Waterproofing"},{code:"GL",label:"Glazing"},{code:"CL",label:"Cleaning"},
+      {code:"ST",label:"Steelwork"},{code:"SE",label:"Sealant"},{code:"FL",label:"Flashing"},
+      {code:"RR",label:"Render Repair"},{code:"GK",label:"Gasket"},{code:"SR",label:"Steel Repair"},
+      {code:"SM",label:"Steel Removal"},{code:"BR",label:"Brick Repair"},{code:"LR",label:"Lintel Repair"},
+      {code:"SS",label:"Sill Stabilisation"},{code:"GW",label:"General Works"},{code:"OT",label:"Other"},
+    ];
+    sqlite.prepare("INSERT INTO global_settings (work_types) VALUES (?)").run(JSON.stringify(defaultWorkTypes));
+  }
+}
 
 // Migration: for existing defects without reportId, create a default "Report 1" for each project
 {
@@ -522,6 +544,20 @@ export class DatabaseStorage implements IStorage {
     // Unlink any markers referencing this location
     sqlite.prepare(`UPDATE markers SET location_id = NULL WHERE location_id = ?`).run(id);
     db.delete(defectLocations).where(eq(defectLocations.id, id)).run();
+  }
+}
+
+// Global settings helpers (raw SQL — single-row table)
+export function getGlobalSettings(): { workTypes: { code: string; label: string }[] } {
+  const row = sqlite.prepare("SELECT work_types FROM global_settings LIMIT 1").get() as any;
+  return { workTypes: row ? JSON.parse(row.work_types) : [] };
+}
+
+export function addGlobalWorkType(wt: { code: string; label: string }): void {
+  const current = getGlobalSettings().workTypes;
+  if (!current.find((w: any) => w.code === wt.code)) {
+    current.push(wt);
+    sqlite.prepare("UPDATE global_settings SET work_types = ? WHERE id = (SELECT id FROM global_settings LIMIT 1)").run(JSON.stringify(current));
   }
 }
 

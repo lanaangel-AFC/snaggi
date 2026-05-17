@@ -9,8 +9,10 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, X, Building2, MapPin, User, Calendar, ChevronRight, Trash2 } from "lucide-react";
 import type { Project } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -20,26 +22,60 @@ const STANDARD_ELEVATIONS = [
 export default function ProjectList() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", address: "", client: "", inspector: "", afcReference: "", elevations: "[]" });
+  const [form, setForm] = useState({
+    name: "", address: "", client: "", inspector: "", afcReference: "",
+    elevations: "[]",
+    enabledUidParts: '{"elevation":true,"drop":true,"level":true,"workType":true}',
+    primaryWorkTypes: "[]",
+    customDrops: "[]",
+    customLevels: "[]",
+  });
   const [customElevation, setCustomElevation] = useState("");
+  const [dropPreFill, setDropPreFill] = useState("");
+  const [levelPreFill, setLevelPreFill] = useState("");
 
   const { data: projects, isLoading } = useQuery<Project[]>({
     queryKey: ["/api/projects"],
   });
 
+  const { data: globalSettings } = useQuery<{ workTypes: { code: string; label: string }[] }>({
+    queryKey: ["/api/global-settings"],
+  });
+
+  const enabledParts = useMemo(() => {
+    try { return JSON.parse(form.enabledUidParts); } catch { return { elevation: true, drop: true, level: true, workType: true }; }
+  }, [form.enabledUidParts]);
+
+  const selectedWorkTypes: string[] = useMemo(() => {
+    try { return JSON.parse(form.primaryWorkTypes); } catch { return []; }
+  }, [form.primaryWorkTypes]);
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const res = await apiRequest("POST", "/api/projects", {
-        ...data,
+      const body: any = {
+        name: data.name, address: data.address, client: data.client,
+        inspector: data.inspector, afcReference: data.afcReference,
+        elevations: data.elevations,
+        enabledUidParts: data.enabledUidParts,
+        primaryWorkTypes: data.primaryWorkTypes,
+        customDrops: data.customDrops,
+        customLevels: data.customLevels,
         createdAt: new Date().toISOString(),
-      });
+      };
+      const res = await apiRequest("POST", "/api/projects", body);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       setOpen(false);
-      setForm({ name: "", address: "", client: "", inspector: "", afcReference: "", elevations: "[]" });
+      setForm({
+        name: "", address: "", client: "", inspector: "", afcReference: "",
+        elevations: "[]", enabledUidParts: '{"elevation":true,"drop":true,"level":true,"workType":true}',
+        primaryWorkTypes: "[]", customDrops: "[]", customLevels: "[]",
+      });
       setCustomElevation("");
+      setDropPreFill("");
+      setLevelPreFill("");
       toast({ title: "Project created" });
     },
   });
@@ -53,6 +89,18 @@ export default function ProjectList() {
       toast({ title: "Project deleted" });
     },
   });
+
+  const toggleUidPart = (part: string) => {
+    const p = { ...enabledParts, [part]: !enabledParts[part] };
+    setForm({ ...form, enabledUidParts: JSON.stringify(p) });
+  };
+
+  const toggleWorkType = (code: string) => {
+    const sel = [...selectedWorkTypes];
+    const idx = sel.indexOf(code);
+    if (idx >= 0) sel.splice(idx, 1); else sel.push(code);
+    setForm({ ...form, primaryWorkTypes: JSON.stringify(sel) });
+  };
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -70,71 +118,46 @@ export default function ProjectList() {
               New Project
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>New Project</DialogTitle>
             </DialogHeader>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                createMutation.mutate(form);
+                // Parse pre-fill values into JSON arrays before submitting
+                const finalForm = { ...form };
+                if (dropPreFill.trim()) {
+                  finalForm.customDrops = JSON.stringify(dropPreFill.split(",").map(s => s.trim()).filter(Boolean));
+                }
+                if (levelPreFill.trim()) {
+                  finalForm.customLevels = JSON.stringify(levelPreFill.split(",").map(s => s.trim()).filter(Boolean));
+                }
+                createMutation.mutate(finalForm);
               }}
               className="space-y-4"
             >
               <div>
                 <Label htmlFor="name">Project Name</Label>
-                <Input
-                  id="name"
-                  placeholder="e.g. 123 George St — Facade Repair"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  required
-                  data-testid="input-project-name"
-                />
+                <Input id="name" placeholder="e.g. 123 George St — Facade Repair" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required data-testid="input-project-name" />
               </div>
               <div>
                 <Label htmlFor="address">Site Address</Label>
-                <Input
-                  id="address"
-                  placeholder="123 George St, Sydney NSW 2000"
-                  value={form.address}
-                  onChange={(e) => setForm({ ...form, address: e.target.value })}
-                  required
-                  data-testid="input-project-address"
-                />
+                <Input id="address" placeholder="123 George St, Sydney NSW 2000" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} required data-testid="input-project-address" />
               </div>
               <div>
                 <Label htmlFor="client">Client</Label>
-                <Input
-                  id="client"
-                  placeholder="Client name"
-                  value={form.client}
-                  onChange={(e) => setForm({ ...form, client: e.target.value })}
-                  required
-                  data-testid="input-project-client"
-                />
+                <Input id="client" placeholder="Client name" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} required data-testid="input-project-client" />
               </div>
               <div>
                 <Label htmlFor="inspector">Inspector</Label>
-                <Input
-                  id="inspector"
-                  placeholder="Your name"
-                  value={form.inspector}
-                  onChange={(e) => setForm({ ...form, inspector: e.target.value })}
-                  required
-                  data-testid="input-project-inspector"
-                />
+                <Input id="inspector" placeholder="Your name" value={form.inspector} onChange={(e) => setForm({ ...form, inspector: e.target.value })} required data-testid="input-project-inspector" />
               </div>
               <div>
                 <Label htmlFor="afcReference">AFC Reference</Label>
-                <Input
-                  id="afcReference"
-                  placeholder="AFC-24XXX"
-                  value={form.afcReference}
-                  onChange={(e) => setForm({ ...form, afcReference: e.target.value })}
-                  data-testid="input-project-afc-reference"
-                />
+                <Input id="afcReference" placeholder="AFC-24XXX" value={form.afcReference} onChange={(e) => setForm({ ...form, afcReference: e.target.value })} data-testid="input-project-afc-reference" />
               </div>
+
               {/* Elevations picker */}
               <div>
                 <Label className="mb-2 block">Elevations</Label>
@@ -145,25 +168,16 @@ export default function ProjectList() {
                     const isChecked = selected.includes(elev);
                     return (
                       <label key={elev} className="flex items-center gap-2 text-sm cursor-pointer">
-                        <Checkbox
-                          checked={isChecked}
-                          onCheckedChange={(checked) => {
-                            const sel: string[] = JSON.parse(form.elevations);
-                            if (checked) {
-                              sel.push(elev);
-                            } else {
-                              const idx = sel.indexOf(elev);
-                              if (idx !== -1) sel.splice(idx, 1);
-                            }
-                            setForm({ ...form, elevations: JSON.stringify(sel) });
-                          }}
-                        />
+                        <Checkbox checked={isChecked} onCheckedChange={(checked) => {
+                          const sel: string[] = JSON.parse(form.elevations);
+                          if (checked) sel.push(elev); else { const idx = sel.indexOf(elev); if (idx !== -1) sel.splice(idx, 1); }
+                          setForm({ ...form, elevations: JSON.stringify(sel) });
+                        }} />
                         {elev}
                       </label>
                     );
                   })}
                 </div>
-                {/* Custom elevations */}
                 {(() => {
                   const selected: string[] = JSON.parse(form.elevations);
                   const custom = selected.filter((e) => !STANDARD_ELEVATIONS.includes(e));
@@ -172,58 +186,81 @@ export default function ProjectList() {
                       {custom.map((c) => (
                         <span key={c} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs">
                           {c}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const sel: string[] = JSON.parse(form.elevations);
-                              setForm({ ...form, elevations: JSON.stringify(sel.filter((e) => e !== c)) });
-                            }}
-                            className="text-muted-foreground hover:text-destructive"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
+                          <button type="button" onClick={() => {
+                            const sel: string[] = JSON.parse(form.elevations);
+                            setForm({ ...form, elevations: JSON.stringify(sel.filter((e) => e !== c)) });
+                          }} className="text-muted-foreground hover:text-destructive"><X className="w-3 h-3" /></button>
                         </span>
                       ))}
                     </div>
                   ) : null;
                 })()}
                 <div className="flex gap-2 mt-2">
-                  <Input
-                    placeholder="Add custom elevation..."
-                    value={customElevation}
-                    onChange={(e) => setCustomElevation(e.target.value)}
+                  <Input placeholder="Add custom elevation..." value={customElevation} onChange={(e) => setCustomElevation(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && customElevation.trim()) {
                         e.preventDefault();
                         const sel: string[] = JSON.parse(form.elevations);
-                        if (!sel.includes(customElevation.trim())) {
-                          sel.push(customElevation.trim());
-                          setForm({ ...form, elevations: JSON.stringify(sel) });
-                        }
+                        if (!sel.includes(customElevation.trim())) { sel.push(customElevation.trim()); setForm({ ...form, elevations: JSON.stringify(sel) }); }
                         setCustomElevation("");
                       }
                     }}
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={() => {
-                      if (customElevation.trim()) {
-                        const sel: string[] = JSON.parse(form.elevations);
-                        if (!sel.includes(customElevation.trim())) {
-                          sel.push(customElevation.trim());
-                          setForm({ ...form, elevations: JSON.stringify(sel) });
-                        }
-                        setCustomElevation("");
-                      }
-                    }}
-                  >
-                    <Plus className="w-4 h-4" />
-                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => {
+                    if (customElevation.trim()) {
+                      const sel: string[] = JSON.parse(form.elevations);
+                      if (!sel.includes(customElevation.trim())) { sel.push(customElevation.trim()); setForm({ ...form, elevations: JSON.stringify(sel) }); }
+                      setCustomElevation("");
+                    }
+                  }}><Plus className="w-4 h-4" /></Button>
                 </div>
               </div>
+
+              {/* UID Parameters */}
+              <div>
+                <Label className="mb-2 block">UID Parameters</Label>
+                <p className="text-xs text-muted-foreground mb-2">Choose which fields appear in the defect ID</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={enabledParts.elevation} onCheckedChange={() => toggleUidPart("elevation")} />
+                    Elevation
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={enabledParts.drop} onCheckedChange={() => toggleUidPart("drop")} />
+                    Drop
+                  </label>
+                  {enabledParts.drop && (
+                    <Input placeholder="Pre-fill drops (comma-separated, e.g. 01,02,03)" value={dropPreFill} onChange={(e) => setDropPreFill(e.target.value)} className="ml-6 text-xs h-8" />
+                  )}
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={true} disabled />
+                    Level <span className="text-xs text-muted-foreground">(always on)</span>
+                  </label>
+                  <Input placeholder="Pre-fill levels (comma-separated, e.g. 01,02,03)" value={levelPreFill} onChange={(e) => setLevelPreFill(e.target.value)} className="ml-6 text-xs h-8" />
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={enabledParts.workType} onCheckedChange={() => toggleUidPart("workType")} />
+                    Work Type
+                  </label>
+                </div>
+              </div>
+
+              {/* Work Items */}
+              {enabledParts.workType && globalSettings && (
+                <div>
+                  <Label className="mb-2 block">Work Items</Label>
+                  <p className="text-xs text-muted-foreground mb-2">Select work types for this project</p>
+                  <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+                    {globalSettings.workTypes.map((wt) => (
+                      <label key={wt.code} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={selectedWorkTypes.includes(wt.code)} onCheckedChange={() => toggleWorkType(wt.code)} />
+                        <span className="font-mono text-xs">{wt.code}</span>
+                        <span className="text-xs text-muted-foreground truncate">{wt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <Button type="submit" className="w-full" disabled={createMutation.isPending} data-testid="button-submit-project">
                 {createMutation.isPending ? "Creating..." : "Create Project"}
               </Button>

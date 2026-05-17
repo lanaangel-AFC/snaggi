@@ -13,7 +13,14 @@ export const projects = sqliteTable("projects", {
   customDrops: text("custom_drops").default("[]"), // JSON array of strings
   customLevels: text("custom_levels").default("[]"), // JSON array of strings
   customWorkTypes: text("custom_work_types").default("[]"), // JSON array of {code, label}
+  enabledUidParts: text("enabled_uid_parts").default('{"elevation":true,"drop":true,"level":true,"workType":true}'),
+  primaryWorkTypes: text("primary_work_types").default("[]"), // JSON array of codes
   createdAt: text("created_at").notNull(),
+});
+
+export const globalSettings = sqliteTable("global_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  workTypes: text("work_types").default("[]"), // JSON array of {code, label}
 });
 
 export const reports = sqliteTable("reports", {

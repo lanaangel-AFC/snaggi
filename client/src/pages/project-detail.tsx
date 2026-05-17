@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Report, Defect, Elevation } from "@shared/schema";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -54,6 +54,18 @@ export default function ProjectDetail() {
     queryKey: [`/api/projects/${id}/elevations`],
   });
 
+  const { data: globalSettings } = useQuery<{ workTypes: { code: string; label: string }[] }>({
+    queryKey: ["/api/global-settings"],
+  });
+
+  const editEnabledParts = useMemo(() => {
+    try { return JSON.parse(editForm.enabledUidParts || '{}'); } catch { return { elevation: true, drop: true, level: true, workType: true }; }
+  }, [editForm.enabledUidParts]);
+
+  const editSelectedWorkTypes: string[] = useMemo(() => {
+    try { return JSON.parse(editForm.primaryWorkTypes || '[]'); } catch { return []; }
+  }, [editForm.primaryWorkTypes]);
+
   const openEditDialog = () => {
     if (!project) return;
     setEditForm({
@@ -63,9 +75,23 @@ export default function ProjectDetail() {
       inspector: project.inspector,
       afcReference: (project as any).afcReference || "",
       elevations: (project as any).elevations || "[]",
+      enabledUidParts: (project as any).enabledUidParts || '{"elevation":true,"drop":true,"level":true,"workType":true}',
+      primaryWorkTypes: (project as any).primaryWorkTypes || "[]",
     });
     setCustomElevation("");
     setEditOpen(true);
+  };
+
+  const toggleEditUidPart = (part: string) => {
+    const p = { ...editEnabledParts, [part]: !editEnabledParts[part] };
+    setEditForm({ ...editForm, enabledUidParts: JSON.stringify(p) });
+  };
+
+  const toggleEditWorkType = (code: string) => {
+    const sel = [...editSelectedWorkTypes];
+    const idx = sel.indexOf(code);
+    if (idx >= 0) sel.splice(idx, 1); else sel.push(code);
+    setEditForm({ ...editForm, primaryWorkTypes: JSON.stringify(sel) });
   };
 
   const updateProjectMutation = useMutation({
@@ -300,6 +326,47 @@ export default function ProjectDetail() {
                   }}><Plus className="w-4 h-4" /></Button>
                 </div>
               </div>
+              {/* UID Parameters */}
+              <div>
+                <Label className="mb-2 block">UID Parameters</Label>
+                <p className="text-xs text-muted-foreground mb-2">Choose which fields appear in the defect ID</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={editEnabledParts.elevation} onCheckedChange={() => toggleEditUidPart("elevation")} />
+                    Elevation
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={editEnabledParts.drop} onCheckedChange={() => toggleEditUidPart("drop")} />
+                    Drop
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={true} disabled />
+                    Level <span className="text-xs text-muted-foreground">(always on)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={editEnabledParts.workType} onCheckedChange={() => toggleEditUidPart("workType")} />
+                    Work Type
+                  </label>
+                </div>
+              </div>
+
+              {/* Work Items */}
+              {editEnabledParts.workType && globalSettings && (
+                <div>
+                  <Label className="mb-2 block">Work Items</Label>
+                  <p className="text-xs text-muted-foreground mb-2">Select work types for this project</p>
+                  <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+                    {globalSettings.workTypes.map((wt) => (
+                      <label key={wt.code} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox checked={editSelectedWorkTypes.includes(wt.code)} onCheckedChange={() => toggleEditWorkType(wt.code)} />
+                        <span className="font-mono text-xs">{wt.code}</span>
+                        <span className="text-xs text-muted-foreground truncate">{wt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <Button type="submit" className="w-full" disabled={updateProjectMutation.isPending}>
                 {updateProjectMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>

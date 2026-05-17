@@ -90,6 +90,7 @@ export default function DefectForm() {
 
   // Two-step flow: Step 1 = pick work type, Step 2 = full form
   const [formStep, setFormStep] = useState<"workType" | "form">(isEdit ? "form" : "workType");
+  const [showOtherWorkTypes, setShowOtherWorkTypes] = useState(false);
 
   const [form, setForm] = useState({
     dateOpened: new Date().toISOString().split("T")[0],
@@ -114,6 +115,28 @@ export default function DefectForm() {
     queryKey: ["/api/reports", reportId],
     enabled: !!reportId,
   });
+
+  const { data: globalSettings } = useQuery<{ workTypes: { code: string; label: string }[] }>({
+    queryKey: ["/api/global-settings"],
+  });
+
+  const enabledUidParts = useMemo(() => {
+    try { return JSON.parse((project as any)?.enabledUidParts || '{}'); } catch { return { elevation: true, drop: true, level: true, workType: true }; }
+  }, [(project as any)?.enabledUidParts]);
+
+  const primaryWorkTypeCodes: string[] = useMemo(() => {
+    try { return JSON.parse((project as any)?.primaryWorkTypes || '[]'); } catch { return []; }
+  }, [(project as any)?.primaryWorkTypes]);
+
+  // Skip work type step if workType is disabled in UID parts
+  useEffect(() => {
+    if (!isEdit && formStep === "workType" && project) {
+      try {
+        const parts = JSON.parse((project as any)?.enabledUidParts || '{}');
+        if (parts.workType === false) setFormStep("form");
+      } catch {}
+    }
+  }, [project, isEdit, formStep]);
 
   // Build elevation options — prefer report-level, fall back to project-level
   const elevationOptions = useMemo(() => {
@@ -863,44 +886,114 @@ export default function DefectForm() {
         {formStep === "workType" && (
           <Card className="p-5 space-y-4">
             <h3 className="text-sm font-medium">Select Work Type</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {allWorkTypes.map((wt) => (
-                <button
-                  key={wt.code}
-                  type="button"
-                  onClick={() => { setWorkType(wt.code); setFormStep("form"); }}
-                  className="flex flex-col items-start p-3 rounded-lg border hover:bg-accent/60 transition-colors text-left"
-                >
-                  <span className="font-mono font-semibold text-sm">{wt.code}</span>
-                  <span className="text-xs text-muted-foreground">{wt.label}</span>
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={async () => {
-                  const code = window.prompt("Work type code (2-3 letters, e.g. MR):");
-                  if (!code || !code.trim()) return;
-                  const label = window.prompt("Work type label (e.g. Masonry Repair):");
-                  if (!label || !label.trim()) return;
-                  const trimCode = code.trim().toUpperCase();
-                  const trimLabel = label.trim();
-                  try {
-                    const existing: { code: string; label: string }[] = (() => {
-                      try { return JSON.parse((project as any)?.customWorkTypes || "[]"); } catch { return []; }
-                    })();
-                    existing.push({ code: trimCode, label: trimLabel });
-                    await apiRequest("PATCH", `/api/projects/${projectId}`, { customWorkTypes: JSON.stringify(existing) });
-                    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-                    setWorkType(trimCode);
-                    setFormStep("form");
-                  } catch { toast({ title: "Failed to add custom work type", variant: "destructive" }); }
-                }}
-                className="flex flex-col items-center justify-center p-3 rounded-lg border border-dashed hover:bg-accent/40 transition-colors"
-              >
-                <Plus className="w-5 h-5 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground mt-1">Add Custom</span>
-              </button>
-            </div>
+            {(() => {
+              const globalWts = globalSettings?.workTypes || [];
+              const primaryWts = primaryWorkTypeCodes.length > 0
+                ? primaryWorkTypeCodes.map((code) => globalWts.find((wt) => wt.code === code) || { code, label: code }).filter(Boolean)
+                : allWorkTypes;
+              const otherWts = globalWts.filter((wt) => !primaryWorkTypeCodes.includes(wt.code));
+              const customProjectWts: { code: string; label: string }[] = (() => {
+                try { return JSON.parse((project as any)?.customWorkTypes || "[]"); } catch { return []; }
+              })();
+
+              return (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {primaryWts.map((wt) => (
+                      <button
+                        key={wt.code}
+                        type="button"
+                        onClick={() => { setWorkType(wt.code); setShowOtherWorkTypes(false); setFormStep("form"); }}
+                        className="flex flex-col items-start p-3 rounded-lg border hover:bg-accent/60 transition-colors text-left"
+                      >
+                        <span className="font-mono font-semibold text-sm">{wt.code}</span>
+                        <span className="text-xs text-muted-foreground">{wt.label}</span>
+                      </button>
+                    ))}
+                    {customProjectWts.map((wt) => (
+                      <button
+                        key={wt.code}
+                        type="button"
+                        onClick={() => { setWorkType(wt.code); setShowOtherWorkTypes(false); setFormStep("form"); }}
+                        className="flex flex-col items-start p-3 rounded-lg border hover:bg-accent/60 transition-colors text-left"
+                      >
+                        <span className="font-mono font-semibold text-sm">{wt.code}</span>
+                        <span className="text-xs text-muted-foreground">{wt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {primaryWorkTypeCodes.length > 0 && otherWts.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowOtherWorkTypes(!showOtherWorkTypes)}
+                        className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                      >
+                        {showOtherWorkTypes ? "Hide other work types" : `Other (${otherWts.length} more)`}
+                      </button>
+                      {showOtherWorkTypes && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {otherWts.map((wt) => (
+                            <button
+                              key={wt.code}
+                              type="button"
+                              onClick={() => {
+                                setWorkType(wt.code);
+                                setShowOtherWorkTypes(false);
+                                setFormStep("form");
+                                if (window.confirm(`Add "${wt.code} — ${wt.label}" to this project's primary work types?`)) {
+                                  const updated = [...primaryWorkTypeCodes, wt.code];
+                                  apiRequest("PATCH", `/api/projects/${projectId}`, { primaryWorkTypes: JSON.stringify(updated) })
+                                    .then(() => queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] }));
+                                }
+                              }}
+                              className="flex flex-col items-start p-3 rounded-lg border hover:bg-accent/60 transition-colors text-left opacity-80"
+                            >
+                              <span className="font-mono font-semibold text-sm">{wt.code}</span>
+                              <span className="text-xs text-muted-foreground">{wt.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const code = window.prompt("Work type code (2-3 characters):");
+                      if (!code || code.trim().length < 2) return;
+                      const label = window.prompt("Work type label:");
+                      if (!label || !label.trim()) return;
+                      const trimCode = code.trim().toUpperCase().slice(0, 3);
+                      const trimLabel = label.trim();
+                      try {
+                        const existing: { code: string; label: string }[] = (() => {
+                          try { return JSON.parse((project as any)?.customWorkTypes || "[]"); } catch { return []; }
+                        })();
+                        existing.push({ code: trimCode, label: trimLabel });
+                        await apiRequest("PATCH", `/api/projects/${projectId}`, { customWorkTypes: JSON.stringify(existing) });
+                        queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+                        if (window.confirm(`Also add "${trimCode} — ${trimLabel}" to the global work types list?`)) {
+                          await apiRequest("POST", "/api/global-settings/work-types", { code: trimCode, label: trimLabel });
+                          queryClient.invalidateQueries({ queryKey: ["/api/global-settings"] });
+                        }
+                        setWorkType(trimCode);
+                        setShowOtherWorkTypes(false);
+                        setFormStep("form");
+                      } catch {
+                        toast({ title: "Failed to add custom work type", variant: "destructive" });
+                      }
+                    }}
+                    className="flex items-center gap-2 p-3 rounded-lg border border-dashed hover:bg-accent/40 transition-colors w-full text-left"
+                  >
+                    <Plus className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">Add Custom Work Type</span>
+                  </button>
+                </>
+              );
+            })()}
           </Card>
         )}
 
@@ -916,6 +1009,7 @@ export default function DefectForm() {
             )}
           </div>
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+            {enabledUidParts.elevation !== false && (
             <div>
               <Label htmlFor="elevation" className="text-xs">Elevation</Label>
               <Select
@@ -935,6 +1029,8 @@ export default function DefectForm() {
               </Select>
               <button type="button" onClick={addCustomElevation} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
             </div>
+            )}
+            {enabledUidParts.drop !== false && (
             <div>
               <Label htmlFor="drop" className="text-xs">Drop</Label>
               <Select value={drop} onValueChange={setDrop}>
@@ -949,6 +1045,7 @@ export default function DefectForm() {
               </Select>
               <button type="button" onClick={addCustomDrop} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
             </div>
+            )}
             <div>
               <Label htmlFor="level" className="text-xs">Level</Label>
               <Select value={level} onValueChange={setLevel}>
@@ -963,6 +1060,7 @@ export default function DefectForm() {
               </Select>
               <button type="button" onClick={addCustomLevel} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
             </div>
+            {enabledUidParts.workType !== false && (
             <div>
               <Label htmlFor="workType" className="text-xs">Work Type</Label>
               <button
@@ -974,6 +1072,7 @@ export default function DefectForm() {
                 {workType || "—"}
               </button>
             </div>
+            )}
             <div>
               <Label htmlFor="seqNum" className="text-xs">Number</Label>
               <Input
