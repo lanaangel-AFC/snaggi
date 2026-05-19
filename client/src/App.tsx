@@ -10,6 +10,7 @@ import ProjectDetail from "@/pages/project-detail";
 import ReportDetail from "@/pages/report-detail";
 import DefectForm from "@/pages/defect-form";
 import AnnotationCanvas from "@/pages/annotation-canvas";
+import SharedReport from "@/pages/shared-report";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 
 function AppRouter() {
@@ -22,6 +23,7 @@ function AppRouter() {
       <Route path="/projects/:projectId/reports/:reportId/defects/new-observation" component={DefectForm} />
       <Route path="/projects/:projectId/reports/:reportId/defects/:defectId" component={DefectForm} />
       <Route path="/projects/:projectId/elevations/:elevationId" component={AnnotationCanvas} />
+      <Route path="/share/:token" component={SharedReport} />
       <Route component={NotFound} />
     </Switch>
   );

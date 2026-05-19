@@ -9,6 +9,7 @@ import {
   type ObservationHistory, type InsertObservationHistory, observationHistory,
   type ActionHistory, type InsertActionHistory, actionHistory,
   type DefectLocation, type InsertDefectLocation, defectLocations,
+  type ShareLink, type InsertShareLink, shareLinks,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -137,6 +138,13 @@ sqlite.exec(`
   CREATE TABLE IF NOT EXISTS global_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     work_types TEXT DEFAULT '[]'
+  );
+  CREATE TABLE IF NOT EXISTS share_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    report_id INTEGER NOT NULL,
+    recipient_name TEXT DEFAULT '',
+    created_at TEXT NOT NULL
   );
 `);
 
@@ -544,6 +552,20 @@ export class DatabaseStorage implements IStorage {
     // Unlink any markers referencing this location
     sqlite.prepare(`UPDATE markers SET location_id = NULL WHERE location_id = ?`).run(id);
     db.delete(defectLocations).where(eq(defectLocations.id, id)).run();
+  }
+
+  // Share Links
+  async createShareLink(data: InsertShareLink): Promise<ShareLink> {
+    return db.insert(shareLinks).values(data).returning().get();
+  }
+  async getShareLinkByToken(token: string): Promise<ShareLink | undefined> {
+    return db.select().from(shareLinks).where(eq(shareLinks.token, token)).get();
+  }
+  async getShareLinksByReport(reportId: number): Promise<ShareLink[]> {
+    return db.select().from(shareLinks).where(eq(shareLinks.reportId, reportId)).all();
+  }
+  async deleteShareLink(id: number): Promise<void> {
+    db.delete(shareLinks).where(eq(shareLinks.id, id)).run();
   }
 }
 

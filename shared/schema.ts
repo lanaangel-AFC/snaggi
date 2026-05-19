@@ -63,11 +63,20 @@ export const photos = sqliteTable("photos", {
   createdAt: text("created_at").notNull(),
 });
 
+export const shareLinks = sqliteTable("share_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  token: text("token").notNull().unique(),
+  reportId: integer("report_id").notNull(),
+  recipientName: text("recipient_name").default(""),
+  createdAt: text("created_at").notNull(),
+});
+
 // Insert schemas
 export const insertProjectSchema = createInsertSchema(projects).omit({ id: true });
 export const insertReportSchema = createInsertSchema(reports).omit({ id: true });
 export const insertDefectSchema = createInsertSchema(defects).omit({ id: true });
 export const insertPhotoSchema = createInsertSchema(photos).omit({ id: true });
+export const insertShareLinkSchema = createInsertSchema(shareLinks).omit({ id: true });
 
 // Types
 export type InsertProject = z.infer<typeof insertProjectSchema>;
@@ -78,6 +87,8 @@ export type InsertDefect = z.infer<typeof insertDefectSchema>;
 export type Defect = typeof defects.$inferSelect;
 export type InsertPhoto = z.infer<typeof insertPhotoSchema>;
 export type Photo = typeof photos.$inferSelect;
+export type ShareLink = typeof shareLinks.$inferSelect;
+export type InsertShareLink = z.infer<typeof insertShareLinkSchema>;
 
 // Elevations (uploaded PDF/image drawings for annotation)
 export const elevations = sqliteTable("elevations", {

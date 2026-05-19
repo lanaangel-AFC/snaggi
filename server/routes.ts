@@ -570,5 +570,66 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
+  // ==================== SHARE LINKS ====================
+  app.post("/api/reports/:reportId/share-links", async (req, res) => {
+    const { randomBytes } = await import("crypto");
+    const token = randomBytes(24).toString("hex");
+    const link = await storage.createShareLink({
+      token,
+      reportId: Number(req.params.reportId),
+      recipientName: req.body.recipientName || "",
+      createdAt: new Date().toISOString(),
+    });
+    res.status(201).json(link);
+  });
+
+  app.get("/api/reports/:reportId/share-links", async (req, res) => {
+    const links = await storage.getShareLinksByReport(Number(req.params.reportId));
+    res.json(links);
+  });
+
+  app.delete("/api/share-links/:id", async (req, res) => {
+    await storage.deleteShareLink(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // PUBLIC: read-only shared report
+  app.get("/api/share/:token", async (req, res) => {
+    const link = await storage.getShareLinkByToken(req.params.token);
+    if (!link) return res.status(404).json({ message: "Share link not found" });
+    const report = await storage.getReport(link.reportId);
+    if (!report) return res.status(404).json({ message: "Report not found" });
+    const project = await storage.getProject(report.projectId);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const reportDefects = await storage.getDefectsByReport(report.id);
+    const defectsWithPhotos = await Promise.all(reportDefects.map(async (d) => {
+      const photos = await storage.getPhotosByDefect(d.id);
+      return { ...d, photos };
+    }));
+    res.json({
+      recipientName: link.recipientName,
+      sharedAt: link.createdAt,
+      project: { name: project.name, address: project.address, client: project.client, inspector: project.inspector, afcReference: (project as any).afcReference },
+      report,
+      defects: defectsWithPhotos,
+    });
+  });
+
+  // PUBLIC: photos via share token
+  app.get("/api/share/:token/photo/:filename", async (req, res) => {
+    const link = await storage.getShareLinkByToken(req.params.token);
+    if (!link) return res.status(404).send("Not found");
+    const defects = await storage.getDefectsByReport(link.reportId);
+    const photoFilenames = new Set<string>();
+    for (const d of defects) {
+      const photos = await storage.getPhotosByDefect(d.id);
+      photos.forEach((p) => photoFilenames.add(p.filename));
+    }
+    if (!photoFilenames.has(req.params.filename)) return res.status(404).send("Not found");
+    const filePath = path.join(uploadDir, req.params.filename);
+    if (!fs.existsSync(filePath)) return res.status(404).send("Not found");
+    res.sendFile(filePath);
+  });
+
   return httpServer;
 }

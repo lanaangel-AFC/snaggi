@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
-  ChevronDown, FileDown, Eye, Settings, X, ImageDown
+  ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -203,6 +203,9 @@ export default function ReportDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [customElevation, setCustomElevation] = useState("");
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareRecipient, setShareRecipient] = useState("");
+  const [generatedLink, setGeneratedLink] = useState("");
 
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -249,6 +252,32 @@ export default function ReportDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
       toast({ title: "Defect deleted" });
+    },
+  });
+
+  const { data: shareLinks } = useQuery<any[]>({
+    queryKey: [`/api/reports/${reportId}/share-links`],
+  });
+
+  const createShareLinkMutation = useMutation({
+    mutationFn: async (recipientName: string) => {
+      const res = await apiRequest("POST", `/api/reports/${reportId}/share-links`, { recipientName });
+      return res.json();
+    },
+    onSuccess: (link: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/share-links`] });
+      const url = `${window.location.origin}${window.location.pathname}#/share/${link.token}`;
+      setGeneratedLink(url);
+    },
+  });
+
+  const deleteShareLinkMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/share-links/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/share-links`] });
+      toast({ title: "Share link revoked" });
     },
   });
 
@@ -1921,6 +1950,70 @@ export default function ReportDetail() {
             </form>
           </DialogContent>
         </Dialog>
+
+        <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Share Report</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {!generatedLink ? (
+                <>
+                  <div>
+                    <Label>Recipient Name</Label>
+                    <Input
+                      placeholder="e.g. Client Name"
+                      value={shareRecipient}
+                      onChange={(e) => setShareRecipient(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Shown in the watermark banner on the shared report.</p>
+                  </div>
+                  <Button
+                    className="w-full"
+                    disabled={createShareLinkMutation.isPending}
+                    onClick={() => createShareLinkMutation.mutate(shareRecipient)}
+                  >
+                    <Link className="w-4 h-4 mr-2" />
+                    {createShareLinkMutation.isPending ? "Generating..." : "Generate Share Link"}
+                  </Button>
+                </>
+              ) : (
+                <div>
+                  <Label>Share Link</Label>
+                  <div className="flex gap-2 mt-1">
+                    <Input readOnly value={generatedLink} className="text-xs" />
+                    <Button variant="outline" size="icon" className="shrink-0" onClick={() => {
+                      navigator.clipboard.writeText(generatedLink);
+                      toast({ title: "Link copied to clipboard" });
+                    }}>
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">Anyone with this link can view a read-only version of this report.</p>
+                  <Button variant="outline" className="w-full mt-3" onClick={() => setGeneratedLink("")}>
+                    Generate Another Link
+                  </Button>
+                </div>
+              )}
+
+              {shareLinks && shareLinks.length > 0 && (
+                <div className="border-t pt-3">
+                  <Label className="text-xs text-muted-foreground">Active Share Links</Label>
+                  <div className="space-y-2 mt-2">
+                    {shareLinks.map((link: any) => (
+                      <div key={link.id} className="flex items-center justify-between text-sm">
+                        <span>{link.recipientName || "No name"} <span className="text-xs text-muted-foreground">— {new Date(link.createdAt).toLocaleDateString()}</span></span>
+                        <Button variant="ghost" size="sm" className="text-destructive h-7" onClick={() => deleteShareLinkMutation.mutate(link.id)}>
+                          Revoke
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Stats */}
@@ -1992,6 +2085,11 @@ export default function ReportDetail() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <Button variant="outline" onClick={() => { setShareRecipient(""); setGeneratedLink(""); setShareOpen(true); }}>
+          <Share2 className="w-4 h-4 mr-2" />
+          Share
+        </Button>
       </div>
 
       {defectsLoading ? (
