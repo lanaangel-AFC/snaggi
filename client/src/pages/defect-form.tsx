@@ -1177,25 +1177,27 @@ export default function DefectForm() {
                         {entry.reportName} — {formatHistoryDate(entry.reportDate)}
                       </span>
                       <div className="flex gap-1">
-                        <button
+                        <Button
                           type="button"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => { setForm((prev) => ({ ...prev, comment: entry.text })); triggerAutosave(); }}
-                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
                           title="Copy this text as the current observation"
                         >
                           <Copy className="w-3 h-3" /> Still applicable
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => {
                             setForm((prev) => ({ ...prev, comment: "" }));
                             commentRef.current?.focus();
                           }}
-                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
                           title="Clear the field and write a new observation"
                         >
-                          <PenLine className="w-3 h-3" /> Add new
-                        </button>
+                          <PenLine className="w-3 h-3" /> New observation
+                        </Button>
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground whitespace-pre-wrap">{entry.text}</p>
@@ -1257,25 +1259,27 @@ export default function DefectForm() {
                         {entry.reportName} — {formatHistoryDate(entry.reportDate)}
                       </span>
                       <div className="flex gap-1">
-                        <button
+                        <Button
                           type="button"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => { setForm((prev) => ({ ...prev, actionRequired: entry.text })); triggerAutosave(); }}
-                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
                           title="Copy this text as the current action"
                         >
                           <Copy className="w-3 h-3" /> Still applicable
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => {
                             setForm((prev) => ({ ...prev, actionRequired: "" }));
                             actionRef.current?.focus();
                           }}
-                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-accent hover:bg-accent/80 border text-foreground"
                           title="Clear the field and write a new action"
                         >
                           <PenLine className="w-3 h-3" /> Add new
-                        </button>
+                        </Button>
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground whitespace-pre-wrap">{entry.text}</p>

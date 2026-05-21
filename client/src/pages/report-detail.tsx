@@ -772,8 +772,6 @@ export default function ReportDetail() {
       // Fallback: if no defect qualifies (e.g. legacy data with no timestamps), include all
       const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
       const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
-      const openDetailData = openData.filter(qualifiesForDetail);
-      const completedDetailData = completedData.filter(qualifiesForDetail);
       const observationsDetailData = observationsOnly.filter(qualifiesForDetail);
 
       doc.addPage();
@@ -801,10 +799,17 @@ export default function ReportDetail() {
         return new Date(defect.dueDate) < inspectionDate;
       };
 
-      // Sort overdue rows to top, preserving existing sort within each group
-      const overdueRows = allDefects.filter(isOverdue);
-      const onTimeRows = allDefects.filter((d: any) => !isOverdue(d));
-      const orderedForSummary = [...overdueRows, ...onTimeRows];
+      // Detail pages: Overdue-and-amended first, then remaining amended (open or complete)
+      const allDetailQualified = defectsOnly.filter(qualifiesForDetail);
+      const detailOverdue = allDetailQualified.filter((d: any) => isOverdue(d)).sort(sortByUidExport);
+      const detailRest = allDetailQualified.filter((d: any) => !isOverdue(d)).sort(sortByUidExport);
+      const orderedDetailData = [...detailOverdue, ...detailRest];
+
+      // Sort summary rows: Overdue → Open → Complete, preserving UID sort within each tier
+      const summaryOverdue = allDefects.filter((d: any) => isOverdue(d));
+      const summaryOpen = allDefects.filter((d: any) => d.status !== "complete" && !isOverdue(d));
+      const summaryComplete = allDefects.filter((d: any) => d.status === "complete");
+      const orderedForSummary = [...summaryOverdue, ...summaryOpen, ...summaryComplete];
 
       // Build summary rows: one row per defect + one row per additional location
       const summaryHead = [["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"]];
@@ -883,29 +888,9 @@ export default function ReportDetail() {
         doc.text("No items recorded.", margin, y);
       }
 
-      if (openDetailData.length > 0) {
-        for (const defect of openDetailData) {
-          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
-        }
-      }
-
-      if (completedData.length > 0) {
-        doc.addPage();
-        addHeader();
-        addFooter();
-        y = 20;
-
-        doc.setFontSize(18);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(...DARK_TEXT);
-        doc.text("3. Completed Works Summary", margin, y);
-        y += 7;
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(100);
-        doc.text("All defects that have been rectified and verified.", margin, y);
-
-        for (const defect of completedDetailData) {
+      // Detail pages: ordered Overdue-amended → New/Amended (open + complete combined)
+      if (orderedDetailData.length > 0) {
+        for (const defect of orderedDetailData) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
       }
@@ -916,11 +901,10 @@ export default function ReportDetail() {
         addFooter();
         y = 20;
 
-        const obsSection = completedData.length > 0 ? "4" : "3";
         doc.setFontSize(18);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(...DARK_TEXT);
-        doc.text(`${obsSection}. Observations`, margin, y);
+        doc.text("3. Observations", margin, y);
         y += 7;
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
@@ -1058,8 +1042,11 @@ export default function ReportDetail() {
       };
       const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
       const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
-      const openDetailData = openData.filter(qualifiesForDetail);
-      const completedDetailData = completedData.filter(qualifiesForDetail);
+      const allDetailQualifiedW = defectsOnly.filter(qualifiesForDetail);
+      // Detail pages: Overdue-and-amended first, then remaining amended (open or complete)
+      const detailOverdueW = allDetailQualifiedW.filter((d: any) => isOverdueWord(d)).sort(sortUid);
+      const detailRestW = allDetailQualifiedW.filter((d: any) => !isOverdueWord(d)).sort(sortUid);
+      const orderedDetailDataW = [...detailOverdueW, ...detailRestW];
       const observationsDetailData = observationsOnly.filter(qualifiesForDetail);
 
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
@@ -1529,10 +1516,11 @@ export default function ReportDetail() {
         return new Date(defect.dueDate) < wordInspectionDate;
       };
 
-      // Sort overdue rows to top for summary table
-      const wordOverdueRows = allDefects.filter(isOverdueWord);
-      const wordOnTimeRows = allDefects.filter((d: any) => !isOverdueWord(d));
-      const wordOrderedForSummary = [...wordOverdueRows, ...wordOnTimeRows];
+      // Sort summary rows: Overdue → Open → Complete
+      const wordSummaryOverdue = allDefects.filter((d: any) => isOverdueWord(d));
+      const wordSummaryOpen = allDefects.filter((d: any) => d.status !== "complete" && !isOverdueWord(d));
+      const wordSummaryComplete = allDefects.filter((d: any) => d.status === "complete");
+      const wordOrderedForSummary = [...wordSummaryOverdue, ...wordSummaryOpen, ...wordSummaryComplete];
 
       // Helper to build a summary row for Word export
       const buildWordSummaryRow = (rowUid: string, defect: any, overdue: boolean) => {
@@ -1597,35 +1585,13 @@ export default function ReportDetail() {
         }));
       }
 
-      for (let i = 0; i < openDetailData.length; i++) {
+      // Detail pages: ordered Overdue-amended → New/Amended (open + complete combined)
+      for (let i = 0; i < orderedDetailDataW.length; i++) {
         if (i > 0 || defectsOnly.length > 0) {
           obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
         }
-        const defectEls = await buildWordDefectPage(openDetailData[i]);
+        const defectEls = await buildWordDefectPage(orderedDetailDataW[i]);
         obsChildren.push(...defectEls);
-      }
-
-      // ======= SECTION 3 - COMPLETED WORKS =======
-      const completedChildren: any[] = [];
-
-      if (completedData.length > 0) {
-        completedChildren.push(new Paragraph({
-          children: [new TextRun({ text: "Completed Works Summary", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
-          heading: HeadingLevel.HEADING_1,
-          spacing: { after: 80 },
-        }));
-        completedChildren.push(new Paragraph({
-          children: [new TextRun({ text: "All defects that have been rectified and verified.", size: 18, color: "666666", italics: true, font: "Aptos" })],
-          spacing: { after: 200 },
-        }));
-
-        for (let i = 0; i < completedDetailData.length; i++) {
-          if (i > 0) {
-            completedChildren.push(new Paragraph({ children: [new PageBreak()] }));
-          }
-          const defectEls = await buildWordDefectPage(completedDetailData[i]);
-          completedChildren.push(...defectEls);
-        }
       }
 
       // ======= BUILD DOCUMENT =======
@@ -1651,10 +1617,6 @@ export default function ReportDetail() {
         { properties: sectionProps, children: introChildren },
         { properties: sectionProps, children: obsChildren },
       ];
-
-      if (completedChildren.length > 0) {
-        docSections.push({ properties: sectionProps, children: completedChildren });
-      }
 
       if (observationsOnly.length > 0) {
         const obsOnlyChildren: any[] = [];
