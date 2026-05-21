@@ -606,6 +606,7 @@ export default function DefectForm() {
       const formData = new FormData();
       formData.append("photo", file);
       formData.append("slot", slot);
+      if (reportId) formData.append("reportId", reportId);
 
       const res = await fetch(`${API_BASE}/api/defects/${defectId}/photos`, {
         method: "POST",

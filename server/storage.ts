@@ -165,6 +165,47 @@ safeAddColumn("defects", "created_at", "TEXT");
 safeAddColumn("markers", "location_id", "INTEGER");
 safeAddColumn("projects", "enabled_uid_parts", `TEXT DEFAULT '{"elevation":true,"drop":true,"level":true,"workType":true}'`);
 safeAddColumn("projects", "primary_work_types", "TEXT DEFAULT '[]'");
+safeAddColumn("photos", "report_id", "INTEGER");
+
+// Backfill photos.report_id using timestamp windows:
+// For each photo without a report_id, find which report's [createdAt, nextCreatedAt) window contains it.
+{
+  const orphanPhotos = sqlite.prepare(
+    `SELECT p.id, p.defect_id, p.created_at, d.project_id
+     FROM photos p JOIN defects d ON d.id = p.defect_id
+     WHERE p.report_id IS NULL`
+  ).all() as { id: number; defect_id: number; created_at: string; project_id: number }[];
+
+  if (orphanPhotos.length > 0) {
+    // Build per-project report windows (sorted by created_at asc)
+    const projectIds = [...new Set(orphanPhotos.map(p => p.project_id))];
+    const projectReports: Record<number, { id: number; created_at: string }[]> = {};
+    for (const pid of projectIds) {
+      projectReports[pid] = sqlite.prepare(
+        `SELECT id, created_at FROM reports WHERE project_id = ? ORDER BY created_at ASC`
+      ).all(pid) as { id: number; created_at: string }[];
+    }
+
+    const updateStmt = sqlite.prepare(`UPDATE photos SET report_id = ? WHERE id = ?`);
+    for (const photo of orphanPhotos) {
+      const reports = projectReports[photo.project_id] || [];
+      if (reports.length === 0) continue;
+      const photoTs = new Date(photo.created_at).getTime();
+      let matched: number | null = null;
+      for (let i = 0; i < reports.length; i++) {
+        const rStart = new Date(reports[i].created_at).getTime();
+        const rEnd = i + 1 < reports.length ? new Date(reports[i + 1].created_at).getTime() : Infinity;
+        if (photoTs >= rStart && photoTs < rEnd) {
+          matched = reports[i].id;
+          break;
+        }
+      }
+      // If photo is before all reports, assign to first report
+      if (matched === null) matched = reports[0].id;
+      updateStmt.run(matched, photo.id);
+    }
+  }
+}
 
 // Seed global_settings with default work types if empty
 {

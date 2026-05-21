@@ -309,8 +309,10 @@ export async function registerRoutes(
       await storage.deletePhoto(existingInSlot.id);
     }
 
+    const reportId = req.body.reportId ? Number(req.body.reportId) : null;
     const photo = await storage.createPhoto({
       defectId,
+      reportId,
       filename: req.file.filename,
       caption: req.body.caption || null,
       slot,
@@ -344,58 +346,61 @@ export async function registerRoutes(
   });
 
   // Download photos for a report as a zip.
-  // By default, only photos uploaded during the current inspection are included
-  // (i.e. photo.createdAt >= report.createdAt). Pass ?scope=all to get every photo.
+  // scope=current (default): only photos with report_id matching this report.
+  // scope=all: every photo across the entire project.
   app.get("/api/reports/:reportId/photos-zip", async (req, res) => {
     try {
       const reportId = Number(req.params.reportId);
       const report = await storage.getReport(reportId);
       if (!report) return res.status(404).json({ message: "Report not found" });
-      const defects = await storage.getDefectsByReport(reportId);
       const scope = (req.query.scope as string) || "current";
-      const reportStart = report.createdAt ? new Date(report.createdAt).getTime() : 0;
 
-      const filenameSuffix = scope === "all" ? "all" : "current";
+      // Sanitise names for filename
+      const project = await storage.getProject(report.projectId);
+      const safeName = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+      const projectSlug = project ? safeName(project.name) : `project-${report.projectId}`;
+      const reportSlug = report.inspectionNumber ? `Insp-${safeName(report.inspectionNumber)}` : `report-${reportId}`;
+
+      // Collect defects: current report only for scope=current, entire project for scope=all
+      const defectList = scope === "all"
+        ? await storage.getDefectsByProject(report.projectId)
+        : await storage.getDefectsByReport(reportId);
+
+      const archive = archiver("zip", { zlib: { level: 1 } });
+      let included = 0;
+      const seen = new Set<string>(); // prevent duplicate filenames in zip
+
+      for (const defect of defectList) {
+        const defectPhotos = await storage.getPhotosByDefect(defect.id);
+        for (const photo of defectPhotos) {
+          // For scope=current, only include photos tagged to this report
+          if (scope !== "all" && photo.reportId !== reportId) continue;
+          const filePath = path.join(uploadDir, photo.filename);
+          if (!fs.existsSync(filePath)) continue;
+          let zipName = `${defect.uid}_${photo.slot}.jpg`;
+          if (seen.has(zipName)) zipName = `${defect.uid}_${photo.slot}_${photo.id}.jpg`;
+          seen.add(zipName);
+          archive.file(filePath, { name: zipName });
+          included++;
+        }
+      }
+
+      // No silent fallback — if no photos match, return a clear error
+      if (included === 0) {
+        return res.status(404).json({
+          message: scope === "all"
+            ? "No photos found in this project"
+            : "No photos uploaded during this inspection",
+        });
+      }
+
+      const filenameSuffix = scope === "all" ? "all" : reportSlug;
       res.setHeader("Content-Type", "application/zip");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="photos-report-${reportId}-${filenameSuffix}.zip"`,
+        `attachment; filename="photos-${projectSlug}-${filenameSuffix}.zip"`,
       );
-
-      const archive = archiver("zip", { zlib: { level: 1 } });
       archive.pipe(res);
-
-      let included = 0;
-      for (const defect of defects) {
-        const photos = await storage.getPhotosByDefect(defect.id);
-        for (const photo of photos) {
-          if (scope !== "all") {
-            const photoTs = photo.createdAt ? new Date(photo.createdAt).getTime() : 0;
-            if (!photoTs || photoTs < reportStart) continue;
-          }
-          const filePath = path.join(uploadDir, photo.filename);
-          if (fs.existsSync(filePath)) {
-            archive.file(filePath, { name: `${defect.uid}_${photo.slot}.jpg` });
-            included++;
-          }
-        }
-      }
-
-      // If the current-inspection scope is empty (e.g. legacy data with no
-      // photos uploaded after the report's createdAt), fall back to all photos
-      // so the user gets something useful instead of an empty zip.
-      if (included === 0 && scope !== "all") {
-        for (const defect of defects) {
-          const photos = await storage.getPhotosByDefect(defect.id);
-          for (const photo of photos) {
-            const filePath = path.join(uploadDir, photo.filename);
-            if (fs.existsSync(filePath)) {
-              archive.file(filePath, { name: `${defect.uid}_${photo.slot}.jpg` });
-            }
-          }
-        }
-      }
-
       await archive.finalize();
     } catch (err: any) {
       console.error("Zip error:", err);

@@ -57,6 +57,7 @@ export const defects = sqliteTable("defects", {
 export const photos = sqliteTable("photos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   defectId: integer("defect_id").notNull(),
+  reportId: integer("report_id"), // nullable for backward compat; set on upload
   filename: text("filename").notNull(),
   caption: text("caption"),
   slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, wip4, wip5, complete
