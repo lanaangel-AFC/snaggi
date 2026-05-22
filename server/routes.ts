@@ -516,9 +516,7 @@ export async function registerRoutes(
         const isNew = !!(d.createdAt && d.createdAt >= windowStart && d.createdAt < windowEnd);
         const obsAmended = obsHistory.some(h => h.createdAt >= windowStart && h.createdAt < windowEnd);
         const actAmended = actHistory.some(h => h.createdAt >= windowStart && h.createdAt < windowEnd);
-        const photosAdded = defectPhotos.filter(p =>
-          (p.reportId === report.id) || (p.createdAt && p.createdAt >= windowStart && p.createdAt < windowEnd)
-        );
+        const photosAdded = defectPhotos.filter(p => p.reportId === report.id);
         const locsAdded = locations.filter(l => l.createdAt && l.createdAt >= windowStart && l.createdAt < windowEnd);
         const locsAmended = locations.filter(l => (l as any).updatedAt && (l as any).updatedAt >= windowStart && (l as any).updatedAt < windowEnd);
         const statusChanges = statHistory.filter(s => s.createdAt && s.createdAt >= windowStart && s.createdAt < windowEnd);
@@ -540,7 +538,7 @@ export async function registerRoutes(
         // Mark each photo with isThisInspection flag
         const photosWithFlag = defectPhotos.map(p => ({
           ...p,
-          isThisInspection: !!(p.reportId === report.id) || !!(p.createdAt && p.createdAt >= windowStart && p.createdAt < windowEnd),
+          isThisInspection: p.reportId === report.id,
         }));
 
         return { ...d, photos: photosWithFlag, locations, observationHistory: obsHistory, actionHistory: actHistory, statusHistory: statHistory, events };

@@ -412,7 +412,7 @@ export default function ReportDetail() {
         doc.setTextColor(100);
         const photoLabel = slotLabels[photo.slot] || photo.slot;
         const photoCaption = photo.caption ? ` — ${photo.caption}` : "";
-        const isNewPhoto = photosAddedIds ? (photosAddedIds.has(photo.id) || photo.isThisInspection) : false;
+        const isNewPhoto = photosAddedIds ? photosAddedIds.has(photo.id) : false;
         const pDateFmt = (ds?: string) => { if (!ds) return ""; const d = new Date(ds); return d.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }); };
         const dateSuffix = isNewPhoto && photo.createdAt ? ` (added ${pDateFmt(photo.createdAt)})` : "";
         doc.text(photoLabel + photoCaption + dateSuffix, x, y + imgH + 3);
@@ -1437,7 +1437,7 @@ export default function ReportDetail() {
                 }));
               }
 
-              const isNewPhoto = photosAddedIds ? (photosAddedIds.has(photo.id) || photo.isThisInspection) : false;
+              const isNewPhoto = photosAddedIds ? photosAddedIds.has(photo.id) : false;
               const dateSuffix = isNewPhoto && photo.createdAt ? ` (added ${formatPhotoDate(photo.createdAt)})` : "";
               const captionText = photo.caption ? ` \u2014 ${safeText(photo.caption)}` : "";
               cellChildren.push(new Paragraph({
