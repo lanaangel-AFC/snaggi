@@ -708,6 +708,31 @@ export default function DefectForm() {
     captionTimers.current[photoId] = setTimeout(() => handleCaptionSave(photoId, text), 800);
   }, [defectId]);
 
+  // Compute whether a photo is "new this inspection" (respects newOverride)
+  const isPhotoNew = (photo: Photo): boolean => {
+    if (photo.newOverride === "new") return true;
+    if (photo.newOverride === "not-new") return false;
+    return photo.reportId === Number(reportId);
+  };
+
+  const handleToggleNewOverride = async (photo: Photo) => {
+    const currentlyNew = isPhotoNew(photo);
+    // Toggle: if currently new → mark "not-new"; if currently not new → mark "new"
+    // If there's already an override matching the auto-detect result, clear it instead
+    const newVal = currentlyNew ? "not-new" : "new";
+    try {
+      await apiRequest("PATCH", `/api/photos/${photo.id}`, { newOverride: newVal });
+      // Update local state
+      setPhotos(prev => prev.map(p =>
+        p.id === photo.id ? { ...p, newOverride: newVal } : p
+      ));
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/photos`] });
+      toast({ title: newVal === "new" ? "Marked as new this inspection" : "Marked as not new" });
+    } catch {
+      toast({ title: "Failed to update photo", variant: "destructive" });
+    }
+  };
+
   const handleDeletePhoto = async (photoId: number) => {
     try {
       await apiRequest("DELETE", `/api/photos/${photoId}`);
@@ -1633,6 +1658,19 @@ export default function DefectForm() {
                           >
                             <Download className="w-3.5 h-3.5" />
                           </a>
+                          {/* New/Not-new toggle badge */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleNewOverride(photo)}
+                            className={`absolute top-2 left-10 px-1.5 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+                              isPhotoNew(photo)
+                                ? "bg-blue-500/90 text-white hover:bg-blue-600"
+                                : "bg-gray-500/70 text-white/80 hover:bg-gray-600"
+                            }`}
+                            title={isPhotoNew(photo) ? "Click to mark as NOT new this inspection" : "Click to mark as NEW this inspection"}
+                          >
+                            {isPhotoNew(photo) ? "NEW" : "OLD"}
+                          </button>
                           <div className={`absolute bottom-0 left-0 right-0 px-2 py-1.5 text-xs font-medium ${isCompleteSlot ? "bg-green-600/90 text-white" : "bg-black/50 text-white"}`}>
                             {slot.label}
                           </div>

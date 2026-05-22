@@ -61,6 +61,7 @@ export const photos = sqliteTable("photos", {
   filename: text("filename").notNull(),
   caption: text("caption"),
   slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, wip4, wip5, complete
+  newOverride: text("new_override"), // "new" | "not-new" | null (auto-detect via reportId)
   createdAt: text("created_at").notNull(),
 });
 

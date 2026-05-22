@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage, dataDir, getGlobalSettings, addGlobalWorkType } from "./storage";
+import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType } from "./storage";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
@@ -464,10 +464,21 @@ export async function registerRoutes(
     }
   });
 
-  // Update photo caption
+  // Update photo fields (caption, newOverride, reportId)
   app.patch("/api/photos/:id", async (req, res) => {
-    const photo = await storage.updatePhotoCaption(Number(req.params.id), req.body.caption || "");
-    if (!photo) return res.status(404).json({ message: "Photo not found" });
+    const id = Number(req.params.id);
+    const existing = await storage.getPhoto(id);
+    if (!existing) return res.status(404).json({ message: "Photo not found" });
+    if (req.body.caption !== undefined) {
+      await storage.updatePhotoCaption(id, req.body.caption || "");
+    }
+    if (req.body.newOverride !== undefined) {
+      await storage.updatePhotoNewOverride(id, req.body.newOverride);
+    }
+    if (req.body.reportId !== undefined) {
+      await storage.updatePhotoReportId(id, req.body.reportId);
+    }
+    const photo = await storage.getPhoto(id);
     res.json(photo);
   });
 
@@ -516,7 +527,11 @@ export async function registerRoutes(
         const isNew = !!(d.createdAt && d.createdAt >= windowStart && d.createdAt < windowEnd);
         const obsAmended = obsHistory.some(h => h.createdAt >= windowStart && h.createdAt < windowEnd);
         const actAmended = actHistory.some(h => h.createdAt >= windowStart && h.createdAt < windowEnd);
-        const photosAdded = defectPhotos.filter(p => p.reportId === report.id);
+        const photosAdded = defectPhotos.filter(p =>
+          p.newOverride === "new" ? true
+          : p.newOverride === "not-new" ? false
+          : p.reportId === report.id
+        );
         const locsAdded = locations.filter(l => l.createdAt && l.createdAt >= windowStart && l.createdAt < windowEnd);
         const locsAmended = locations.filter(l => (l as any).updatedAt && (l as any).updatedAt >= windowStart && (l as any).updatedAt < windowEnd);
         const statusChanges = statHistory.filter(s => s.createdAt && s.createdAt >= windowStart && s.createdAt < windowEnd);
@@ -535,10 +550,12 @@ export async function registerRoutes(
           photosAddedThisInspection: photosAdded.map(p => p.id),
         };
 
-        // Mark each photo with isThisInspection flag
+        // Mark each photo with isThisInspection flag (respects manual override)
         const photosWithFlag = defectPhotos.map(p => ({
           ...p,
-          isThisInspection: p.reportId === report.id,
+          isThisInspection: p.newOverride === "new" ? true
+            : p.newOverride === "not-new" ? false
+            : p.reportId === report.id,
         }));
 
         return { ...d, photos: photosWithFlag, locations, observationHistory: obsHistory, actionHistory: actHistory, statusHistory: statHistory, events };
@@ -670,6 +687,90 @@ export async function registerRoutes(
   app.delete("/api/defect-locations/:id", async (req, res) => {
     await storage.deleteDefectLocation(Number(req.params.id));
     res.status(204).end();
+  });
+
+  // ==================== ADMIN: PHOTO AUDIT & CORRECTIVE BACKFILL ====================
+
+  // Audit: show photo→report_id distribution for a project
+  app.get("/api/admin/photo-report-audit", async (req, res) => {
+    const projectId = Number(req.query.projectId);
+    if (!projectId) return res.status(400).json({ message: "projectId query param required" });
+
+    const total = sqlite.prepare(
+      `SELECT COUNT(*) as cnt FROM photos p JOIN defects d ON d.id = p.defect_id WHERE d.project_id = ?`
+    ).get(projectId) as { cnt: number };
+
+    const byReportId = sqlite.prepare(
+      `SELECT p.report_id, r.inspection_number, r.inspection_date, COUNT(*) as cnt
+       FROM photos p
+       JOIN defects d ON d.id = p.defect_id
+       LEFT JOIN reports r ON r.id = p.report_id
+       WHERE d.project_id = ?
+       GROUP BY p.report_id
+       ORDER BY p.report_id`
+    ).all(projectId) as { report_id: number | null; inspection_number: string; inspection_date: string; cnt: number }[];
+
+    const nullCount = sqlite.prepare(
+      `SELECT COUNT(*) as cnt FROM photos p JOIN defects d ON d.id = p.defect_id WHERE d.project_id = ? AND p.report_id IS NULL`
+    ).get(projectId) as { cnt: number };
+
+    const sample = sqlite.prepare(
+      `SELECT p.id, p.defect_id, p.report_id, p.created_at, p.slot, p.new_override, d.uid as defect_uid
+       FROM photos p JOIN defects d ON d.id = p.defect_id
+       WHERE d.project_id = ?
+       ORDER BY p.report_id, p.id
+       LIMIT 50`
+    ).all(projectId);
+
+    const reports = sqlite.prepare(
+      `SELECT id, inspection_number, inspection_date, created_at FROM reports WHERE project_id = ? ORDER BY created_at ASC`
+    ).all(projectId);
+
+    res.json({ projectId, total: total.cnt, nullReportIdCount: nullCount.cnt, byReportId, reports, sample });
+  });
+
+  // Corrective backfill: re-assign photo report_ids using timestamp windows.
+  // Only touches photos for the specified project. Does NOT overwrite manual overrides.
+  app.post("/api/admin/photo-backfill-correct", async (req, res) => {
+    const projectId = Number(req.body.projectId);
+    if (!projectId) return res.status(400).json({ message: "projectId required in body" });
+
+    const allPhotos = sqlite.prepare(
+      `SELECT p.id, p.defect_id, p.created_at, p.new_override, d.project_id
+       FROM photos p JOIN defects d ON d.id = p.defect_id
+       WHERE d.project_id = ?`
+    ).all(projectId) as { id: number; defect_id: number; created_at: string; new_override: string | null; project_id: number }[];
+
+    const projectReports = sqlite.prepare(
+      `SELECT id, created_at FROM reports WHERE project_id = ? ORDER BY created_at ASC`
+    ).all(projectId) as { id: number; created_at: string }[];
+
+    if (projectReports.length === 0) return res.json({ updated: 0, message: "No reports found for project" });
+
+    const updateStmt = sqlite.prepare(`UPDATE photos SET report_id = ? WHERE id = ?`);
+    let updated = 0;
+
+    for (const photo of allPhotos) {
+      const photoTs = new Date(photo.created_at).getTime();
+      let matched: number | null = null;
+      for (let i = 0; i < projectReports.length; i++) {
+        const rStart = new Date(projectReports[i].created_at).getTime();
+        const rEnd = i + 1 < projectReports.length ? new Date(projectReports[i + 1].created_at).getTime() : Infinity;
+        if (photoTs >= rStart && photoTs < rEnd) {
+          matched = projectReports[i].id;
+          break;
+        }
+      }
+      // If photo predates all reports, assign to first report
+      if (matched === null) matched = projectReports[0].id;
+      updateStmt.run(matched, photo.id);
+      updated++;
+    }
+
+    // Record that corrective backfill ran
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('photo_backfill_corrective_p' || ?, ?)`).run(String(projectId), new Date().toISOString());
+
+    res.json({ updated, totalPhotos: allPhotos.length, reportsUsed: projectReports.length });
   });
 
   // ==================== SHARE LINKS ====================

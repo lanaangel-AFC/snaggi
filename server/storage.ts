@@ -176,45 +176,52 @@ safeAddColumn("markers", "location_id", "INTEGER");
 safeAddColumn("projects", "enabled_uid_parts", `TEXT DEFAULT '{"elevation":true,"drop":true,"level":true,"workType":true}'`);
 safeAddColumn("projects", "primary_work_types", "TEXT DEFAULT '[]'");
 safeAddColumn("photos", "report_id", "INTEGER");
+safeAddColumn("photos", "new_override", "TEXT"); // "new" | "not-new" | null (auto-detect)
 safeAddColumn("defect_locations", "updated_at", "TEXT");
 
-// Backfill photos.report_id using timestamp windows:
-// For each photo without a report_id, find which report's [createdAt, nextCreatedAt) window contains it.
+// Meta table for one-time migration flags
+sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+
+// Photo backfill — runs ONCE, then records completion in meta so it never re-corrupts.
+// Original logic (e0ff323) ran on every startup for orphan photos. Now gated.
 {
-  const orphanPhotos = sqlite.prepare(
-    `SELECT p.id, p.defect_id, p.created_at, d.project_id
-     FROM photos p JOIN defects d ON d.id = p.defect_id
-     WHERE p.report_id IS NULL`
-  ).all() as { id: number; defect_id: number; created_at: string; project_id: number }[];
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'photo_backfill_v1'`).get();
+  if (!alreadyRan) {
+    const orphanPhotos = sqlite.prepare(
+      `SELECT p.id, p.defect_id, p.created_at, d.project_id
+       FROM photos p JOIN defects d ON d.id = p.defect_id
+       WHERE p.report_id IS NULL`
+    ).all() as { id: number; defect_id: number; created_at: string; project_id: number }[];
 
-  if (orphanPhotos.length > 0) {
-    // Build per-project report windows (sorted by created_at asc)
-    const projectIds = [...new Set(orphanPhotos.map(p => p.project_id))];
-    const projectReports: Record<number, { id: number; created_at: string }[]> = {};
-    for (const pid of projectIds) {
-      projectReports[pid] = sqlite.prepare(
-        `SELECT id, created_at FROM reports WHERE project_id = ? ORDER BY created_at ASC`
-      ).all(pid) as { id: number; created_at: string }[];
-    }
-
-    const updateStmt = sqlite.prepare(`UPDATE photos SET report_id = ? WHERE id = ?`);
-    for (const photo of orphanPhotos) {
-      const reports = projectReports[photo.project_id] || [];
-      if (reports.length === 0) continue;
-      const photoTs = new Date(photo.created_at).getTime();
-      let matched: number | null = null;
-      for (let i = 0; i < reports.length; i++) {
-        const rStart = new Date(reports[i].created_at).getTime();
-        const rEnd = i + 1 < reports.length ? new Date(reports[i + 1].created_at).getTime() : Infinity;
-        if (photoTs >= rStart && photoTs < rEnd) {
-          matched = reports[i].id;
-          break;
-        }
+    if (orphanPhotos.length > 0) {
+      const projectIds = [...new Set(orphanPhotos.map(p => p.project_id))];
+      const projectReports: Record<number, { id: number; created_at: string }[]> = {};
+      for (const pid of projectIds) {
+        projectReports[pid] = sqlite.prepare(
+          `SELECT id, created_at FROM reports WHERE project_id = ? ORDER BY created_at ASC`
+        ).all(pid) as { id: number; created_at: string }[];
       }
-      // If photo is before all reports, assign to first report
-      if (matched === null) matched = reports[0].id;
-      updateStmt.run(matched, photo.id);
+
+      const updateStmt = sqlite.prepare(`UPDATE photos SET report_id = ? WHERE id = ?`);
+      for (const photo of orphanPhotos) {
+        const reports = projectReports[photo.project_id] || [];
+        if (reports.length === 0) continue;
+        const photoTs = new Date(photo.created_at).getTime();
+        let matched: number | null = null;
+        for (let i = 0; i < reports.length; i++) {
+          const rStart = new Date(reports[i].created_at).getTime();
+          const rEnd = i + 1 < reports.length ? new Date(reports[i + 1].created_at).getTime() : Infinity;
+          if (photoTs >= rStart && photoTs < rEnd) {
+            matched = reports[i].id;
+            break;
+          }
+        }
+        if (matched === null) matched = reports[0].id;
+        updateStmt.run(matched, photo.id);
+      }
     }
+    // Mark as completed so it never re-runs
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('photo_backfill_v1', ?)`).run(new Date().toISOString());
   }
 }
 
@@ -271,7 +278,7 @@ safeAddColumn("defect_locations", "updated_at", "TEXT");
 }
 
 export const db = drizzle(sqlite);
-export { dataDir };
+export { dataDir, sqlite };
 
 const uploadDir = path.join(dataDir, "uploads");
 
@@ -303,9 +310,12 @@ export interface IStorage {
   getNextDefectUid(projectId: number, prefix?: string): Promise<string>;
   getDefectByUid(projectId: number, uid: string): Promise<Defect | undefined>;
   // Photos
+  getPhoto(id: number): Promise<Photo | undefined>;
   getPhotosByDefect(defectId: number): Promise<Photo[]>;
   createPhoto(photo: InsertPhoto): Promise<Photo>;
   updatePhotoCaption(id: number, caption: string): Promise<Photo | undefined>;
+  updatePhotoReportId(id: number, reportId: number): Promise<Photo | undefined>;
+  updatePhotoNewOverride(id: number, newOverride: string | null): Promise<Photo | undefined>;
   deletePhoto(id: number): Promise<Photo | undefined>;
   // Elevations
   getElevationsByProject(projectId: number): Promise<Elevation[]>;
@@ -524,6 +534,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Photos
+  async getPhoto(id: number): Promise<Photo | undefined> {
+    return db.select().from(photos).where(eq(photos.id, id)).get();
+  }
   async getPhotosByDefect(defectId: number): Promise<Photo[]> {
     return db.select().from(photos).where(eq(photos.defectId, defectId)).all();
   }
@@ -532,6 +545,12 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePhotoCaption(id: number, caption: string): Promise<Photo | undefined> {
     return db.update(photos).set({ caption }).where(eq(photos.id, id)).returning().get();
+  }
+  async updatePhotoReportId(id: number, reportId: number): Promise<Photo | undefined> {
+    return db.update(photos).set({ reportId }).where(eq(photos.id, id)).returning().get();
+  }
+  async updatePhotoNewOverride(id: number, newOverride: string | null): Promise<Photo | undefined> {
+    return db.update(photos).set({ newOverride }).where(eq(photos.id, id)).returning().get();
   }
   async deletePhoto(id: number): Promise<Photo | undefined> {
     const photo = db.select().from(photos).where(eq(photos.id, id)).get();
