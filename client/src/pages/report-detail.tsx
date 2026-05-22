@@ -170,6 +170,9 @@ function formatReportDate(dateStr?: string): string {
   return d.toLocaleDateString("en-AU", { day: "2-digit", month: "long", year: "numeric" });
 }
 
+// Defensive helper: coerce any value to a string for docx TextRun
+const safeText = (v: unknown): string => (v == null ? "" : String(v));
+
 function extractWorkTypeFromUid(uid: string): string {
   const parts = uid.split("-");
   for (const part of parts) {
@@ -1043,6 +1046,15 @@ export default function ReportDetail() {
       const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
       const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
       const allDetailQualifiedW = defectsOnly.filter(qualifiesForDetail);
+
+      // Overdue detection for Word export (must be defined before first use)
+      const wordInspectionDate = new Date(data.report.inspectionDate || data.report.createdAt);
+      const isOverdueWord = (defect: any): boolean => {
+        if (defect.status === "complete") return false;
+        if (!defect.dueDate) return false;
+        return new Date(defect.dueDate) < wordInspectionDate;
+      };
+
       // Detail pages: Overdue-and-amended first, then remaining amended (open or complete)
       const detailOverdueW = allDetailQualifiedW.filter((d: any) => isOverdueWord(d)).sort(sortUid);
       const detailRestW = allDetailQualifiedW.filter((d: any) => !isOverdueWord(d)).sort(sortUid);
@@ -1193,20 +1205,20 @@ export default function ReportDetail() {
         spacing: { after: 100 },
       }));
 
-      // Inspection table from report data
+      // Inspection table from report data — safeText guards against null/undefined
       const inspectionData: string[][] = [];
       if (data.report.inspectionDate) inspectionData.push(["Date", formatReportDate(data.report.inspectionDate)]);
       else inspectionData.push(["Date", reportDate]);
-      if (data.report.inspectionNumber) inspectionData.push(["Inspection Number", data.report.inspectionNumber]);
-      inspectionData.push(["Inspector", data.project.inspector]);
-      inspectionData.push(["Locations covered", data.report.locationsCovered || data.project.address]);
-      inspectionData.push(["Client", data.project.client]);
+      if (data.report.inspectionNumber) inspectionData.push(["Inspection Number", safeText(data.report.inspectionNumber)]);
+      inspectionData.push(["Inspector", safeText(data.project.inspector)]);
+      inspectionData.push(["Locations covered", safeText(data.report.locationsCovered) || safeText(data.project.address)]);
+      inspectionData.push(["Client", safeText(data.project.client)]);
 
       try {
         const attendees = JSON.parse(data.report.attendees || "[]");
         if (attendees.length > 0) {
           attendees.forEach((a: any) => {
-            inspectionData.push([a.company || a.name, a.name]);
+            inspectionData.push([safeText(a.company) || safeText(a.name), safeText(a.name)]);
           });
         }
       } catch {}
@@ -1324,8 +1336,8 @@ export default function ReportDetail() {
 
         const isObs = defect.recordType === "observation";
         const headingText = hasMultipleLocations
-          ? `Multiple Entries for ${getWorkTypeLabel(defect.uid)}`
-          : defect.uid;
+          ? `Multiple Entries for ${getWorkTypeLabel(safeText(defect.uid)) || "Entry"}`
+          : safeText(defect.uid);
 
         elements.push(new Paragraph({
           children: [
@@ -1348,23 +1360,23 @@ export default function ReportDetail() {
 
         if (!hasMultipleLocations) {
           elements.push(new Paragraph({
-            children: [new TextRun({ text: deriveLocation(defect.uid), size: 18, font: "Aptos", color: "666666" })],
+            children: [new TextRun({ text: deriveLocation(safeText(defect.uid)), size: 18, font: "Aptos", color: "666666" })],
             spacing: { after: 200 },
           }));
         } else {
           elements.push(new Paragraph({ spacing: { after: 100 } }));
         }
 
-        // Summary table (shared defect info)
+        // Summary table (shared defect info) — safeText guards against null/undefined
         const infoRows = [
-          ["Date Opened", defect.dateOpened],
-          ["Date Completed", defect.dateClosed || "\u2014"],
-          ["Observation", defect.comment],
-          ["Action Required", defect.actionRequired],
-          ["Assigned To", defect.assignedTo],
-          ["Due Date", defect.dueDate],
-          ["Verification Method", defect.verificationMethod],
-          ["Verification Person", defect.verificationPerson],
+          ["Date Opened", safeText(defect.dateOpened)],
+          ["Date Completed", safeText(defect.dateClosed) || "\u2014"],
+          ["Observation", safeText(defect.comment)],
+          ["Action Required", safeText(defect.actionRequired)],
+          ["Assigned To", safeText(defect.assignedTo)],
+          ["Due Date", safeText(defect.dueDate)],
+          ["Verification Method", safeText(defect.verificationMethod)],
+          ["Verification Person", safeText(defect.verificationPerson)],
         ];
 
         const bottomBorder = { style: BorderStyle.SINGLE, size: 1, color: "DDDDDD" };
@@ -1508,14 +1520,6 @@ export default function ReportDetail() {
         ),
       }));
 
-      // Overdue detection for Word export
-      const wordInspectionDate = new Date(data.report.inspectionDate || data.report.createdAt);
-      const isOverdueWord = (defect: any): boolean => {
-        if (defect.status === "complete") return false;
-        if (!defect.dueDate) return false;
-        return new Date(defect.dueDate) < wordInspectionDate;
-      };
-
       // Sort summary rows: Overdue → Open → Complete
       const wordSummaryOverdue = allDefects.filter((d: any) => isOverdueWord(d));
       const wordSummaryOpen = allDefects.filter((d: any) => d.status !== "complete" && !isOverdueWord(d));
@@ -1528,10 +1532,10 @@ export default function ReportDetail() {
         const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
         const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
         const cellTexts = [
-          rowUid, typeText, deriveLocation(rowUid),
-          getWorkTypeLabel(defect.uid),
-          defect.assignedTo || "\u2014",
-          defect.dueDate || "\u2014", statusText,
+          safeText(rowUid), typeText, deriveLocation(safeText(rowUid)),
+          getWorkTypeLabel(safeText(defect.uid)),
+          safeText(defect.assignedTo) || "\u2014",
+          safeText(defect.dueDate) || "\u2014", statusText,
         ];
         return new TableRow({
           children: cellTexts.map((text: string, i: number) =>
@@ -1590,8 +1594,13 @@ export default function ReportDetail() {
         if (i > 0 || defectsOnly.length > 0) {
           obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
         }
-        const defectEls = await buildWordDefectPage(orderedDetailDataW[i]);
-        obsChildren.push(...defectEls);
+        try {
+          const defectEls = await buildWordDefectPage(orderedDetailDataW[i]);
+          obsChildren.push(...defectEls);
+        } catch (defectErr) {
+          console.error(`[Word export] Failed on defect id=${orderedDetailDataW[i]?.id} uid=${orderedDetailDataW[i]?.uid}`, defectErr);
+          throw defectErr;
+        }
       }
 
       // ======= BUILD DOCUMENT =======
@@ -1633,8 +1642,13 @@ export default function ReportDetail() {
           if (i > 0) {
             obsOnlyChildren.push(new Paragraph({ children: [new PageBreak()] }));
           }
-          const defectEls = await buildWordDefectPage(observationsDetailData[i]);
-          obsOnlyChildren.push(...defectEls);
+          try {
+            const defectEls = await buildWordDefectPage(observationsDetailData[i]);
+            obsOnlyChildren.push(...defectEls);
+          } catch (obsErr) {
+            console.error(`[Word export] Failed on observation id=${observationsDetailData[i]?.id} uid=${observationsDetailData[i]?.uid}`, obsErr);
+            throw obsErr;
+          }
         }
         docSections.push({ properties: sectionProps, children: obsOnlyChildren });
       }
@@ -1655,14 +1669,14 @@ export default function ReportDetail() {
         }));
 
         allProjectItemsW.forEach((d: any, i: number) => {
-          const wtCode = extractWorkTypeFromUid(d.uid);
+          const wtCode = extractWorkTypeFromUid(safeText(d.uid));
           const wtLabel = workTypeMapW.get(wtCode) || wtCode;
           const cells = [
             String(i + 1),
-            d.uid,
+            safeText(d.uid),
             getBriefDescription(d, wtLabel),
             d.status === "complete" ? "Complete" : "Open",
-            d.status === "complete" ? (d.dateClosed || "") : "",
+            d.status === "complete" ? safeText(d.dateClosed) : "",
           ];
           const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
           projSummaryRows.push(new TableRow({
