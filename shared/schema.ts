@@ -159,11 +159,26 @@ export const defectLocations = sqliteTable("defect_locations", {
   description: text("description").default(""),
   displayOrder: integer("display_order").default(0),
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
 });
 
 export const insertDefectLocationSchema = createInsertSchema(defectLocations).omit({ id: true });
 export type InsertDefectLocation = z.infer<typeof insertDefectLocationSchema>;
 export type DefectLocation = typeof defectLocations.$inferSelect;
+
+// Status history (tracks status changes across inspections)
+export const statusHistory = sqliteTable("status_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  defectId: integer("defect_id").notNull(),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status").notNull(),
+  reportId: integer("report_id"),
+  createdAt: text("created_at"),
+});
+
+export const insertStatusHistorySchema = createInsertSchema(statusHistory).omit({ id: true });
+export type InsertStatusHistory = z.infer<typeof insertStatusHistorySchema>;
+export type StatusHistory = typeof statusHistory.$inferSelect;
 
 // Users (kept from template)
 export const users = sqliteTable("users", {

@@ -235,6 +235,17 @@ export async function registerRoutes(
       });
     }
 
+    // Track status changes
+    if (req.body.status !== undefined && req.body.status !== existing.status) {
+      await storage.createStatusHistory({
+        defectId,
+        oldStatus: existing.status,
+        newStatus: req.body.status,
+        reportId: existing.reportId,
+        createdAt: now,
+      });
+    }
+
     const defect = await storage.updateDefect(defectId, req.body);
     if (!defect) return res.status(404).json({ message: "Defect not found" });
 
@@ -275,6 +286,51 @@ export async function registerRoutes(
       };
     }));
     res.json(result);
+  });
+
+  // === INSPECTION NOTES (explicit add-note for observation/action) ===
+  app.post("/api/defects/:id/observation-note", async (req, res) => {
+    const defectId = Number(req.params.id);
+    const existing = await storage.getDefect(defectId);
+    if (!existing) return res.status(404).json({ message: "Defect not found" });
+    const text = req.body.text;
+    if (!text || !text.trim()) return res.status(400).json({ message: "Text is required" });
+    const now = new Date().toISOString();
+    const reportId = req.body.reportId ? Number(req.body.reportId) : existing.reportId;
+    // Save old observation as history entry
+    if (existing.comment?.trim()) {
+      await storage.createObservationHistory({
+        defectId,
+        reportId: reportId!,
+        text: existing.comment,
+        createdAt: now,
+      });
+    }
+    // Update defect comment to the new note
+    const updated = await storage.updateDefect(defectId, { comment: text });
+    res.json(updated);
+  });
+
+  app.post("/api/defects/:id/action-note", async (req, res) => {
+    const defectId = Number(req.params.id);
+    const existing = await storage.getDefect(defectId);
+    if (!existing) return res.status(404).json({ message: "Defect not found" });
+    const text = req.body.text;
+    if (!text || !text.trim()) return res.status(400).json({ message: "Text is required" });
+    const now = new Date().toISOString();
+    const reportId = req.body.reportId ? Number(req.body.reportId) : existing.reportId;
+    // Save old action as history entry
+    if (existing.actionRequired?.trim()) {
+      await storage.createActionHistory({
+        defectId,
+        reportId: reportId!,
+        text: existing.actionRequired,
+        createdAt: now,
+      });
+    }
+    // Update defect actionRequired to the new note
+    const updated = await storage.updateDefect(defectId, { actionRequired: text });
+    res.json(updated);
   });
 
   app.delete("/api/defects/:id", async (req, res) => {
@@ -437,6 +493,16 @@ export async function registerRoutes(
     if (!report) return res.status(404).json({ message: "Report not found" });
     const project = await storage.getProject(report.projectId);
     if (!project) return res.status(404).json({ message: "Project not found" });
+
+    // Determine the inspection window: [report.createdAt, nextReport.createdAt)
+    const allReports = await storage.getReportsByProject(report.projectId);
+    const sortedReports = allReports.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const reportIdx = sortedReports.findIndex(r => r.id === report.id);
+    const windowStart = report.createdAt;
+    const windowEnd = reportIdx >= 0 && reportIdx + 1 < sortedReports.length
+      ? sortedReports[reportIdx + 1].createdAt
+      : new Date("2099-12-31T23:59:59Z").toISOString();
+
     const reportDefects = await storage.getDefectsByReport(report.id);
     const defectsWithPhotos = await Promise.all(
       reportDefects.map(async (d) => {
@@ -444,7 +510,40 @@ export async function registerRoutes(
         const locations = await storage.getDefectLocations(d.id);
         const obsHistory = await storage.getObservationHistory(d.id);
         const actHistory = await storage.getActionHistory(d.id);
-        return { ...d, photos: defectPhotos, locations, observationHistory: obsHistory, actionHistory: actHistory };
+        const statHistory = await storage.getStatusHistory(d.id);
+
+        // Compute DefectEvents
+        const isNew = !!(d.createdAt && d.createdAt >= windowStart && d.createdAt < windowEnd);
+        const obsAmended = obsHistory.some(h => h.createdAt >= windowStart && h.createdAt < windowEnd);
+        const actAmended = actHistory.some(h => h.createdAt >= windowStart && h.createdAt < windowEnd);
+        const photosAdded = defectPhotos.filter(p =>
+          (p.reportId === report.id) || (p.createdAt && p.createdAt >= windowStart && p.createdAt < windowEnd)
+        );
+        const locsAdded = locations.filter(l => l.createdAt && l.createdAt >= windowStart && l.createdAt < windowEnd);
+        const locsAmended = locations.filter(l => (l as any).updatedAt && (l as any).updatedAt >= windowStart && (l as any).updatedAt < windowEnd);
+        const statusChanges = statHistory.filter(s => s.createdAt && s.createdAt >= windowStart && s.createdAt < windowEnd);
+        const lastStatusChange = statusChanges.length > 0 ? statusChanges[0] : undefined;
+
+        const events = {
+          isNew,
+          amendedFields: {
+            observation: obsAmended,
+            action: actAmended,
+            photos: isNew ? defectPhotos.length : photosAdded.length,
+            locationsAdded: locsAdded.length,
+            locationsAmended: locsAmended.length,
+            statusChange: lastStatusChange ? { from: lastStatusChange.oldStatus || "", to: lastStatusChange.newStatus } : undefined,
+          },
+          photosAddedThisInspection: photosAdded.map(p => p.id),
+        };
+
+        // Mark each photo with isThisInspection flag
+        const photosWithFlag = defectPhotos.map(p => ({
+          ...p,
+          isThisInspection: !!(p.reportId === report.id) || !!(p.createdAt && p.createdAt >= windowStart && p.createdAt < windowEnd),
+        }));
+
+        return { ...d, photos: photosWithFlag, locations, observationHistory: obsHistory, actionHistory: actHistory, statusHistory: statHistory, events };
       })
     );
     // Include all project defects for the cumulative summary section

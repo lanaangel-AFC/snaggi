@@ -10,6 +10,7 @@ import {
   type ActionHistory, type InsertActionHistory, actionHistory,
   type DefectLocation, type InsertDefectLocation, defectLocations,
   type ShareLink, type InsertShareLink, shareLinks,
+  type StatusHistory, type InsertStatusHistory, statusHistory,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -146,6 +147,15 @@ sqlite.exec(`
     recipient_name TEXT DEFAULT '',
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    defect_id INTEGER NOT NULL,
+    old_status TEXT,
+    new_status TEXT NOT NULL,
+    report_id INTEGER,
+    created_at TEXT,
+    FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE
+  );
 `);
 
 // Add new columns to existing tables (safe: ALTER TABLE ADD COLUMN IF NOT EXISTS via try/catch)
@@ -166,6 +176,7 @@ safeAddColumn("markers", "location_id", "INTEGER");
 safeAddColumn("projects", "enabled_uid_parts", `TEXT DEFAULT '{"elevation":true,"drop":true,"level":true,"workType":true}'`);
 safeAddColumn("projects", "primary_work_types", "TEXT DEFAULT '[]'");
 safeAddColumn("photos", "report_id", "INTEGER");
+safeAddColumn("defect_locations", "updated_at", "TEXT");
 
 // Backfill photos.report_id using timestamp windows:
 // For each photo without a report_id, find which report's [createdAt, nextCreatedAt) window contains it.
@@ -319,6 +330,9 @@ export interface IStorage {
   createDefectLocation(input: InsertDefectLocation): Promise<DefectLocation>;
   updateDefectLocation(id: number, patch: Partial<InsertDefectLocation>): Promise<DefectLocation | undefined>;
   deleteDefectLocation(id: number): Promise<void>;
+  // Status History
+  getStatusHistory(defectId: number): Promise<StatusHistory[]>;
+  createStatusHistory(entry: InsertStatusHistory): Promise<StatusHistory>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -587,12 +601,20 @@ export class DatabaseStorage implements IStorage {
     return db.insert(defectLocations).values(input).returning().get();
   }
   async updateDefectLocation(id: number, patch: Partial<InsertDefectLocation>): Promise<DefectLocation | undefined> {
-    return db.update(defectLocations).set(patch).where(eq(defectLocations.id, id)).returning().get();
+    return db.update(defectLocations).set({ ...patch, updatedAt: new Date().toISOString() }).where(eq(defectLocations.id, id)).returning().get();
   }
   async deleteDefectLocation(id: number): Promise<void> {
     // Unlink any markers referencing this location
     sqlite.prepare(`UPDATE markers SET location_id = NULL WHERE location_id = ?`).run(id);
     db.delete(defectLocations).where(eq(defectLocations.id, id)).run();
+  }
+
+  // Status History
+  async getStatusHistory(defectId: number): Promise<StatusHistory[]> {
+    return db.select().from(statusHistory).where(eq(statusHistory.defectId, defectId)).orderBy(desc(statusHistory.id)).all();
+  }
+  async createStatusHistory(entry: InsertStatusHistory): Promise<StatusHistory> {
+    return db.insert(statusHistory).values(entry).returning().get();
   }
 
   // Share Links

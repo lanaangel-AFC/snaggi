@@ -180,6 +180,10 @@ export default function DefectForm() {
   const [projectElevations, setProjectElevations] = useState<Elevation[]>([]);
   const [obsHistoryOpen, setObsHistoryOpen] = useState(false);
   const [actHistoryOpen, setActHistoryOpen] = useState(false);
+  const [obsNoteOpen, setObsNoteOpen] = useState(false);
+  const [obsNoteText, setObsNoteText] = useState("");
+  const [actNoteOpen, setActNoteOpen] = useState(false);
+  const [actNoteText, setActNoteText] = useState("");
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const actionRef = useRef<HTMLTextAreaElement>(null);
 
@@ -593,6 +597,38 @@ export default function DefectForm() {
     },
     onError: (err: Error) => {
       toast({ title: err.message || "Failed to save", variant: "destructive" });
+    },
+  });
+
+  const obsNoteMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await apiRequest("POST", `/api/defects/${defectId}/observation-note`, { text, reportId: Number(reportId) });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setForm((prev) => ({ ...prev, comment: data.comment }));
+      setObsNoteOpen(false);
+      setObsNoteText("");
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/observation-history`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/report-data`] });
+      toast({ title: "Inspection note added" });
+    },
+  });
+
+  const actNoteMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await apiRequest("POST", `/api/defects/${defectId}/action-note`, { text, reportId: Number(reportId) });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setForm((prev) => ({ ...prev, actionRequired: data.actionRequired }));
+      setActNoteOpen(false);
+      setActNoteText("");
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/action-history`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/report-data`] });
+      toast({ title: "Action update added" });
     },
   });
 
@@ -1206,6 +1242,46 @@ export default function DefectForm() {
               </CollapsibleContent>
             </Collapsible>
           )}
+          {isEdit && (
+            <div className="mt-2">
+              {!obsNoteOpen ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setObsNoteOpen(true)}
+                  className="text-xs"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add inspection note
+                </Button>
+              ) : (
+                <div className="rounded-md border border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 p-2.5 space-y-2">
+                  <p className="text-xs font-medium text-emerald-800 dark:text-emerald-400">New observation entry</p>
+                  <Textarea
+                    placeholder="Add a new dated observation for this inspection..."
+                    value={obsNoteText}
+                    onChange={(e) => setObsNoteText(e.target.value)}
+                    rows={2}
+                    autoFocus
+                  />
+                  <div className="flex gap-2 justify-end">
+                    <Button type="button" variant="ghost" size="sm" onClick={() => { setObsNoteOpen(false); setObsNoteText(""); }}>
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!obsNoteText.trim() || obsNoteMutation.isPending}
+                      onClick={() => obsNoteMutation.mutate(obsNoteText.trim())}
+                    >
+                      {obsNoteMutation.isPending ? "Saving..." : "Save note"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Action Required */}
@@ -1287,6 +1363,46 @@ export default function DefectForm() {
                 ))}
               </CollapsibleContent>
             </Collapsible>
+          )}
+          {isEdit && (
+            <div className="mt-2">
+              {!actNoteOpen ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActNoteOpen(true)}
+                  className="text-xs"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add action update
+                </Button>
+              ) : (
+                <div className="rounded-md border border-blue-300 bg-blue-50/50 dark:bg-blue-900/10 p-2.5 space-y-2">
+                  <p className="text-xs font-medium text-blue-800 dark:text-blue-400">New action entry</p>
+                  <Textarea
+                    placeholder="Add an updated action for this inspection..."
+                    value={actNoteText}
+                    onChange={(e) => setActNoteText(e.target.value)}
+                    rows={2}
+                    autoFocus
+                  />
+                  <div className="flex gap-2 justify-end">
+                    <Button type="button" variant="ghost" size="sm" onClick={() => { setActNoteOpen(false); setActNoteText(""); }}>
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!actNoteText.trim() || actNoteMutation.isPending}
+                      onClick={() => actNoteMutation.mutate(actNoteText.trim())}
+                    >
+                      {actNoteMutation.isPending ? "Saving..." : "Save update"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 

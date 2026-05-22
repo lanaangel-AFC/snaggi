@@ -258,6 +258,39 @@ export default function ReportDetail() {
     },
   });
 
+  // Fetch enriched report data for change-indicator badges
+  const { data: reportData } = useQuery<any>({
+    queryKey: [`/api/reports/${reportId}/report-data`],
+    enabled: !!reportId,
+  });
+
+  // Build a map of defect id → events for badges
+  const defectEventsMap = useMemo(() => {
+    const map = new Map<number, { tag: "NEW" | "AMENDED" | null; summary: string }>();
+    if (!reportData?.defects) return map;
+    for (const d of reportData.defects) {
+      if (!d.events) continue;
+      const { isNew, amendedFields } = d.events;
+      if (isNew) {
+        map.set(d.id, { tag: "NEW", summary: "" });
+      } else {
+        const parts: string[] = [];
+        if (amendedFields.observation) parts.push("Observation amended");
+        if (amendedFields.action) parts.push("Action amended");
+        if (amendedFields.photos > 0) parts.push(`${amendedFields.photos} new photo${amendedFields.photos > 1 ? "s" : ""}`);
+        if (amendedFields.locationsAdded > 0) parts.push("Location added");
+        if (amendedFields.locationsAmended > 0) parts.push("Location amended");
+        if (amendedFields.statusChange) parts.push(`Status: ${amendedFields.statusChange.from} → ${amendedFields.statusChange.to}`);
+        if (parts.length > 0) {
+          map.set(d.id, { tag: "AMENDED", summary: parts.map(p => `\u2022 ${p}`).join("  ") });
+        } else {
+          map.set(d.id, { tag: null, summary: "" });
+        }
+      }
+    }
+    return map;
+  }, [reportData]);
+
   const { data: shareLinks } = useQuery<any[]>({
     queryKey: [`/api/reports/${reportId}/share-links`],
   });
@@ -329,6 +362,7 @@ export default function ReportDetail() {
   const renderPhotosPdf = async (
     doc: any, photoList: any[], margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
     addHeader: () => void, addFooter: () => void, DARK_TEXT: readonly number[], startY: number,
+    photosAddedIds?: Set<number>,
   ): Promise<number> => {
     let y = startY;
     const slotOrder = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
@@ -378,7 +412,10 @@ export default function ReportDetail() {
         doc.setTextColor(100);
         const photoLabel = slotLabels[photo.slot] || photo.slot;
         const photoCaption = photo.caption ? ` — ${photo.caption}` : "";
-        doc.text(photoLabel + photoCaption, x, y + imgH + 3);
+        const isNewPhoto = photosAddedIds ? (photosAddedIds.has(photo.id) || photo.isThisInspection) : false;
+        const pDateFmt = (ds?: string) => { if (!ds) return ""; const d = new Date(ds); return d.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }); };
+        const dateSuffix = isNewPhoto && photo.createdAt ? ` (added ${pDateFmt(photo.createdAt)})` : "";
+        doc.text(photoLabel + photoCaption + dateSuffix, x, y + imgH + 3);
         doc.setTextColor(0);
       }
       y += (sortedPhotos.length > 0 ? 85 * 0.75 + 12 : 0);
@@ -391,8 +428,11 @@ export default function ReportDetail() {
     doc: any, defect: any, margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
     addHeader: () => void, addFooter: () => void,
     autoTable: any, DARK_TEXT: readonly number[], CAPTION_BLUE: readonly number[],
+    options?: { showChangeSummary?: boolean },
   ) => {
     const hasMultipleLocations = defect.locations && defect.locations.length > 0;
+    const events = defect.events;
+    const photosAddedIds = events ? new Set<number>(events.photosAddedThisInspection || []) : undefined;
 
     doc.addPage();
     addHeader();
@@ -411,7 +451,6 @@ export default function ReportDetail() {
     doc.text(typeLabel, margin + 3, y);
 
     if (hasMultipleLocations) {
-      // Replace parent UID with "Multiple Entries for {workTypeLabel}"
       const workTypeLabel = getWorkTypeLabel(defect.uid);
       doc.setFontSize(14);
       doc.setFont("helvetica", "bold");
@@ -442,14 +481,51 @@ export default function ReportDetail() {
       y += 2;
     }
 
+    // Change summary block for amended defects
+    if (options?.showChangeSummary && events && !events.isNew) {
+      const af = events.amendedFields;
+      const lines: string[] = [];
+      if (af.observation) lines.push("Observation amended");
+      if (af.action) lines.push("Action amended");
+      if (af.photos > 0) lines.push(`${af.photos} new photo${af.photos > 1 ? "s" : ""}`);
+      if (af.locationsAdded > 0) lines.push("New location added");
+      if (af.locationsAmended > 0) lines.push("Location amended");
+      if (af.statusChange) lines.push(`Status changed: ${af.statusChange.from || "\u2014"} \u2192 ${af.statusChange.to}`);
+
+      if (lines.length > 0) {
+        doc.setFillColor(254, 243, 199); // amber-100
+        doc.roundedRect(margin, y - 2, contentWidth, 5 + lines.length * 4, 1, 1, "F");
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(146, 64, 14); // amber-800
+        doc.text("Changes this inspection:", margin + 2, y + 2);
+        y += 5;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7.5);
+        for (const line of lines) {
+          doc.text(`  \u2022  ${line}`, margin + 2, y + 1);
+          y += 4;
+        }
+        y += 4;
+      }
+    }
+
+    // Observation/Action labels
+    const obsLabel = (events && !events.isNew && events.amendedFields?.observation)
+      ? "Observation (amended this inspection)"
+      : "Observation";
+    const actLabel = (events && !events.isNew && events.amendedFields?.action)
+      ? "Action Required (amended this inspection)"
+      : "Action Required";
+
     // Summary table (shared fields for the defect)
     autoTable(doc, {
       startY: y,
       body: [
         ["Date Opened", defect.dateOpened],
         ["Date Completed", defect.dateClosed || "\u2014"],
-        ["Observation", defect.comment],
-        ["Action Required", defect.actionRequired],
+        [obsLabel, defect.comment],
+        [actLabel, defect.actionRequired],
         ["Assigned To", defect.assignedTo],
         ["Due Date", defect.dueDate],
         ["Verification Method", defect.verificationMethod],
@@ -552,14 +628,14 @@ export default function ReportDetail() {
 
         // Photos for this location (only parent has photos in current model)
         if (loc.photos && loc.photos.length > 0) {
-          y = await renderPhotosPdf(doc, loc.photos, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, DARK_TEXT, y);
+          y = await renderPhotosPdf(doc, loc.photos, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, DARK_TEXT, y, photosAddedIds);
         }
 
         y += 4;
       }
     } else {
       // Single-location: render photos as before
-      y = await renderPhotosPdf(doc, defect.photos || [], margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, DARK_TEXT, y);
+      y = await renderPhotosPdf(doc, defect.photos || [], margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, DARK_TEXT, y, photosAddedIds);
     }
   };
 
@@ -756,26 +832,36 @@ export default function ReportDetail() {
         return dc !== 0 ? dc : sortByUidExport(a, b);
       });
 
-      // Inspection-scoped filtering: only generate detail pages for defects with substantive changes
-      // Excludes defects where the only change was dueDate, assignedTo, status, etc.
-      const reportCreatedAt = data.report.createdAt;
-      const hasSubstantiveChange = (d: any): boolean => {
-        // (a) New defect created during this report window
-        if (d.createdAt && d.createdAt >= reportCreatedAt) return true;
-        // (b) Observation text changed since report was created
-        if (d.observationHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
-        // (c) Action text changed since report was created
-        if (d.actionHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
-        // (d) Photo added/replaced since report was created
-        if (d.photos?.some((p: any) => p.createdAt && p.createdAt >= reportCreatedAt)) return true;
-        // (e) Additional location added since report was created
-        if (d.locations?.some((l: any) => l.createdAt && l.createdAt >= reportCreatedAt)) return true;
+      // Classify defects using server-computed events for PDF
+      const hasAnyAmendedFieldPdf = (d: any): boolean => {
+        if (!d.events) return false;
+        const af = d.events.amendedFields;
+        return af.observation || af.action || af.photos > 0 || af.locationsAdded > 0 || af.locationsAmended > 0 || !!af.statusChange;
+      };
+      const allHaveEventsPdf = allDefects.some((d: any) => d.events);
+
+      const newDefectsPdf = defectsOnly.filter((d: any) => allHaveEventsPdf ? d.events?.isNew : false).sort(sortByUidExport);
+      const amendedDefectsPdf = defectsOnly.filter((d: any) => allHaveEventsPdf ? (!d.events?.isNew && hasAnyAmendedFieldPdf(d)) : false).sort((a: any, b: any) => {
+        const aOv = isOverdue(a) ? 0 : 1;
+        const bOv = isOverdue(b) ? 0 : 1;
+        if (aOv !== bOv) return aOv - bOv;
+        return sortByUidExport(a, b);
+      });
+      const newObsPdf = observationsOnly.filter((d: any) => allHaveEventsPdf ? d.events?.isNew : false).sort(sortByUidExport);
+      const amendedObsPdf = observationsOnly.filter((d: any) => allHaveEventsPdf ? (!d.events?.isNew && hasAnyAmendedFieldPdf(d)) : false).sort(sortByUidExport);
+      // Legacy fallback
+      const qualifiesLegacyPdf = (d: any): boolean => {
+        if (allHaveEventsPdf) return false;
+        const rc = data.report.createdAt;
+        if (d.createdAt && d.createdAt >= rc) return true;
+        if (d.observationHistory?.some((h: any) => h.createdAt >= rc)) return true;
+        if (d.actionHistory?.some((h: any) => h.createdAt >= rc)) return true;
+        if (d.photos?.some((p: any) => p.createdAt && p.createdAt >= rc)) return true;
+        if (d.locations?.some((l: any) => l.createdAt && l.createdAt >= rc)) return true;
         return false;
       };
-      // Fallback: if no defect qualifies (e.g. legacy data with no timestamps), include all
-      const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
-      const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
-      const observationsDetailData = observationsOnly.filter(qualifiesForDetail);
+      const legacyDetailPdf = !allHaveEventsPdf ? defectsOnly.filter(qualifiesLegacyPdf).sort(sortByUidExport) : [];
+      const legacyObsDetailPdf = !allHaveEventsPdf ? observationsOnly.filter(qualifiesLegacyPdf).sort(sortByUidExport) : [];
 
       doc.addPage();
       addHeader();
@@ -801,12 +887,6 @@ export default function ReportDetail() {
         if (!defect.dueDate) return false;
         return new Date(defect.dueDate) < inspectionDate;
       };
-
-      // Detail pages: Overdue-and-amended first, then remaining amended (open or complete)
-      const allDetailQualified = defectsOnly.filter(qualifiesForDetail);
-      const detailOverdue = allDetailQualified.filter((d: any) => isOverdue(d)).sort(sortByUidExport);
-      const detailRest = allDetailQualified.filter((d: any) => !isOverdue(d)).sort(sortByUidExport);
-      const orderedDetailData = [...detailOverdue, ...detailRest];
 
       // Sort summary rows: Overdue → Open → Complete, preserving UID sort within each tier
       const summaryOverdue = allDefects.filter((d: any) => isOverdue(d));
@@ -891,14 +971,59 @@ export default function ReportDetail() {
         doc.text("No items recorded.", margin, y);
       }
 
-      // Detail pages: ordered Overdue-amended → New/Amended (open + complete combined)
-      if (orderedDetailData.length > 0) {
-        for (const defect of orderedDetailData) {
+      // ======= NEW THIS INSPECTION (PDF) =======
+      const allNewPdf = [...newDefectsPdf, ...newObsPdf];
+      if (allNewPdf.length > 0) {
+        doc.addPage();
+        addHeader();
+        addFooter();
+        y = 20;
+
+        doc.setFontSize(18);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...DARK_TEXT);
+        doc.text("NEW THIS INSPECTION", margin, y);
+        y += 7;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+        doc.text("Items added during this inspection.", margin, y);
+
+        for (const defect of allNewPdf) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
       }
 
-      if (observationsOnly.length > 0) {
+      // ======= AMENDED THIS INSPECTION (PDF) =======
+      const allAmendedPdf = [...amendedDefectsPdf, ...amendedObsPdf];
+      if (allAmendedPdf.length > 0) {
+        doc.addPage();
+        addHeader();
+        addFooter();
+        y = 20;
+
+        doc.setFontSize(18);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...DARK_TEXT);
+        doc.text("AMENDED THIS INSPECTION", margin, y);
+        y += 7;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+        doc.text("Existing items updated during this inspection.", margin, y);
+
+        for (const defect of allAmendedPdf) {
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { showChangeSummary: true });
+        }
+      }
+
+      // Legacy fallback (no events data)
+      if (!allHaveEventsPdf && legacyDetailPdf.length > 0) {
+        for (const defect of legacyDetailPdf) {
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
+        }
+      }
+      if (!allHaveEventsPdf && legacyObsDetailPdf.length > 0) {
         doc.addPage();
         addHeader();
         addFooter();
@@ -914,7 +1039,7 @@ export default function ReportDetail() {
         doc.setTextColor(100);
         doc.text("General observations noted during inspection.", margin, y);
 
-        for (const defect of observationsDetailData) {
+        for (const defect of legacyObsDetailPdf) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
       }
@@ -1033,20 +1158,6 @@ export default function ReportDetail() {
         return dc !== 0 ? dc : sortUid(a, b);
       });
 
-      // Inspection-scoped filtering: only generate detail pages for defects with substantive changes
-      const reportCreatedAt = data.report.createdAt;
-      const hasSubstantiveChange = (d: any): boolean => {
-        if (d.createdAt && d.createdAt >= reportCreatedAt) return true;
-        if (d.observationHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
-        if (d.actionHistory?.some((h: any) => h.createdAt >= reportCreatedAt)) return true;
-        if (d.photos?.some((p: any) => p.createdAt && p.createdAt >= reportCreatedAt)) return true;
-        if (d.locations?.some((l: any) => l.createdAt && l.createdAt >= reportCreatedAt)) return true;
-        return false;
-      };
-      const allHaveNullTimestamps = allDefects.every((d: any) => !d.updatedAt && !d.createdAt);
-      const qualifiesForDetail = (d: any) => allHaveNullTimestamps || hasSubstantiveChange(d);
-      const allDetailQualifiedW = defectsOnly.filter(qualifiesForDetail);
-
       // Overdue detection for Word export (must be defined before first use)
       const wordInspectionDate = new Date(data.report.inspectionDate || data.report.createdAt);
       const isOverdueWord = (defect: any): boolean => {
@@ -1055,11 +1166,40 @@ export default function ReportDetail() {
         return new Date(defect.dueDate) < wordInspectionDate;
       };
 
-      // Detail pages: Overdue-and-amended first, then remaining amended (open or complete)
-      const detailOverdueW = allDetailQualifiedW.filter((d: any) => isOverdueWord(d)).sort(sortUid);
-      const detailRestW = allDetailQualifiedW.filter((d: any) => !isOverdueWord(d)).sort(sortUid);
-      const orderedDetailDataW = [...detailOverdueW, ...detailRestW];
-      const observationsDetailData = observationsOnly.filter(qualifiesForDetail);
+      // Classify defects using server-computed events
+      const hasAnyAmendedField = (d: any): boolean => {
+        if (!d.events) return false;
+        const af = d.events.amendedFields;
+        return af.observation || af.action || af.photos > 0 || af.locationsAdded > 0 || af.locationsAmended > 0 || !!af.statusChange;
+      };
+      // Fallback for legacy data: if no defect has events, include all
+      const allHaveEvents = allDefects.some((d: any) => d.events);
+
+      const newDefectsW = defectsOnly.filter((d: any) => allHaveEvents ? d.events?.isNew : false).sort(sortUid);
+      const amendedDefectsW = defectsOnly.filter((d: any) => allHaveEvents ? (!d.events?.isNew && hasAnyAmendedField(d)) : false).sort((a: any, b: any) => {
+        const aOv = isOverdueWord(a) ? 0 : 1;
+        const bOv = isOverdueWord(b) ? 0 : 1;
+        if (aOv !== bOv) return aOv - bOv;
+        return sortUid(a, b);
+      });
+      // Legacy fallback: if no events, use old substantive-change logic
+      const qualifiesForDetailLegacy = (d: any): boolean => {
+        if (!allHaveEvents) {
+          const rc = data.report.createdAt;
+          if (d.createdAt && d.createdAt >= rc) return true;
+          if (d.observationHistory?.some((h: any) => h.createdAt >= rc)) return true;
+          if (d.actionHistory?.some((h: any) => h.createdAt >= rc)) return true;
+          if (d.photos?.some((p: any) => p.createdAt && p.createdAt >= rc)) return true;
+          if (d.locations?.some((l: any) => l.createdAt && l.createdAt >= rc)) return true;
+          return false;
+        }
+        return false;
+      };
+      // For legacy, combine into single ordered list (backwards compat)
+      const legacyDetailW = !allHaveEvents ? defectsOnly.filter(qualifiesForDetailLegacy).sort(sortUid) : [];
+      const newObservationsW = observationsOnly.filter((d: any) => allHaveEvents ? d.events?.isNew : false).sort(sortUid);
+      const amendedObservationsW = observationsOnly.filter((d: any) => allHaveEvents ? (!d.events?.isNew && hasAnyAmendedField(d)) : false).sort(sortUid);
+      const legacyObsDetailW = !allHaveEvents ? observationsOnly.filter(qualifiesForDetailLegacy).sort(sortUid) : [];
 
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
       const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
@@ -1252,8 +1392,15 @@ export default function ReportDetail() {
 
       introChildren.push(new Paragraph({ spacing: { before: 200 } }));
 
+      // ======= HELPER: Format date for photo datestamp =======
+      const formatPhotoDate = (dateStr?: string): string => {
+        if (!dateStr) return "";
+        const d = new Date(dateStr);
+        return d.toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+      };
+
       // ======= HELPER: Build Word photo grid =======
-      const buildWordPhotos = async (photoList: any[]): Promise<any[]> => {
+      const buildWordPhotos = async (photoList: any[], photosAddedIds?: Set<number>): Promise<any[]> => {
         const photoElements: any[] = [];
         if (photoList.length === 0) return photoElements;
 
@@ -1290,15 +1437,18 @@ export default function ReportDetail() {
                 }));
               }
 
-              const captionText = photo.caption ? ` \u2014 ${photo.caption}` : "";
+              const isNewPhoto = photosAddedIds ? (photosAddedIds.has(photo.id) || photo.isThisInspection) : false;
+              const dateSuffix = isNewPhoto && photo.createdAt ? ` (added ${formatPhotoDate(photo.createdAt)})` : "";
+              const captionText = photo.caption ? ` \u2014 ${safeText(photo.caption)}` : "";
               cellChildren.push(new Paragraph({
                 children: [
                   new TextRun({
-                    text: slotLabels[photo.slot] || photo.slot,
+                    text: safeText(slotLabels[photo.slot] || photo.slot),
                     bold: true, size: 16, font: "Aptos",
                     color: photo.slot === "complete" ? "228B22" : "666666",
                   }),
-                  ...(captionText ? [new TextRun({ text: captionText, size: 14, font: "Aptos", color: "888888" })] : []),
+                  ...(captionText ? [new TextRun({ text: safeText(captionText), size: 14, font: "Aptos", color: "888888" })] : []),
+                  ...(dateSuffix ? [new TextRun({ text: safeText(dateSuffix), size: 13, font: "Aptos", color: "2563EB", italics: true })] : []),
                 ],
                 alignment: AlignmentType.CENTER,
                 spacing: { before: 40 },
@@ -1330,9 +1480,11 @@ export default function ReportDetail() {
       };
 
       // ======= HELPER: Build 1 defect page for Word =======
-      const buildWordDefectPage = async (defect: any): Promise<any[]> => {
+      const buildWordDefectPage = async (defect: any, options?: { showChangeSummary?: boolean }): Promise<any[]> => {
         const elements: any[] = [];
         const hasMultipleLocations = defect.locations && defect.locations.length > 0;
+        const events = defect.events;
+        const photosAddedIds = events ? new Set<number>(events.photosAddedThisInspection || []) : undefined;
 
         const isObs = defect.recordType === "observation";
         const headingText = hasMultipleLocations
@@ -1361,18 +1513,53 @@ export default function ReportDetail() {
         if (!hasMultipleLocations) {
           elements.push(new Paragraph({
             children: [new TextRun({ text: deriveLocation(safeText(defect.uid)), size: 18, font: "Aptos", color: "666666" })],
-            spacing: { after: 200 },
+            spacing: { after: options?.showChangeSummary ? 100 : 200 },
           }));
         } else {
           elements.push(new Paragraph({ spacing: { after: 100 } }));
         }
 
-        // Summary table (shared defect info) — safeText guards against null/undefined
+        // Change summary block for amended defects
+        if (options?.showChangeSummary && events && !events.isNew) {
+          const af = events.amendedFields;
+          const lines: string[] = [];
+          if (af.observation) lines.push("Observation amended");
+          if (af.action) lines.push("Action amended");
+          if (af.photos > 0) lines.push(`${af.photos} new photo${af.photos > 1 ? "s" : ""}`);
+          if (af.locationsAdded > 0) lines.push(`New location added`);
+          if (af.locationsAmended > 0) lines.push(`Location amended`);
+          if (af.statusChange) lines.push(`Status changed: ${af.statusChange.from || "—"} \u2192 ${af.statusChange.to}`);
+
+          if (lines.length > 0) {
+            elements.push(new Paragraph({
+              children: [new TextRun({ text: "Changes this inspection:", bold: true, size: 17, font: "Aptos", color: "92400E" })],
+              spacing: { before: 40, after: 30 },
+              shading: { type: ShadingType.SOLID, color: "FEF3C7" },
+            }));
+            for (const line of lines) {
+              elements.push(new Paragraph({
+                children: [new TextRun({ text: `  \u2022  ${line}`, size: 16, font: "Aptos", color: "92400E" })],
+                spacing: { before: 10, after: 10 },
+                shading: { type: ShadingType.SOLID, color: "FEF3C7" },
+              }));
+            }
+            elements.push(new Paragraph({ spacing: { before: 80 } }));
+          }
+        }
+
+        // Summary table — amended labels for observation/action
+        const obsLabel = (events && !events.isNew && events.amendedFields.observation)
+          ? "Observation (amended this inspection)"
+          : "Observation";
+        const actLabel = (events && !events.isNew && events.amendedFields.action)
+          ? "Action Required (amended this inspection)"
+          : "Action Required";
+
         const infoRows = [
           ["Date Opened", safeText(defect.dateOpened)],
           ["Date Completed", safeText(defect.dateClosed) || "\u2014"],
-          ["Observation", safeText(defect.comment)],
-          ["Action Required", safeText(defect.actionRequired)],
+          [obsLabel, safeText(defect.comment)],
+          [actLabel, safeText(defect.actionRequired)],
           ["Assigned To", safeText(defect.assignedTo)],
           ["Due Date", safeText(defect.dueDate)],
           ["Verification Method", safeText(defect.verificationMethod)],
@@ -1390,7 +1577,7 @@ export default function ReportDetail() {
                 new TableCell({
                   width: { size: 28, type: WidthType.PERCENTAGE },
                   children: [new Paragraph({
-                    children: [new TextRun({ text: label, bold: true, size: 18, font: "Aptos" })],
+                    children: [new TextRun({ text: safeText(label), bold: true, size: 18, font: "Aptos" })],
                     spacing: { before: 50, after: 50 },
                   })],
                   borders: { top: noBorder, left: noBorder, right: noBorder, bottom: bottomBorder },
@@ -1398,7 +1585,7 @@ export default function ReportDetail() {
                 new TableCell({
                   width: { size: 72, type: WidthType.PERCENTAGE },
                   children: [new Paragraph({
-                    children: [new TextRun({ text: value, size: 18, font: "Aptos" })],
+                    children: [new TextRun({ text: safeText(value), size: 18, font: "Aptos" })],
                     spacing: { before: 50, after: 50 },
                   })],
                   borders: { top: noBorder, left: noBorder, right: noBorder, bottom: bottomBorder },
@@ -1471,13 +1658,13 @@ export default function ReportDetail() {
 
             // Photos for this location (only parent has photos in current model)
             if (loc.photos && loc.photos.length > 0) {
-              const photoEls = await buildWordPhotos(loc.photos);
+              const photoEls = await buildWordPhotos(loc.photos, photosAddedIds);
               elements.push(...photoEls);
             }
           }
         } else {
           // Single-location: render photos as before
-          const photoEls = await buildWordPhotos(defect.photos || []);
+          const photoEls = await buildWordPhotos(defect.photos || [], photosAddedIds);
           elements.push(...photoEls);
         }
 
@@ -1589,20 +1776,6 @@ export default function ReportDetail() {
         }));
       }
 
-      // Detail pages: ordered Overdue-amended → New/Amended (open + complete combined)
-      for (let i = 0; i < orderedDetailDataW.length; i++) {
-        if (i > 0 || defectsOnly.length > 0) {
-          obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
-        }
-        try {
-          const defectEls = await buildWordDefectPage(orderedDetailDataW[i]);
-          obsChildren.push(...defectEls);
-        } catch (defectErr) {
-          console.error(`[Word export] Failed on defect id=${orderedDetailDataW[i]?.id} uid=${orderedDetailDataW[i]?.uid}`, defectErr);
-          throw defectErr;
-        }
-      }
-
       // ======= BUILD DOCUMENT =======
       const sectionProps = {
         page: {
@@ -1627,27 +1800,92 @@ export default function ReportDetail() {
         { properties: sectionProps, children: obsChildren },
       ];
 
-      if (observationsOnly.length > 0) {
+      // ======= NEW THIS INSPECTION section (defects + observations) =======
+      const allNewItems = [...newDefectsW, ...newObservationsW];
+      if (allNewItems.length > 0) {
+        const newChildren: any[] = [];
+        newChildren.push(new Paragraph({
+          children: [new TextRun({ text: "NEW THIS INSPECTION", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+          heading: HeadingLevel.HEADING_1,
+          spacing: { after: 80 },
+        }));
+        newChildren.push(new Paragraph({
+          children: [new TextRun({ text: "Items added during this inspection.", size: 18, color: "666666", italics: true, font: "Aptos" })],
+          spacing: { after: 200 },
+        }));
+        for (let i = 0; i < allNewItems.length; i++) {
+          if (i > 0) {
+            newChildren.push(new Paragraph({ children: [new PageBreak()] }));
+          }
+          try {
+            const defectEls = await buildWordDefectPage(allNewItems[i]);
+            newChildren.push(...defectEls);
+          } catch (err) {
+            console.error(`[Word export] Failed on new defect id=${allNewItems[i]?.id}`, err);
+            throw err;
+          }
+        }
+        docSections.push({ properties: sectionProps, children: newChildren });
+      }
+
+      // ======= AMENDED THIS INSPECTION section (defects + observations) =======
+      const allAmendedItems = [...amendedDefectsW, ...amendedObservationsW];
+      if (allAmendedItems.length > 0) {
+        const amendChildren: any[] = [];
+        amendChildren.push(new Paragraph({
+          children: [new TextRun({ text: "AMENDED THIS INSPECTION", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+          heading: HeadingLevel.HEADING_1,
+          spacing: { after: 80 },
+        }));
+        amendChildren.push(new Paragraph({
+          children: [new TextRun({ text: "Existing items updated during this inspection.", size: 18, color: "666666", italics: true, font: "Aptos" })],
+          spacing: { after: 200 },
+        }));
+        for (let i = 0; i < allAmendedItems.length; i++) {
+          if (i > 0) {
+            amendChildren.push(new Paragraph({ children: [new PageBreak()] }));
+          }
+          try {
+            const defectEls = await buildWordDefectPage(allAmendedItems[i], { showChangeSummary: true });
+            amendChildren.push(...defectEls);
+          } catch (err) {
+            console.error(`[Word export] Failed on amended defect id=${allAmendedItems[i]?.id}`, err);
+            throw err;
+          }
+        }
+        docSections.push({ properties: sectionProps, children: amendChildren });
+      }
+
+      // Legacy fallback: if no events data, use old combined detail layout
+      if (!allHaveEvents && legacyDetailW.length > 0) {
+        for (let i = 0; i < legacyDetailW.length; i++) {
+          obsChildren.push(new Paragraph({ children: [new PageBreak()] }));
+          try {
+            const defectEls = await buildWordDefectPage(legacyDetailW[i]);
+            obsChildren.push(...defectEls);
+          } catch (err) {
+            console.error(`[Word export] Failed on legacy defect id=${legacyDetailW[i]?.id}`, err);
+            throw err;
+          }
+        }
+      }
+      if (!allHaveEvents && legacyObsDetailW.length > 0) {
         const obsOnlyChildren: any[] = [];
         obsOnlyChildren.push(new Paragraph({
           children: [new TextRun({ text: "Observations", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
           heading: HeadingLevel.HEADING_1,
           spacing: { after: 80 },
         }));
-        obsOnlyChildren.push(new Paragraph({
-          children: [new TextRun({ text: "General observations noted during inspection.", size: 18, color: "666666", italics: true, font: "Aptos" })],
-          spacing: { after: 200 },
-        }));
-        for (let i = 0; i < observationsDetailData.length; i++) {
+        for (let i = 0; i < legacyObsDetailW.length; i++) {
           if (i > 0) {
             obsOnlyChildren.push(new Paragraph({ children: [new PageBreak()] }));
           }
           try {
-            const defectEls = await buildWordDefectPage(observationsDetailData[i]);
+            const defectEls = await buildWordDefectPage(legacyObsDetailW[i]);
             obsOnlyChildren.push(...defectEls);
-          } catch (obsErr) {
-            console.error(`[Word export] Failed on observation id=${observationsDetailData[i]?.id} uid=${observationsDetailData[i]?.uid}`, obsErr);
-            throw obsErr;
+          } catch (err) {
+            console.error(`[Word export] Failed on legacy observation id=${legacyObsDetailW[i]?.id}`, err);
+            throw err;
           }
         }
         docSections.push({ properties: sectionProps, children: obsOnlyChildren });
@@ -2114,6 +2352,8 @@ export default function ReportDetail() {
                     projectId={projectId!}
                     reportId={reportId!}
                     onDelete={() => deleteMutation.mutate(defect.id)}
+                    changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
+                    changeSummary={defectEventsMap.get(defect.id)?.summary}
                   />
                 ))}
               </div>
@@ -2136,6 +2376,8 @@ export default function ReportDetail() {
                     projectId={projectId!}
                     reportId={reportId!}
                     onDelete={() => deleteMutation.mutate(defect.id)}
+                    changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
+                    changeSummary={defectEventsMap.get(defect.id)?.summary}
                   />
                 ))}
               </div>
@@ -2158,6 +2400,8 @@ export default function ReportDetail() {
                     projectId={projectId!}
                     reportId={reportId!}
                     onDelete={() => deleteMutation.mutate(defect.id)}
+                    changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
+                    changeSummary={defectEventsMap.get(defect.id)?.summary}
                   />
                 ))}
               </div>
@@ -2169,7 +2413,7 @@ export default function ReportDetail() {
   );
 }
 
-function DefectCard({ defect, projectId, reportId, onDelete }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void }) {
+function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED"; changeSummary?: string }) {
   const isComplete = defect.status === "complete";
 
   return (
@@ -2192,8 +2436,21 @@ function DefectCard({ defect, projectId, reportId, onDelete }: { defect: Defect;
                   <><AlertTriangle className="w-3 h-3 mr-1" />Open</>
                 )}
               </Badge>
+              {changeTag === "NEW" && (
+                <Badge variant="secondary" className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0">
+                  NEW
+                </Badge>
+              )}
+              {changeTag === "AMENDED" && (
+                <Badge variant="secondary" className="bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300 text-[10px] px-1.5 py-0 border border-amber-300">
+                  AMENDED
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground truncate">{defect.comment}</p>
+            {changeSummary && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5 truncate">{changeSummary}</p>
+            )}
             <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
               <span>Assigned: {defect.assignedTo}</span>
               {isComplete && defect.dateClosed ? (
