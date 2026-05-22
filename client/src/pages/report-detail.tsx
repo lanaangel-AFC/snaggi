@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
-  ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link
+  ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link as LinkIcon
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -1935,7 +1935,7 @@ export default function ReportDetail() {
                     disabled={createShareLinkMutation.isPending}
                     onClick={() => createShareLinkMutation.mutate(shareRecipient)}
                   >
-                    <Link className="w-4 h-4 mr-2" />
+                    <LinkIcon className="w-4 h-4 mr-2" />
                     {createShareLinkMutation.isPending ? "Generating..." : "Generate Share Link"}
                   </Button>
                 </>
