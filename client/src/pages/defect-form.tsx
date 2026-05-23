@@ -709,10 +709,11 @@ export default function DefectForm() {
   }, [defectId]);
 
   // Compute whether a photo is "new this inspection" (respects newOverride)
+  // Uses originReportId (first inspection photo appeared in) for auto-detect
   const isPhotoNew = (photo: Photo): boolean => {
     if (photo.newOverride === "new") return true;
     if (photo.newOverride === "not-new") return false;
-    return photo.reportId === Number(reportId);
+    return (photo.originReportId ?? photo.reportId) === Number(reportId);
   };
 
   const handleToggleNewOverride = async (photo: Photo) => {

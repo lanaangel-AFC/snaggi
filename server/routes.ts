@@ -369,6 +369,7 @@ export async function registerRoutes(
     const photo = await storage.createPhoto({
       defectId,
       reportId,
+      originReportId: reportId, // new upload → origin is this report
       filename: req.file.filename,
       caption: req.body.caption || null,
       slot,
@@ -530,7 +531,7 @@ export async function registerRoutes(
         const photosAdded = defectPhotos.filter(p =>
           p.newOverride === "new" ? true
           : p.newOverride === "not-new" ? false
-          : p.reportId === report.id
+          : (p.originReportId ?? p.reportId) === report.id
         );
         const locsAdded = locations.filter(l => l.createdAt && l.createdAt >= windowStart && l.createdAt < windowEnd);
         const locsAmended = locations.filter(l => (l as any).updatedAt && (l as any).updatedAt >= windowStart && (l as any).updatedAt < windowEnd);
@@ -551,11 +552,12 @@ export async function registerRoutes(
         };
 
         // Mark each photo with isThisInspection flag (respects manual override)
+        // Uses originReportId (first inspection photo appeared in) instead of reportId
         const photosWithFlag = defectPhotos.map(p => ({
           ...p,
           isThisInspection: p.newOverride === "new" ? true
             : p.newOverride === "not-new" ? false
-            : p.reportId === report.id,
+            : (p.originReportId ?? p.reportId) === report.id,
         }));
 
         return { ...d, photos: photosWithFlag, locations, observationHistory: obsHistory, actionHistory: actHistory, statusHistory: statHistory, events };
@@ -714,19 +716,47 @@ export async function registerRoutes(
       `SELECT COUNT(*) as cnt FROM photos p JOIN defects d ON d.id = p.defect_id WHERE d.project_id = ? AND p.report_id IS NULL`
     ).get(projectId) as { cnt: number };
 
+    const byOriginReportId = sqlite.prepare(
+      `SELECT p.origin_report_id, r.inspection_number, r.inspection_date, COUNT(*) as cnt
+       FROM photos p
+       JOIN defects d ON d.id = p.defect_id
+       LEFT JOIN reports r ON r.id = p.origin_report_id
+       WHERE d.project_id = ?
+       GROUP BY p.origin_report_id
+       ORDER BY p.origin_report_id`
+    ).all(projectId) as { origin_report_id: number | null; inspection_number: string; inspection_date: string; cnt: number }[];
+
+    const carryOverCount = sqlite.prepare(
+      `SELECT COUNT(*) as cnt FROM photos p JOIN defects d ON d.id = p.defect_id
+       WHERE d.project_id = ? AND p.origin_report_id IS NOT NULL AND p.origin_report_id != p.report_id`
+    ).get(projectId) as { cnt: number };
+
     const sample = sqlite.prepare(
-      `SELECT p.id, p.defect_id, p.report_id, p.created_at, p.slot, p.new_override, d.uid as defect_uid
+      `SELECT p.id, p.defect_id, p.report_id, p.origin_report_id, p.created_at, p.slot, p.new_override, d.uid as defect_uid
        FROM photos p JOIN defects d ON d.id = p.defect_id
        WHERE d.project_id = ?
        ORDER BY p.report_id, p.id
        LIMIT 50`
     ).all(projectId);
 
+    const carryOverSample = sqlite.prepare(
+      `SELECT p.id, p.defect_id, p.report_id, p.origin_report_id, p.slot, d.uid as defect_uid
+       FROM photos p JOIN defects d ON d.id = p.defect_id
+       WHERE d.project_id = ? AND p.origin_report_id IS NOT NULL AND p.origin_report_id != p.report_id
+       ORDER BY p.origin_report_id, p.id
+       LIMIT 30`
+    ).all(projectId);
+
     const reports = sqlite.prepare(
       `SELECT id, inspection_number, inspection_date, created_at FROM reports WHERE project_id = ? ORDER BY created_at ASC`
     ).all(projectId);
 
-    res.json({ projectId, total: total.cnt, nullReportIdCount: nullCount.cnt, byReportId, reports, sample });
+    res.json({
+      projectId, total: total.cnt, nullReportIdCount: nullCount.cnt,
+      byReportId, byOriginReportId,
+      carryOverCount: carryOverCount.cnt,
+      reports, sample, carryOverSample,
+    });
   });
 
   // Corrective backfill: re-assign photo report_ids using timestamp windows.
@@ -771,6 +801,54 @@ export async function registerRoutes(
     sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('photo_backfill_corrective_p' || ?, ?)`).run(String(projectId), new Date().toISOString());
 
     res.json({ updated, totalPhotos: allPhotos.length, reportsUsed: projectReports.length });
+  });
+
+  // Origin-report backfill: (re-)compute origin_report_id for all photos in a project
+  // using UID+slot matching. Can be triggered manually for any project.
+  app.post("/api/admin/photo-origin-backfill", async (req, res) => {
+    const projectId = req.body.projectId ? Number(req.body.projectId) : null;
+
+    const whereClause = projectId ? `WHERE d.project_id = ?` : ``;
+    const params = projectId ? [projectId] : [];
+
+    const allPhotos = sqlite.prepare(`
+      SELECT p.id, p.defect_id, p.report_id, p.slot, d.uid as defect_uid, d.project_id,
+             r.inspection_number
+      FROM photos p
+      JOIN defects d ON d.id = p.defect_id
+      LEFT JOIN reports r ON r.id = p.report_id
+      ${whereClause}
+      ORDER BY CAST(r.inspection_number AS INTEGER) ASC, p.id ASC
+    `).all(...params) as {
+      id: number; defect_id: number; report_id: number | null; slot: string;
+      defect_uid: string; project_id: number; inspection_number: string | null;
+    }[];
+
+    const originMap = new Map<string, number>();
+    const updateStmt = sqlite.prepare(`UPDATE photos SET origin_report_id = ? WHERE id = ?`);
+    let updated = 0;
+    let carryOvers = 0;
+
+    for (const photo of allPhotos) {
+      const key = `${photo.project_id}:${photo.defect_uid}:${photo.slot}`;
+      const existingOrigin = originMap.get(key);
+      if (existingOrigin !== undefined) {
+        updateStmt.run(existingOrigin, photo.id);
+        if (existingOrigin !== photo.report_id) carryOvers++;
+      } else {
+        const origin = photo.report_id;
+        if (origin !== null) originMap.set(key, origin);
+        updateStmt.run(origin, photo.id);
+      }
+      updated++;
+    }
+
+    res.json({
+      updated,
+      carryOvers,
+      newPhotos: updated - carryOvers,
+      projectId: projectId || "all",
+    });
   });
 
   // ==================== SHARE LINKS ====================

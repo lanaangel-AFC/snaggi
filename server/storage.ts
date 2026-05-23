@@ -176,6 +176,7 @@ safeAddColumn("markers", "location_id", "INTEGER");
 safeAddColumn("projects", "enabled_uid_parts", `TEXT DEFAULT '{"elevation":true,"drop":true,"level":true,"workType":true}'`);
 safeAddColumn("projects", "primary_work_types", "TEXT DEFAULT '[]'");
 safeAddColumn("photos", "report_id", "INTEGER");
+safeAddColumn("photos", "origin_report_id", "INTEGER"); // report where photo FIRST appeared (survives cloning)
 safeAddColumn("photos", "new_override", "TEXT"); // "new" | "not-new" | null (auto-detect)
 safeAddColumn("defect_locations", "updated_at", "TEXT");
 
@@ -222,6 +223,54 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
     }
     // Mark as completed so it never re-runs
     sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('photo_backfill_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// Origin-report backfill — runs ONCE, sets origin_report_id via UID+slot matching.
+// For each photo, finds the EARLIEST photo with the same (defect_uid, slot) in the same
+// project (ordered by report inspection_number). That earliest photo's report_id becomes
+// the origin_report_id for all later copies. Photos with no earlier match get their own report_id.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'photo_origin_backfill_v1'`).get();
+  if (!alreadyRan) {
+    // Gather all photos with their defect UID and project, ordered by inspection_number ASC
+    const allPhotos = sqlite.prepare(`
+      SELECT p.id, p.defect_id, p.report_id, p.slot, d.uid as defect_uid, d.project_id,
+             r.inspection_number
+      FROM photos p
+      JOIN defects d ON d.id = p.defect_id
+      LEFT JOIN reports r ON r.id = p.report_id
+      ORDER BY CAST(r.inspection_number AS INTEGER) ASC, p.id ASC
+    `).all() as {
+      id: number; defect_id: number; report_id: number | null; slot: string;
+      defect_uid: string; project_id: number; inspection_number: string | null;
+    }[];
+
+    // Map: project_id → defect_uid → slot → earliest report_id
+    const originMap = new Map<string, number>(); // key = "projectId:uid:slot"
+
+    const updateStmt = sqlite.prepare(`UPDATE photos SET origin_report_id = ? WHERE id = ?`);
+    let backfilled = 0;
+
+    for (const photo of allPhotos) {
+      const key = `${photo.project_id}:${photo.defect_uid}:${photo.slot}`;
+      const existingOrigin = originMap.get(key);
+      if (existingOrigin !== undefined) {
+        // This is a carry-over copy — use the earliest origin
+        updateStmt.run(existingOrigin, photo.id);
+      } else {
+        // First occurrence of this (uid, slot) in this project — origin is its own report_id
+        const origin = photo.report_id;
+        if (origin !== null) {
+          originMap.set(key, origin);
+        }
+        updateStmt.run(origin, photo.id);
+      }
+      backfilled++;
+    }
+
+    console.log(`[origin-backfill] Set origin_report_id for ${backfilled} photos`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('photo_origin_backfill_v1', ?)`).run(new Date().toISOString());
   }
 }
 
@@ -466,7 +515,7 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Copy photos
+      // Copy photos (preserve origin_report_id so carry-over photos keep their original source)
       const defectPhotos = db.select().from(photos).where(eq(photos.defectId, d.id)).all();
       for (const p of defectPhotos) {
         // Copy file on disk
@@ -481,6 +530,8 @@ export class DatabaseStorage implements IStorage {
             filename: newFilename,
             caption: p.caption,
             slot: p.slot,
+            reportId: newReport.id,
+            originReportId: p.originReportId ?? p.reportId, // preserve original source report
             createdAt: new Date().toISOString(),
           }).run();
         }

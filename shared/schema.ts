@@ -58,10 +58,11 @@ export const photos = sqliteTable("photos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   defectId: integer("defect_id").notNull(),
   reportId: integer("report_id"), // nullable for backward compat; set on upload
+  originReportId: integer("origin_report_id"), // report where this photo FIRST appeared (survives carry-over cloning)
   filename: text("filename").notNull(),
   caption: text("caption"),
   slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, wip4, wip5, complete
-  newOverride: text("new_override"), // "new" | "not-new" | null (auto-detect via reportId)
+  newOverride: text("new_override"), // "new" | "not-new" | null (auto-detect via originReportId)
   createdAt: text("created_at").notNull(),
 });
 
