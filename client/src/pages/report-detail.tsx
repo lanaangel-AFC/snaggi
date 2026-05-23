@@ -266,7 +266,7 @@ export default function ReportDetail() {
 
   // Build a map of defect id → events for badges
   const defectEventsMap = useMemo(() => {
-    const map = new Map<number, { tag: "NEW" | "AMENDED" | null; summary: string }>();
+    const map = new Map<number, { tag: "NEW" | "AMENDED" | "COMPLETED" | null; summary: string }>();
     if (!reportData?.defects) return map;
     for (const d of reportData.defects) {
       if (!d.events) continue;
@@ -280,9 +280,10 @@ export default function ReportDetail() {
         if (amendedFields.photos > 0) parts.push(`${amendedFields.photos} new photo${amendedFields.photos > 1 ? "s" : ""}`);
         if (amendedFields.locationsAdded > 0) parts.push("Location added");
         if (amendedFields.locationsAmended > 0) parts.push("Location amended");
-        if (amendedFields.statusChange) parts.push(`Status: ${amendedFields.statusChange.from} → ${amendedFields.statusChange.to}`);
+        if (amendedFields.statusChange) parts.push(`Status: ${amendedFields.statusChange.from} \u2192 ${amendedFields.statusChange.to}`);
         if (parts.length > 0) {
-          map.set(d.id, { tag: "AMENDED", summary: parts.map(p => `\u2022 ${p}`).join("  ") });
+          const completedThisInspection = !!amendedFields.statusChange && amendedFields.statusChange.to === "complete";
+          map.set(d.id, { tag: completedThisInspection ? "COMPLETED" : "AMENDED", summary: parts.map(p => `\u2022 ${p}`).join("  ") });
         } else {
           map.set(d.id, { tag: null, summary: "" });
         }
@@ -841,14 +842,17 @@ export default function ReportDetail() {
       const allHaveEventsPdf = allDefects.some((d: any) => d.events);
 
       const newDefectsPdf = defectsOnly.filter((d: any) => allHaveEventsPdf ? d.events?.isNew : false).sort(sortByUidExport);
-      const amendedDefectsPdf = defectsOnly.filter((d: any) => allHaveEventsPdf ? (!d.events?.isNew && hasAnyAmendedFieldPdf(d)) : false).sort((a: any, b: any) => {
+      const isCompletedThisInspection = (d: any): boolean => !d.events?.isNew && !!d.events?.amendedFields?.statusChange && d.events.amendedFields.statusChange.to === "complete";
+      const amendedDefectsPdf = defectsOnly.filter((d: any) => allHaveEventsPdf ? (!d.events?.isNew && !isCompletedThisInspection(d) && hasAnyAmendedFieldPdf(d)) : false).sort((a: any, b: any) => {
         const aOv = isOverdue(a) ? 0 : 1;
         const bOv = isOverdue(b) ? 0 : 1;
         if (aOv !== bOv) return aOv - bOv;
         return sortByUidExport(a, b);
       });
+      const completedDefectsPdf = defectsOnly.filter((d: any) => allHaveEventsPdf ? isCompletedThisInspection(d) : false).sort(sortByUidExport);
       const newObsPdf = observationsOnly.filter((d: any) => allHaveEventsPdf ? d.events?.isNew : false).sort(sortByUidExport);
-      const amendedObsPdf = observationsOnly.filter((d: any) => allHaveEventsPdf ? (!d.events?.isNew && hasAnyAmendedFieldPdf(d)) : false).sort(sortByUidExport);
+      const amendedObsPdf = observationsOnly.filter((d: any) => allHaveEventsPdf ? (!d.events?.isNew && !isCompletedThisInspection(d) && hasAnyAmendedFieldPdf(d)) : false).sort(sortByUidExport);
+      const completedObsPdf = observationsOnly.filter((d: any) => allHaveEventsPdf ? isCompletedThisInspection(d) : false).sort(sortByUidExport);
       // Legacy fallback
       const qualifiesLegacyPdf = (d: any): boolean => {
         if (allHaveEventsPdf) return false;
@@ -1017,6 +1021,29 @@ export default function ReportDetail() {
         }
       }
 
+      // ======= COMPLETED THIS INSPECTION (PDF) =======
+      const allCompletedPdf = [...completedDefectsPdf, ...completedObsPdf];
+      if (allCompletedPdf.length > 0) {
+        doc.addPage();
+        addHeader();
+        addFooter();
+        y = 20;
+
+        doc.setFontSize(18);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...DARK_TEXT);
+        doc.text("COMPLETED THIS INSPECTION", margin, y);
+        y += 7;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(100);
+        doc.text("Items marked complete during this inspection.", margin, y);
+
+        for (const defect of allCompletedPdf) {
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { showChangeSummary: true });
+        }
+      }
+
       // Legacy fallback (no events data)
       if (!allHaveEventsPdf && legacyDetailPdf.length > 0) {
         for (const defect of legacyDetailPdf) {
@@ -1042,57 +1069,6 @@ export default function ReportDetail() {
         for (const defect of legacyObsDetailPdf) {
           await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
         }
-      }
-
-      // ======= PROJECT SUMMARY — CUMULATIVE REGISTER =======
-      const allProjectItems = (data.allProjectDefects || []).slice().sort(sortByUidExport);
-      if (allProjectItems.length > 0) {
-        doc.addPage();
-        addHeader();
-        addFooter();
-        let sy = 20;
-
-        doc.setFontSize(18);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(...DARK_TEXT);
-        doc.text("Project Summary \u2014 Cumulative Register", margin, sy);
-        sy += 7;
-
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(100);
-        doc.text("Complete list of all defects and observations created across this project.", margin, sy);
-        sy += 8;
-
-        const summaryHead = [["#", "UID", "Description", "Status", "Date Completed"]];
-        const summaryBody = allProjectItems.map((d: any, i: number) => {
-          const wtCode = extractWorkTypeFromUid(d.uid);
-          const wtLabel = workTypeMap.get(wtCode) || wtCode;
-          return [
-            String(i + 1),
-            d.uid,
-            getBriefDescription(d, wtLabel),
-            d.status === "complete" ? "Complete" : "Open",
-            d.status === "complete" ? (d.dateClosed || "") : "",
-          ];
-        });
-
-        autoTable(doc, {
-          startY: sy,
-          head: summaryHead,
-          body: summaryBody,
-          margin: { left: margin, right: margin },
-          styles: { fontSize: 8, cellPadding: 2.5 },
-          headStyles: { fillColor: [255, 255, 255], textColor: [...CAPTION_BLUE], fontStyle: "bold", lineWidth: { bottom: 0.5 }, lineColor: [...DARK_TEXT] },
-          columnStyles: {
-            0: { cellWidth: 10 },
-            1: { cellWidth: 28 },
-            2: { cellWidth: 75 },
-            3: { cellWidth: 20 },
-            4: { cellWidth: 25 },
-          },
-          didDrawPage: () => { addHeader(); addFooter(); },
-        });
       }
 
       doc.save(`${data.project.name.replace(/[^a-zA-Z0-9]/g, "_")}_SVR.pdf`);
@@ -1176,12 +1152,14 @@ export default function ReportDetail() {
       const allHaveEvents = allDefects.some((d: any) => d.events);
 
       const newDefectsW = defectsOnly.filter((d: any) => allHaveEvents ? d.events?.isNew : false).sort(sortUid);
-      const amendedDefectsW = defectsOnly.filter((d: any) => allHaveEvents ? (!d.events?.isNew && hasAnyAmendedField(d)) : false).sort((a: any, b: any) => {
+      const isCompletedThisInspectionW = (d: any): boolean => !d.events?.isNew && !!d.events?.amendedFields?.statusChange && d.events.amendedFields.statusChange.to === "complete";
+      const amendedDefectsW = defectsOnly.filter((d: any) => allHaveEvents ? (!d.events?.isNew && !isCompletedThisInspectionW(d) && hasAnyAmendedField(d)) : false).sort((a: any, b: any) => {
         const aOv = isOverdueWord(a) ? 0 : 1;
         const bOv = isOverdueWord(b) ? 0 : 1;
         if (aOv !== bOv) return aOv - bOv;
         return sortUid(a, b);
       });
+      const completedDefectsW = defectsOnly.filter((d: any) => allHaveEvents ? isCompletedThisInspectionW(d) : false).sort(sortUid);
       // Legacy fallback: if no events, use old substantive-change logic
       const qualifiesForDetailLegacy = (d: any): boolean => {
         if (!allHaveEvents) {
@@ -1198,7 +1176,8 @@ export default function ReportDetail() {
       // For legacy, combine into single ordered list (backwards compat)
       const legacyDetailW = !allHaveEvents ? defectsOnly.filter(qualifiesForDetailLegacy).sort(sortUid) : [];
       const newObservationsW = observationsOnly.filter((d: any) => allHaveEvents ? d.events?.isNew : false).sort(sortUid);
-      const amendedObservationsW = observationsOnly.filter((d: any) => allHaveEvents ? (!d.events?.isNew && hasAnyAmendedField(d)) : false).sort(sortUid);
+      const amendedObservationsW = observationsOnly.filter((d: any) => allHaveEvents ? (!d.events?.isNew && !isCompletedThisInspectionW(d) && hasAnyAmendedField(d)) : false).sort(sortUid);
+      const completedObservationsW = observationsOnly.filter((d: any) => allHaveEvents ? isCompletedThisInspectionW(d) : false).sort(sortUid);
       const legacyObsDetailW = !allHaveEvents ? observationsOnly.filter(qualifiesForDetailLegacy).sort(sortUid) : [];
 
       const slotOrder = ["wip1", "wip2", "wip3", "complete"];
@@ -1856,6 +1835,34 @@ export default function ReportDetail() {
         docSections.push({ properties: sectionProps, children: amendChildren });
       }
 
+      // ======= COMPLETED THIS INSPECTION section (defects + observations) =======
+      const allCompletedItemsW = [...completedDefectsW, ...completedObservationsW];
+      if (allCompletedItemsW.length > 0) {
+        const completedChildren: any[] = [];
+        completedChildren.push(new Paragraph({
+          children: [new TextRun({ text: "COMPLETED THIS INSPECTION", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+          heading: HeadingLevel.HEADING_1,
+          spacing: { after: 80 },
+        }));
+        completedChildren.push(new Paragraph({
+          children: [new TextRun({ text: "Items marked complete during this inspection.", size: 18, color: "666666", italics: true, font: "Aptos" })],
+          spacing: { after: 200 },
+        }));
+        for (let i = 0; i < allCompletedItemsW.length; i++) {
+          if (i > 0) {
+            completedChildren.push(new Paragraph({ children: [new PageBreak()] }));
+          }
+          try {
+            const defectEls = await buildWordDefectPage(allCompletedItemsW[i], { showChangeSummary: true });
+            completedChildren.push(...defectEls);
+          } catch (err) {
+            console.error(`[Word export] Failed on completed defect id=${allCompletedItemsW[i]?.id}`, err);
+            throw err;
+          }
+        }
+        docSections.push({ properties: sectionProps, children: completedChildren });
+      }
+
       // Legacy fallback: if no events data, use old combined detail layout
       if (!allHaveEvents && legacyDetailW.length > 0) {
         for (let i = 0; i < legacyDetailW.length; i++) {
@@ -1889,57 +1896,6 @@ export default function ReportDetail() {
           }
         }
         docSections.push({ properties: sectionProps, children: obsOnlyChildren });
-      }
-
-      // ======= PROJECT SUMMARY — CUMULATIVE REGISTER (Word) =======
-      const allProjectItemsW = (data.allProjectDefects || []).slice().sort(sortUid);
-      if (allProjectItemsW.length > 0) {
-        const projSummaryRows: any[] = [];
-        projSummaryRows.push(new TableRow({
-          tableHeader: true,
-          children: ["#", "UID", "Description", "Status", "Date Completed"].map((label) =>
-            new TableCell({
-              width: { size: 100 / 5, type: WidthType.PERCENTAGE },
-              children: [new Paragraph({ children: [new TextRun({ text: label, size: 16, font: "Aptos", bold: true, color: CAPTION_BLUE })] })],
-              borders: { top: noBorder, left: noBorder, right: noBorder, bottom: { style: BorderStyle.SINGLE, size: 4, color: DARK_TEXT } },
-            })
-          ),
-        }));
-
-        allProjectItemsW.forEach((d: any, i: number) => {
-          const wtCode = extractWorkTypeFromUid(safeText(d.uid));
-          const wtLabel = workTypeMapW.get(wtCode) || wtCode;
-          const cells = [
-            String(i + 1),
-            safeText(d.uid),
-            getBriefDescription(d, wtLabel),
-            d.status === "complete" ? "Complete" : "Open",
-            d.status === "complete" ? safeText(d.dateClosed) : "",
-          ];
-          const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
-          projSummaryRows.push(new TableRow({
-            children: cells.map((text) => new TableCell({
-              width: { size: 100 / 5, type: WidthType.PERCENTAGE },
-              children: [new Paragraph({ children: [new TextRun({ text, size: 14, font: "Aptos" })] })],
-              borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
-            })),
-          }));
-        });
-
-        const projSummaryChildren: any[] = [
-          new Paragraph({
-            children: [new TextRun({ text: "Project Summary \u2014 Cumulative Register", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
-            heading: HeadingLevel.HEADING_1,
-            spacing: { after: 80 },
-          }),
-          new Paragraph({
-            children: [new TextRun({ text: "Complete list of all defects and observations across this project.", size: 18, italics: true, color: "666666", font: "Aptos" })],
-            spacing: { after: 200 },
-          }),
-          new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED, rows: projSummaryRows }),
-        ];
-
-        docSections.push({ properties: sectionProps, children: projSummaryChildren });
       }
 
       const wordDoc = new Document({
@@ -2413,7 +2369,7 @@ export default function ReportDetail() {
   );
 }
 
-function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED"; changeSummary?: string }) {
+function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string }) {
   const isComplete = defect.status === "complete";
 
   return (
@@ -2446,10 +2402,15 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
                   AMENDED
                 </Badge>
               )}
+              {changeTag === "COMPLETED" && (
+                <Badge variant="secondary" className="bg-slate-100 text-slate-700 dark:bg-slate-800/40 dark:text-slate-300 text-[10px] px-1.5 py-0 border border-slate-300">
+                  COMPLETED
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground truncate">{defect.comment}</p>
             {changeSummary && (
-              <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5 truncate">{changeSummary}</p>
+              <p className={`text-[11px] mt-0.5 truncate ${changeTag === "COMPLETED" ? "text-slate-600 dark:text-slate-400" : "text-amber-600 dark:text-amber-400"}`}>{changeSummary}</p>
             )}
             <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
               <span>Assigned: {defect.assignedTo}</span>
