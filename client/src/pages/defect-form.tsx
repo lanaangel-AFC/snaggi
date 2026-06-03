@@ -510,7 +510,8 @@ export default function DefectForm() {
     // subsequent refetch of `existingDefect` (e.g. React Query refetch-on-focus
     // after picking a photo on mobile) must not clobber the user's in-progress
     // edits to fields like Drop / Elevation / Level / Comment / Action.
-    if (existingDefect && !hasInitializedRef.current) {
+    // Wait until project + globalSettings have loaded before parsing the UID
+    if (existingDefect && project && globalSettings && !hasInitializedRef.current) {
       hasInitializedRef.current = true;
       setForm({
         dateOpened: existingDefect.dateOpened,
@@ -527,27 +528,78 @@ export default function DefectForm() {
       if ((existingDefect as any).recordType) {
         setRecordType((existingDefect as any).recordType);
       }
-      // Parse variable-length UID into components
+      // Parse variable-length UID into components using KNOWN lists from the project
+      // UID format: [Elevation]-[Drop]-[Level]-[WorkType]-[Number]
+      // Any segment may be omitted. Number is always the LAST segment.
+      // WorkType is always the SECOND-TO-LAST segment if it matches a known work type code.
       const parts = existingDefect.uid.split("-");
-      // Detect which part is the work type (2-3 alpha chars)
-      const wtIdx = parts.findIndex((p) => /^[A-Z]{2,3}$/i.test(p));
-      if (wtIdx >= 0) {
-        setWorkType(parts[wtIdx]);
-        // Number is always after work type
-        if (wtIdx + 1 < parts.length) setSeqNumber(parts[wtIdx + 1]);
-        // Parts before work type: Elevation (alpha), Drop (numeric), Level (numeric)
-        const before = parts.slice(0, wtIdx);
-        const alphaIdx = before.findIndex((p) => /^[A-Z]+$/i.test(p));
-        if (alphaIdx >= 0) { setElevation(before[alphaIdx]); before.splice(alphaIdx, 1); }
-        if (before.length >= 2) { setDrop(before[0]); setLevel(before[1]); }
-        else if (before.length === 1) { setDrop(before[0]); }
-      } else {
-        // Fallback: just set the last part as number
-        if (parts.length > 0) setSeqNumber(parts[parts.length - 1]);
+      if (parts.length > 0) {
+        // Build known elevation codes from project + report elevations (use the same codeMap)
+        const codeMap: Record<string, string> = {
+          "North": "N", "South": "S", "East": "E", "West": "W",
+          "North East": "NE", "North West": "NW", "South East": "SE", "South West": "SW",
+        };
+        const knownElevCodes = new Set<string>();
+        for (const src of [(report as any)?.elevations, (project as any)?.elevations]) {
+          if (!src) continue;
+          try {
+            const arr: string[] = JSON.parse(src as string);
+            arr.forEach((label) => {
+              const code = codeMap[label] || label.substring(0, 3).toUpperCase();
+              knownElevCodes.add(code);
+              knownElevCodes.add(label); // also accept the full label in the UID
+            });
+          } catch {}
+        }
+        // Build known work type codes from project customWorkTypes + global defaults
+        const knownWtCodes = new Set<string>();
+        try {
+          const customWT = JSON.parse((project as any)?.customWorkTypes || "[]");
+          customWT.forEach((wt: any) => knownWtCodes.add(wt.code));
+        } catch {}
+        try {
+          if (globalSettings?.workTypes) {
+            globalSettings.workTypes.forEach((wt: any) => knownWtCodes.add(wt.code));
+          }
+        } catch {}
+        // Always-known fallback work types (do NOT include codes that could be elevations like LEV)
+        ["CR","CK","PT","WP","GL","CL","ST","SE","FL","RR","GK","OT","SR","SM","BR","LR","SS","GW"].forEach((c) => knownWtCodes.add(c));
+
+        // Last part is always the Number
+        const lastIdx = parts.length - 1;
+        setSeqNumber(parts[lastIdx]);
+
+        // Search for work type — prefer the second-to-last position, else any match
+        let wtIdx = -1;
+        if (lastIdx >= 1 && knownWtCodes.has(parts[lastIdx - 1])) {
+          wtIdx = lastIdx - 1;
+        } else {
+          // Try other positions but only match known codes (not just any alpha)
+          for (let i = lastIdx - 1; i >= 0; i--) {
+            if (knownWtCodes.has(parts[i])) { wtIdx = i; break; }
+          }
+        }
+
+        if (wtIdx >= 0) {
+          setWorkType(parts[wtIdx]);
+          const before = parts.slice(0, wtIdx);
+          // Now identify Elevation in `before` using knownElevCodes
+          let elevIdx = -1;
+          for (let i = 0; i < before.length; i++) {
+            if (knownElevCodes.has(before[i])) { elevIdx = i; break; }
+          }
+          if (elevIdx >= 0) {
+            setElevation(before[elevIdx]);
+            before.splice(elevIdx, 1);
+          }
+          // Remaining parts are Drop then Level (in that order)
+          if (before.length >= 1) setDrop(before[0]);
+          if (before.length >= 2) setLevel(before[1]);
+        }
       }
       setFormStep("form");
     }
-  }, [existingDefect]);
+  }, [existingDefect, project, globalSettings]);
 
   // When navigating between defects within the same form route, reset the
   // initialization flag so the next defect's data does seed its form.
