@@ -50,6 +50,12 @@ export const defects = sqliteTable("defects", {
   verificationPerson: text("verification_person").notNull(),
   status: text("status").notNull().default("open"), // open, complete
   recordType: text("record_type").notNull().default("defect"), // defect, observation
+  // Structured UID parts — source of truth for the form so it never re-parses the assembled uid string.
+  elevationCode: text("elevation_code"),
+  dropCode: text("drop_code"),
+  levelCode: text("level_code"),
+  workTypeCode: text("work_type_code"),
+  seqNumber: text("seq_number"),
   updatedAt: text("updated_at"),
   createdAt: text("created_at"),
 });

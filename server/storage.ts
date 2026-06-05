@@ -179,6 +179,12 @@ safeAddColumn("photos", "report_id", "INTEGER");
 safeAddColumn("photos", "origin_report_id", "INTEGER"); // report where photo FIRST appeared (survives cloning)
 safeAddColumn("photos", "new_override", "TEXT"); // "new" | "not-new" | null (auto-detect)
 safeAddColumn("defect_locations", "updated_at", "TEXT");
+// Structured UID parts on defects — source of truth for the form (no re-parsing of the uid string)
+safeAddColumn("defects", "elevation_code", "TEXT");
+safeAddColumn("defects", "drop_code", "TEXT");
+safeAddColumn("defects", "level_code", "TEXT");
+safeAddColumn("defects", "work_type_code", "TEXT");
+safeAddColumn("defects", "seq_number", "TEXT");
 
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
@@ -287,6 +293,165 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
       {code:"SS",label:"Sill Stabilisation"},{code:"GW",label:"General Works"},{code:"OT",label:"Other"},
     ];
     sqlite.prepare("INSERT INTO global_settings (work_types) VALUES (?)").run(JSON.stringify(defaultWorkTypes));
+  }
+}
+
+// Built-in work type codes that are always valid (mirrors client WORK_TYPES + global defaults).
+export const BUILTIN_WORK_TYPE_CODES = [
+  "CR","CK","PT","WP","GL","CL","ST","SE","FL","RR","GK","SR","SM","BR","LR","SS","GW","OT",
+];
+
+// Codes that must NEVER be a custom work type (collide with the level field / are too ambiguous).
+const FORBIDDEN_WORK_TYPE_CODES = new Set(["LEV", "LEVEL", "L"]);
+
+// Decide whether a custom work type code should be stripped.
+function isBadWorkTypeCode(code: string): boolean {
+  if (!code) return true;
+  const c = code.trim().toUpperCase();
+  if (FORBIDDEN_WORK_TYPE_CODES.has(c)) return true;
+  if (c.length < 2) return true; // single letters collide with elevation codes (N/S/E/W) and levels
+  if (BUILTIN_WORK_TYPE_CODES.includes(c)) return true; // duplicates a built-in
+  return false;
+}
+
+// Parse an assembled UID into structured parts using known elevation + work-type code sets.
+// Format: [Elevation]-[Drop]-[Level]-[WorkType]-[Number]; any segment may be omitted; Number is last.
+export function parseUidParts(
+  uid: string,
+  knownElevCodes: Set<string>,
+  knownWtCodes: Set<string>,
+): { elevation: string; drop: string; level: string; workType: string; seq: string } {
+  const empty = { elevation: "", drop: "", level: "", workType: "", seq: "" };
+  if (!uid) return empty;
+  const parts = uid.split("-");
+  if (parts.length === 0) return empty;
+
+  const lastIdx = parts.length - 1;
+  const seq = parts[lastIdx];
+
+  // Find work type — prefer the second-to-last position, else any matching known code.
+  let wtIdx = -1;
+  if (lastIdx >= 1 && knownWtCodes.has(parts[lastIdx - 1])) {
+    wtIdx = lastIdx - 1;
+  } else {
+    for (let i = lastIdx - 1; i >= 0; i--) {
+      if (knownWtCodes.has(parts[i])) { wtIdx = i; break; }
+    }
+  }
+
+  if (wtIdx < 0) return { ...empty, seq };
+
+  const workType = parts[wtIdx];
+  const before = parts.slice(0, wtIdx);
+  let elevation = "";
+  for (let i = 0; i < before.length; i++) {
+    if (knownElevCodes.has(before[i])) { elevation = before[i]; before.splice(i, 1); break; }
+  }
+  const drop = before.length >= 1 ? before[0] : "";
+  const level = before.length >= 2 ? before[1] : "";
+  return { elevation, drop, level, workType, seq };
+}
+
+// One-time cleanup of bad custom work types across all projects (gated by meta flag).
+// Strips entries like "LEV"/"LEVEL", single letters, or codes that duplicate a built-in.
+export function cleanupCustomWorkTypes(): { projectsChanged: number; removed: string[] } {
+  const rows = sqlite.prepare(`SELECT id, custom_work_types FROM projects`).all() as
+    { id: number; custom_work_types: string | null }[];
+  const removed: string[] = [];
+  let projectsChanged = 0;
+  const updateStmt = sqlite.prepare(`UPDATE projects SET custom_work_types = ? WHERE id = ?`);
+  for (const row of rows) {
+    let list: { code: string; label: string }[];
+    try { list = JSON.parse(row.custom_work_types || "[]"); } catch { continue; }
+    if (!Array.isArray(list)) continue;
+    const cleaned = list.filter((wt) => {
+      const bad = !wt || typeof wt.code !== "string" || isBadWorkTypeCode(wt.code);
+      if (bad && wt?.code) removed.push(wt.code);
+      return !bad;
+    });
+    if (cleaned.length !== list.length) {
+      updateStmt.run(JSON.stringify(cleaned), row.id);
+      projectsChanged++;
+    }
+  }
+  return { projectsChanged, removed };
+}
+
+// Gated startup cleanup of bad custom work types (e.g. the stuck "LEV" entry).
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'custom_work_types_cleanup_v1'`).get();
+  if (!alreadyRan) {
+    const { projectsChanged, removed } = cleanupCustomWorkTypes();
+    if (removed.length > 0) {
+      console.log(`[work-type-cleanup] Removed ${removed.length} bad custom work types (${removed.join(", ")}) from ${projectsChanged} project(s)`);
+    }
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('custom_work_types_cleanup_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// Gated backfill of structured UID parts from existing assembled uid strings.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'uid_parts_backfill_v1'`).get();
+  if (!alreadyRan) {
+    // Build the global work-type code set once.
+    const globalWtCodes = new Set<string>(BUILTIN_WORK_TYPE_CODES);
+    try {
+      const gs = sqlite.prepare(`SELECT work_types FROM global_settings LIMIT 1`).get() as { work_types: string } | undefined;
+      if (gs?.work_types) {
+        (JSON.parse(gs.work_types) as { code: string }[]).forEach((wt) => wt?.code && globalWtCodes.add(wt.code));
+      }
+    } catch {}
+
+    // Per-project elevation/work-type code maps.
+    const codeMap: Record<string, string> = {
+      "North": "N", "South": "S", "East": "E", "West": "W",
+      "North East": "NE", "North West": "NW", "South East": "SE", "South West": "SW",
+    };
+    const projects = sqlite.prepare(`SELECT id, elevations, custom_work_types FROM projects`).all() as
+      { id: number; elevations: string | null; custom_work_types: string | null }[];
+    const projElev = new Map<number, Set<string>>();
+    const projWt = new Map<number, Set<string>>();
+    for (const p of projects) {
+      const elevSet = new Set<string>();
+      try {
+        (JSON.parse(p.elevations || "[]") as string[]).forEach((label) => {
+          elevSet.add(codeMap[label] || label.substring(0, 3).toUpperCase());
+          elevSet.add(label);
+        });
+      } catch {}
+      // Always accept the standard compass codes too.
+      ["N","S","E","W","NE","NW","SE","SW"].forEach((c) => elevSet.add(c));
+      projElev.set(p.id, elevSet);
+
+      const wtSet = new Set<string>(globalWtCodes);
+      try {
+        (JSON.parse(p.custom_work_types || "[]") as { code: string }[]).forEach((wt) => wt?.code && wtSet.add(wt.code));
+      } catch {}
+      projWt.set(p.id, wtSet);
+    }
+
+    const defectRows = sqlite.prepare(`SELECT id, project_id, uid FROM defects`).all() as
+      { id: number; project_id: number; uid: string }[];
+    const updateStmt = sqlite.prepare(
+      `UPDATE defects SET elevation_code = ?, drop_code = ?, level_code = ?, work_type_code = ?, seq_number = ? WHERE id = ?`
+    );
+    let backfilled = 0;
+    for (const d of defectRows) {
+      const elevSet = projElev.get(d.project_id) || new Set<string>(["N","S","E","W","NE","NW","SE","SW"]);
+      const wtSet = projWt.get(d.project_id) || globalWtCodes;
+      const parsed = parseUidParts(d.uid, elevSet, wtSet);
+      updateStmt.run(
+        parsed.elevation || null,
+        parsed.drop || null,
+        parsed.level || null,
+        parsed.workType || null,
+        parsed.seq || null,
+        d.id,
+      );
+      backfilled++;
+    }
+    console.log(`[uid-parts-backfill] Backfilled structured UID parts for ${backfilled} defects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('uid_parts_backfill_v1', ?)`).run(new Date().toISOString());
   }
 }
 

@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType } from "./storage";
+import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes } from "./storage";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
@@ -849,6 +849,13 @@ export async function registerRoutes(
       newPhotos: updated - carryOvers,
       projectId: projectId || "all",
     });
+  });
+
+  // Strip bad custom work types (LEV/LEVEL, single letters, built-in collisions) across all projects.
+  // Idempotent — safe to run repeatedly.
+  app.post("/api/admin/cleanup-custom-work-types", async (_req, res) => {
+    const result = cleanupCustomWorkTypes();
+    res.json({ ok: true, ...result });
   });
 
   // ==================== SHARE LINKS ====================

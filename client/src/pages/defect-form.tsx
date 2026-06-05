@@ -40,6 +40,19 @@ const WORK_TYPES = [
   { code: "OT", label: "Other" },
 ];
 
+const BUILTIN_WORK_TYPE_CODES = WORK_TYPES.map((w) => w.code);
+const FORBIDDEN_WORK_TYPE_CODES = new Set(["LEV", "LEVEL", "L"]);
+
+// Reject custom work-type codes that collide with the level field or a built-in code.
+// Returns an error message if invalid, or null if the code is acceptable.
+function validateCustomWorkTypeCode(code: string): string | null {
+  const c = code.trim().toUpperCase();
+  if (c.length < 2) return "Work type code must be at least 2 characters.";
+  if (FORBIDDEN_WORK_TYPE_CODES.has(c)) return `"${c}" is reserved (it collides with the Level field). Choose a different code.`;
+  if (BUILTIN_WORK_TYPE_CODES.includes(c)) return `"${c}" is already a built-in work type. Pick it from the list instead.`;
+  return null;
+}
+
 // Elevation options for UID
 const ELEVATIONS = [
   { code: "N", label: "North" },
@@ -528,7 +541,22 @@ export default function DefectForm() {
       if ((existingDefect as any).recordType) {
         setRecordType((existingDefect as any).recordType);
       }
-      // Parse variable-length UID into components using KNOWN lists from the project
+      // Prefer the structured UID columns (source of truth) — no fragile re-parsing.
+      // A record counts as "structured" if ANY of the part columns is populated; this is
+      // true for all records after the uid_parts_backfill_v1 migration.
+      const ed = existingDefect as any;
+      const hasStructured = ed.elevationCode != null || ed.dropCode != null ||
+        ed.levelCode != null || ed.workTypeCode != null || ed.seqNumber != null;
+      if (hasStructured) {
+        setElevation(ed.elevationCode || "");
+        setDrop(ed.dropCode || "");
+        setLevel(ed.levelCode || "");
+        setWorkType(ed.workTypeCode || "");
+        setSeqNumber(ed.seqNumber || "");
+        setFormStep("form");
+        return;
+      }
+      // Fallback: parse variable-length UID into components using KNOWN lists from the project
       // UID format: [Elevation]-[Drop]-[Level]-[WorkType]-[Number]
       // Any segment may be omitted. Number is always the LAST segment.
       // WorkType is always the SECOND-TO-LAST segment if it matches a known work type code.
@@ -618,10 +646,18 @@ export default function DefectForm() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      // Structured UID parts — stored as the source of truth so reopening never re-parses the uid string.
+      const uidParts = {
+        elevationCode: elevation || null,
+        dropCode: drop || null,
+        levelCode: level || null,
+        workTypeCode: workType || null,
+        seqNumber: seqNumber || null,
+      };
       if (isEdit) {
         // Include updated UID if the fields were changed (open items only)
         const updatedUid = assembledUid || uid;
-        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { ...form, uid: updatedUid });
+        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { ...form, uid: updatedUid, ...uidParts });
         return res.json();
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
@@ -630,6 +666,7 @@ export default function DefectForm() {
           uidPrefix,
           uidOverride: assembledUid,
           recordType,
+          ...uidParts,
         });
         return res.json();
       }
@@ -649,6 +686,28 @@ export default function DefectForm() {
     },
     onError: (err: Error) => {
       toast({ title: err.message || "Failed to save", variant: "destructive" });
+    },
+  });
+
+  // Toggle a record's classification between Defect and Observation on an existing record.
+  const recordTypeMutation = useMutation({
+    mutationFn: async (newType: "defect" | "observation") => {
+      const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { recordType: newType });
+      return res.json();
+    },
+    onSuccess: (_data, newType) => {
+      // Invalidate everything that buckets a record by type: report list (DEFECTS vs OBSERVATIONS),
+      // project-wide list, the singular defect, and the assembled report export data.
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/report-data`] });
+      toast({ title: `Changed to ${newType === "observation" ? "Observation" : "Defect"}` });
+    },
+    onError: () => {
+      toast({ title: "Failed to change record type", variant: "destructive" });
+      // Re-seed from server truth on failure
+      queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
     },
   });
 
@@ -896,25 +955,33 @@ export default function DefectForm() {
             </Badge>
           )}
           {isEdit && (
-            <button
-              type="button"
-              onClick={async () => {
-                const newType = recordType === "defect" ? "observation" : "defect";
-                setRecordType(newType);
-                try {
-                  await apiRequest("PATCH", `/api/defects/${defectId}`, { recordType: newType });
-                  queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
-                  toast({ title: `Converted to ${newType}` });
-                } catch {
-                  toast({ title: "Failed to convert", variant: "destructive" });
-                  setRecordType(recordType);
-                }
-              }}
-              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-              data-testid="button-convert-type"
-            >
-              Convert to {recordType === "defect" ? "Observation" : "Defect"}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Record type</span>
+              <div className="inline-flex rounded-md border overflow-hidden" data-testid="record-type-toggle">
+                {(["defect", "observation"] as const).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    disabled={recordTypeMutation.isPending}
+                    onClick={() => {
+                      if (recordType === type) return;
+                      setRecordType(type);
+                      recordTypeMutation.mutate(type, {
+                        onError: () => setRecordType(recordType),
+                      });
+                    }}
+                    className={`px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                      recordType === type
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:bg-accent/60"
+                    }`}
+                    data-testid={`button-record-type-${type}`}
+                  >
+                    {type === "defect" ? "Defect" : "Observation"}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </div>
         {isEdit && (
@@ -1079,9 +1146,14 @@ export default function DefectForm() {
                     onClick={async () => {
                       const code = window.prompt("Work type code (2-3 characters):");
                       if (!code || code.trim().length < 2) return;
+                      const trimCode = code.trim().toUpperCase().slice(0, 3);
+                      const validationError = validateCustomWorkTypeCode(trimCode);
+                      if (validationError) {
+                        toast({ title: validationError, variant: "destructive" });
+                        return;
+                      }
                       const label = window.prompt("Work type label:");
                       if (!label || !label.trim()) return;
-                      const trimCode = code.trim().toUpperCase().slice(0, 3);
                       const trimLabel = label.trim();
                       try {
                         const existing: { code: string; label: string }[] = (() => {
@@ -1142,7 +1214,12 @@ export default function DefectForm() {
                   ))}
                 </SelectContent>
               </Select>
-              <button type="button" onClick={addCustomElevation} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
+              <div className="flex items-center justify-between mt-0.5">
+                <button type="button" onClick={addCustomElevation} className="text-[10px] text-primary hover:underline">+ Add Custom</button>
+                {elevation && (
+                  <button type="button" onClick={() => setElevation("")} className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="button-clear-elevation">Clear</button>
+                )}
+              </div>
             </div>
             )}
             {enabledUidParts.drop !== false && (
@@ -1158,7 +1235,12 @@ export default function DefectForm() {
                   ))}
                 </SelectContent>
               </Select>
-              <button type="button" onClick={addCustomDrop} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
+              <div className="flex items-center justify-between mt-0.5">
+                <button type="button" onClick={addCustomDrop} className="text-[10px] text-primary hover:underline">+ Add Custom</button>
+                {drop && (
+                  <button type="button" onClick={() => setDrop("")} className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="button-clear-drop">Clear</button>
+                )}
+              </div>
             </div>
             )}
             <div>
@@ -1173,7 +1255,12 @@ export default function DefectForm() {
                   ))}
                 </SelectContent>
               </Select>
-              <button type="button" onClick={addCustomLevel} className="text-[10px] text-primary hover:underline mt-0.5">+ Add Custom</button>
+              <div className="flex items-center justify-between mt-0.5">
+                <button type="button" onClick={addCustomLevel} className="text-[10px] text-primary hover:underline">+ Add Custom</button>
+                {level && (
+                  <button type="button" onClick={() => setLevel("")} className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="button-clear-level">Clear</button>
+                )}
+              </div>
             </div>
             {enabledUidParts.workType !== false && (
             <div>
@@ -1186,6 +1273,9 @@ export default function DefectForm() {
               >
                 {workType || "—"}
               </button>
+              {workType && (
+                <button type="button" onClick={() => setWorkType("")} className="text-[10px] text-muted-foreground hover:text-foreground mt-0.5 block" data-testid="button-clear-work-type">Clear</button>
+              )}
             </div>
             )}
             <div>
