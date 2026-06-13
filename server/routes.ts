@@ -102,21 +102,48 @@ function assembleProposedUid(
 // locationStructured passthrough, and a shaped photos array. history[] deferred to
 // Prompt 2 (empty array for now).
 async function enrichDefect(d: any): Promise<any> {
+  const currentReportId = d.reportId ?? d.report_id ?? null;
   const photos = await storage.getPhotosByDefect(d.id);
-  const shapedPhotos = photos.map((p: any) => ({
-    ...p,
-    url: `/api/uploads/${p.filename}`,
-    caption: p.caption ?? null,
-    capture_date: p.createdAt ?? p.created_at ?? null,
-    age: formatPhotoAge(p, d.reportId ?? d.report_id ?? null),
-  }));
+  const shapedPhotos = photos.map((p: any) => {
+    const origin = p.originReportId ?? p.origin_report_id ?? null;
+    return {
+      ...p,
+      url: `/api/uploads/${p.filename}`,
+      caption: p.caption ?? null,
+      // capture_date falls back to createdAt when the client hasn't set captureDate yet.
+      capture_date: p.captureDate ?? p.capture_date ?? p.createdAt ?? p.created_at ?? null,
+      // age = "current" iff the photo FIRST appeared in the current report.
+      photoAge: currentReportId != null && origin === currentReportId ? "current" : "prior",
+      age: formatPhotoAge(p, currentReportId),
+    };
+  });
+
+  // "Amended this inspection" — the ONE place this is derived server-side. True when any
+  // history/note/status row exists with reportId === the defect's current report.
+  const [obs, act, notes, stat] = await Promise.all([
+    storage.getObservationHistory(d.id),
+    storage.getActionHistory(d.id),
+    storage.getInspectionNotes(d.id),
+    storage.getStatusHistory(d.id),
+  ]);
+  const amendedThisInspection = currentReportId != null && (
+    obs.some((h) => h.reportId === currentReportId) ||
+    act.some((h) => h.reportId === currentReportId) ||
+    notes.some((n) => n.reportId === currentReportId) ||
+    stat.some((s) => s.reportId === currentReportId)
+  );
+  // "carriedUnchanged" is the complement for a non-new (cloned) record.
+  const carriedUnchanged = !amendedThisInspection;
+
   return {
     ...d,
     observation: d.comment, // alias per spec — DO NOT rename the stored column
     displayStatus: computeDisplayStatus(d.status),
     locationStructured: d.locationStructured ?? null,
     legacyId: d.legacyId ?? null, // Stage 1: always NULL (Stage 2 populates)
-    history: [], // deferred to Prompt 2
+    history: [], // unified history served by GET /api/defects/:id/history
+    amendedThisInspection,
+    carriedUnchanged,
     photos: shapedPhotos,
   };
 }
@@ -232,9 +259,21 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
-  app.post("/api/reports/:id/copy", async (req, res) => {
+  // Start the next inspection from a source report. Metadata (number/date/locations/
+  // attendees/elevations) is set ONCE here. Clones only status='open' defects.
+  app.post("/api/reports/:id/start-next-inspection", async (req, res) => {
     try {
-      const newReport = await storage.copyReport(Number(req.params.id));
+      const { inspectionNumber, inspectionDate, locationsCovered, attendees, elevations } = req.body;
+      if (inspectionNumber === undefined || inspectionNumber === null || String(inspectionNumber).trim() === "") {
+        return res.status(400).json({ message: "inspectionNumber is required" });
+      }
+      const newReport = await storage.startNextInspection(Number(req.params.id), {
+        inspectionNumber: String(inspectionNumber),
+        inspectionDate: inspectionDate || new Date().toISOString().split("T")[0],
+        locationsCovered: locationsCovered != null ? String(locationsCovered) : undefined,
+        attendees: attendees != null ? (typeof attendees === "string" ? attendees : JSON.stringify(attendees)) : undefined,
+        elevations: elevations != null ? (typeof elevations === "string" ? elevations : JSON.stringify(elevations)) : undefined,
+      });
       res.status(201).json(newReport);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -373,6 +412,87 @@ export async function registerRoutes(
       };
     }));
     res.json(result);
+  });
+
+  // Unified, merged history log for a defect: observation + action + note + status,
+  // newest-first. age = "current" iff entry.reportId === currentReportId (the report
+  // context being viewed, passed as ?currentReportId=N; defaults to the defect's own report).
+  app.get("/api/defects/:id/history", async (req, res) => {
+    const defectId = Number(req.params.id);
+    const defect = await storage.getDefect(defectId);
+    if (!defect) return res.status(404).json({ message: "Defect not found" });
+    const currentReportId = req.query.currentReportId != null
+      ? Number(req.query.currentReportId)
+      : (defect.reportId ?? null);
+    const project = await storage.getProject(defect.projectId);
+    const defaultAuthor = project?.inspector || "";
+
+    const [obs, act, notes, stat] = await Promise.all([
+      storage.getObservationHistory(defectId),
+      storage.getActionHistory(defectId),
+      storage.getInspectionNotes(defectId),
+      storage.getStatusHistory(defectId),
+    ]);
+
+    // Resolve report metadata (inspection number) for each distinct reportId once.
+    const reportIds = new Set<number>();
+    obs.forEach((h) => h.reportId != null && reportIds.add(h.reportId));
+    act.forEach((h) => h.reportId != null && reportIds.add(h.reportId));
+    notes.forEach((n) => n.reportId != null && reportIds.add(n.reportId));
+    stat.forEach((s) => s.reportId != null && reportIds.add(s.reportId));
+    const reportMap = new Map<number, any>();
+    await Promise.all(Array.from(reportIds).map(async (rid) => {
+      const r = await storage.getReport(rid);
+      if (r) reportMap.set(rid, r);
+    }));
+    const inspNum = (rid: number | null | undefined): string => {
+      if (rid == null) return "";
+      return reportMap.get(rid)?.inspectionNumber || "";
+    };
+
+    type Entry = { kind: string; date: string; inspectionNumber: string; author: string; text: string; age: "current" | "prior"; reportId: number | null };
+    const entries: Entry[] = [];
+    const ageOf = (rid: number | null | undefined): "current" | "prior" =>
+      currentReportId != null && rid === currentReportId ? "current" : "prior";
+
+    for (const h of obs) {
+      entries.push({ kind: "observation", date: h.createdAt, inspectionNumber: inspNum(h.reportId), author: defaultAuthor, text: h.text, age: ageOf(h.reportId), reportId: h.reportId ?? null });
+    }
+    for (const h of act) {
+      entries.push({ kind: "action", date: h.createdAt, inspectionNumber: inspNum(h.reportId), author: defaultAuthor, text: h.text, age: ageOf(h.reportId), reportId: h.reportId ?? null });
+    }
+    for (const n of notes) {
+      entries.push({ kind: "note", date: n.createdAt, inspectionNumber: inspNum(n.reportId), author: n.author || defaultAuthor, text: n.text, age: ageOf(n.reportId), reportId: n.reportId ?? null });
+    }
+    for (const s of stat) {
+      const text = `${s.oldStatus || "?"} \u2192 ${s.newStatus}`;
+      entries.push({ kind: "status", date: s.createdAt || "", inspectionNumber: inspNum(s.reportId), author: defaultAuthor, text, age: ageOf(s.reportId), reportId: s.reportId ?? null });
+    }
+
+    // Newest-first by date (fallback stable on empty dates).
+    entries.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    res.json(entries);
+  });
+
+  // Add a note for this inspection — inserts an inspectionNotes row (does NOT overwrite
+  // the canonical observation/action text). Flips the "amended this inspection" badge.
+  app.post("/api/defects/:id/notes", async (req, res) => {
+    const defectId = Number(req.params.id);
+    const existing = await storage.getDefect(defectId);
+    if (!existing) return res.status(404).json({ message: "Defect not found" });
+    const text = req.body.text;
+    if (!text || !String(text).trim()) return res.status(400).json({ message: "Text is required" });
+    const reportId = req.body.reportId != null ? Number(req.body.reportId) : existing.reportId;
+    if (reportId == null) return res.status(400).json({ message: "reportId is required" });
+    const project = await storage.getProject(existing.projectId);
+    const note = await storage.createInspectionNote({
+      defectId,
+      reportId,
+      author: req.body.author || project?.inspector || "",
+      text: String(text).trim(),
+      createdAt: new Date().toISOString(),
+    });
+    res.status(201).json(note);
   });
 
   // === INSPECTION NOTES (explicit add-note for observation/action) ===

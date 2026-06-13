@@ -22,6 +22,9 @@ export const projects = sqliteTable("projects", {
   // SVR reformat (Stage 2) — when true, hide the "(prev. {legacy_id})" alias on defect
   // cards/register. User flips this on after cycling through the next inspection.
   hideLegacyAliases: integer("hide_legacy_aliases", { mode: "boolean" }).default(false),
+  // Inspection-workflow (D3): when true, the export renders a "completed register" tail
+  // section. Wire-only this round — rendering deferred (no UI checkbox yet).
+  showCompletedRegister: integer("show_completed_register", { mode: "boolean" }).default(false),
   createdAt: text("created_at").notNull(),
 });
 
@@ -39,6 +42,7 @@ export const reports = sqliteTable("reports", {
   locationsCovered: text("locations_covered").default(""),
   elevations: text("elevations").default("[]"), // JSON array of strings: elevation labels for this report
   attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
+  priorReportId: integer("prior_report_id"), // report this one was cloned from (Start Next Inspection). NULL for the first report.
   createdAt: text("created_at").notNull(),
 });
 
@@ -80,6 +84,7 @@ export const photos = sqliteTable("photos", {
   caption: text("caption"),
   slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, wip4, wip5, complete
   newOverride: text("new_override"), // "new" | "not-new" | null (auto-detect via originReportId)
+  captureDate: text("capture_date"), // when the photo was taken (EXIF/manual); falls back to createdAt for display
   createdAt: text("created_at").notNull(),
 });
 
@@ -198,6 +203,21 @@ export const statusHistory = sqliteTable("status_history", {
 export const insertStatusHistorySchema = createInsertSchema(statusHistory).omit({ id: true });
 export type InsertStatusHistory = z.infer<typeof insertStatusHistorySchema>;
 export type StatusHistory = typeof statusHistory.$inferSelect;
+
+// Inspection notes — explicit "add note for this inspection" entries, kept separate from
+// the canonical observation/action text so a note never overwrites the observation.
+export const inspectionNotes = sqliteTable("inspection_notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  defectId: integer("defect_id").notNull(),
+  reportId: integer("report_id").notNull(),
+  author: text("author").default(""),
+  text: text("text").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertInspectionNoteSchema = createInsertSchema(inspectionNotes).omit({ id: true });
+export type InsertInspectionNote = z.infer<typeof insertInspectionNoteSchema>;
+export type InspectionNote = typeof inspectionNotes.$inferSelect;
 
 // Users (kept from template)
 export const users = sqliteTable("users", {

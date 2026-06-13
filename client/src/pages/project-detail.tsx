@@ -42,6 +42,13 @@ export default function ProjectDetail() {
   const [elevName, setElevName] = useState("");
   const [elevFile, setElevFile] = useState<File | null>(null);
   const [elevUploading, setElevUploading] = useState(false);
+  const [startNextOpen, setStartNextOpen] = useState(false);
+  const [startNextForm, setStartNextForm] = useState({
+    inspectionNumber: "",
+    inspectionDate: new Date().toISOString().split("T")[0],
+    locationsCovered: "",
+    attendees: "[]",
+  });
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", id],
@@ -122,15 +129,19 @@ export default function ProjectDetail() {
     },
   });
 
-  const copyReportMutation = useMutation({
-    mutationFn: async (reportId: number) => {
-      const res = await apiRequest("POST", `/api/reports/${reportId}/copy`);
+  const startNextInspectionMutation = useMutation({
+    mutationFn: async ({ sourceReportId, body }: { sourceReportId: number; body: Record<string, unknown> }) => {
+      const res = await apiRequest("POST", `/api/reports/${sourceReportId}/start-next-inspection`, body);
       return res.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/reports`] });
-      toast({ title: "Report copied" });
+      setStartNextOpen(false);
+      toast({ title: `Inspection ${data.inspectionNumber} started` });
       navigate(`/projects/${id}/reports/${data.id}`);
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not start inspection", description: err?.message || "Please try again", variant: "destructive" });
     },
   });
 
@@ -196,6 +207,19 @@ export default function ProjectDetail() {
   if (!project) return null;
 
   const mostRecentReport = reports?.[0];
+
+  const openStartNext = () => {
+    if (!mostRecentReport) return;
+    const sourceNum = parseInt(String(mostRecentReport.inspectionNumber || "0"), 10);
+    const nextNum = Number.isFinite(sourceNum) ? sourceNum + 1 : 1;
+    setStartNextForm({
+      inspectionNumber: String(nextNum).padStart(2, "0"),
+      inspectionDate: new Date().toISOString().split("T")[0],
+      locationsCovered: (mostRecentReport as any).locationsCovered || "",
+      attendees: (mostRecentReport as any).attendees || "[]",
+    });
+    setStartNextOpen(true);
+  };
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -439,14 +463,63 @@ export default function ProjectDetail() {
         {mostRecentReport && (
           <Button
             variant="secondary"
-            disabled={copyReportMutation.isPending}
-            onClick={() => copyReportMutation.mutate(mostRecentReport.id)}
+            disabled={startNextInspectionMutation.isPending}
+            onClick={openStartNext}
           >
             <Copy className="w-4 h-4 mr-2" />
-            {copyReportMutation.isPending ? "Copying..." : "Copy Previous Report"}
+            Start Inspection {(() => {
+              const n = parseInt(String(mostRecentReport.inspectionNumber || "0"), 10);
+              return String((Number.isFinite(n) ? n : 0) + 1).padStart(2, "0");
+            })()}
           </Button>
         )}
       </div>
+
+      {/* Start Next Inspection modal — the ONLY place inspection metadata is set */}
+      <Dialog open={startNextOpen} onOpenChange={setStartNextOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Start Next Inspection</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!mostRecentReport) return;
+              startNextInspectionMutation.mutate({
+                sourceReportId: mostRecentReport.id,
+                body: {
+                  inspectionNumber: startNextForm.inspectionNumber,
+                  inspectionDate: startNextForm.inspectionDate,
+                  locationsCovered: startNextForm.locationsCovered,
+                  attendees: startNextForm.attendees,
+                },
+              });
+            }}
+            className="space-y-4"
+          >
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Inspection Number</Label>
+                <Input value={startNextForm.inspectionNumber} onChange={(e) => setStartNextForm({ ...startNextForm, inspectionNumber: e.target.value })} placeholder="e.g. 05" />
+              </div>
+              <div>
+                <Label>Inspection Date</Label>
+                <Input type="date" value={startNextForm.inspectionDate} onChange={(e) => setStartNextForm({ ...startNextForm, inspectionDate: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <Label>Locations Covered</Label>
+              <Input value={startNextForm.locationsCovered} onChange={(e) => setStartNextForm({ ...startNextForm, locationsCovered: e.target.value })} placeholder="e.g. East Elevation drops 02-06, levels GF-06" />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Carries forward all open and amended records as the base for the new inspection. Closed records stay on the previous report.
+            </p>
+            <Button type="submit" className="w-full" disabled={startNextInspectionMutation.isPending}>
+              {startNextInspectionMutation.isPending ? "Starting..." : "Start Inspection"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Reports List */}
       {reportsLoading ? (

@@ -11,6 +11,7 @@ import {
   type DefectLocation, type InsertDefectLocation, defectLocations,
   type ShareLink, type InsertShareLink, shareLinks,
   type StatusHistory, type InsertStatusHistory, statusHistory,
+  type InspectionNote, type InsertInspectionNote, inspectionNotes,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -156,6 +157,15 @@ sqlite.exec(`
     created_at TEXT,
     FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE
   );
+  CREATE TABLE IF NOT EXISTS inspection_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    defect_id INTEGER NOT NULL,
+    report_id INTEGER NOT NULL,
+    author TEXT DEFAULT '',
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE
+  );
 `);
 
 // Add new columns to existing tables (safe: ALTER TABLE ADD COLUMN IF NOT EXISTS via try/catch)
@@ -197,6 +207,10 @@ safeAddColumn("projects", "location_dimensions", `TEXT DEFAULT '["elevation","dr
 // SVR reformat Stage 2 — project flag to hide legacy UID aliases on cards/register.
 // Stored as INTEGER 0/1 (drizzle boolean mode). Default off (aliases visible after apply).
 safeAddColumn("projects", "hide_legacy_aliases", "INTEGER DEFAULT 0");
+// Inspection-to-inspection workflow additions.
+safeAddColumn("reports", "prior_report_id", "INTEGER"); // report this one was cloned from (Start Next Inspection)
+safeAddColumn("photos", "capture_date", "TEXT"); // when photo was taken (EXIF/manual); display falls back to created_at
+safeAddColumn("projects", "show_completed_register", "INTEGER DEFAULT 0"); // D3: wire-only, render deferred
 
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
@@ -648,7 +662,7 @@ export interface IStorage {
   createReport(report: InsertReport): Promise<Report>;
   updateReport(id: number, report: Partial<InsertReport>): Promise<Report | undefined>;
   deleteReport(id: number): Promise<void>;
-  copyReport(reportId: number): Promise<Report>;
+  startNextInspection(sourceReportId: number, metadata: StartNextInspectionMetadata): Promise<Report>;
   // Defects
   getDefectsByProject(projectId: number): Promise<Defect[]>;
   getDefectsByReport(reportId: number): Promise<Defect[]>;
@@ -692,6 +706,18 @@ export interface IStorage {
   // Status History
   getStatusHistory(defectId: number): Promise<StatusHistory[]>;
   createStatusHistory(entry: InsertStatusHistory): Promise<StatusHistory>;
+  // Inspection Notes
+  getInspectionNotes(defectId: number): Promise<InspectionNote[]>;
+  createInspectionNote(entry: InsertInspectionNote): Promise<InspectionNote>;
+}
+
+// Metadata accepted by startNextInspection — set ONCE via the Start Next Inspection modal.
+export interface StartNextInspectionMetadata {
+  inspectionNumber: string;
+  inspectionDate: string;
+  locationsCovered?: string;
+  attendees?: string; // JSON-encoded [{name, company}]
+  elevations?: string; // JSON-encoded string[]
 }
 
 export class DatabaseStorage implements IStorage {
@@ -758,27 +784,54 @@ export class DatabaseStorage implements IStorage {
     db.delete(defects).where(eq(defects.reportId, id)).run();
     db.delete(reports).where(eq(reports.id, id)).run();
   }
-  async copyReport(reportId: number): Promise<Report> {
-    const source = db.select().from(reports).where(eq(reports.id, reportId)).get();
+  // Start the next inspection from a source report. Clones ONLY status='open' defects
+  // (display-Open + display-Amended), preserves identity (uid/codes/legacy_id/etc),
+  // seeds prior history rows, clones photos preserving originReportId, sets priorReportId,
+  // and writes a meta key LAST so a partial run is detectable. Does NOT auto-archive or
+  // mutate any 'complete' rows on the source report — they stay on report N (audit trail).
+  async startNextInspection(sourceReportId: number, metadata: StartNextInspectionMetadata): Promise<Report> {
+    const source = db.select().from(reports).where(eq(reports.id, sourceReportId)).get();
     if (!source) throw new Error("Source report not found");
 
-    // Increment inspection number
-    const currentNum = parseInt(source.inspectionNumber || "0", 10);
-    const newInspectionNumber = String(currentNum + 1).padStart(2, "0");
+    // Validate inspection number: must be a number, unique within the project, and
+    // strictly greater than the current max inspection number in the project.
+    const newNum = parseInt(String(metadata.inspectionNumber), 10);
+    if (!Number.isFinite(newNum)) {
+      throw new Error("Inspection number must be numeric");
+    }
+    const projectReports = db.select().from(reports).where(eq(reports.projectId, source.projectId)).all();
+    let maxNum = 0;
+    for (const r of projectReports) {
+      const n = parseInt(String(r.inspectionNumber || "0"), 10);
+      if (Number.isFinite(n)) {
+        if (n === newNum) throw new Error(`Inspection number ${metadata.inspectionNumber} already exists in this project`);
+        if (n > maxNum) maxNum = n;
+      }
+    }
+    if (newNum <= maxNum) {
+      throw new Error(`Inspection number must be greater than ${String(maxNum).padStart(2, "0")}`);
+    }
+
+    const newInspectionNumber = String(newNum).padStart(2, "0");
+    const now = new Date().toISOString();
 
     const newReport = db.insert(reports).values({
       projectId: source.projectId,
       inspectionNumber: newInspectionNumber,
-      inspectionDate: new Date().toISOString().split("T")[0],
+      inspectionDate: metadata.inspectionDate || new Date().toISOString().split("T")[0],
       revision: "01",
-      locationsCovered: source.locationsCovered,
-      elevations: source.elevations,
-      attendees: source.attendees,
-      createdAt: new Date().toISOString(),
+      locationsCovered: metadata.locationsCovered ?? source.locationsCovered,
+      elevations: metadata.elevations ?? source.elevations,
+      attendees: metadata.attendees ?? source.attendees,
+      priorReportId: source.id,
+      createdAt: now,
     }).returning().get();
 
-    // Copy all defects from source report
-    const sourceDefects = db.select().from(defects).where(eq(defects.reportId, reportId)).all();
+    // Clone ONLY status='open' defects (covers display-Open AND display-Amended).
+    // 'complete'/'archived' rows are intentionally NOT cloned — they remain on report N.
+    const sourceDefects = db.select().from(defects)
+      .where(and(eq(defects.reportId, sourceReportId), eq(defects.status, "open")))
+      .all();
     for (const d of sourceDefects) {
       const newDefect = db.insert(defects).values({
         projectId: d.projectId,
@@ -792,12 +845,21 @@ export class DatabaseStorage implements IStorage {
         dueDate: d.dueDate,
         verificationMethod: d.verificationMethod,
         verificationPerson: d.verificationPerson,
-        status: d.status,
+        status: "open",
         recordType: d.recordType,
+        // Preserve structured identity so the clone is the same record, not a new one.
+        elevationCode: d.elevationCode,
+        dropCode: d.dropCode,
+        levelCode: d.levelCode,
+        workTypeCode: d.workTypeCode,
+        seqNumber: d.seqNumber,
+        legacyId: d.legacyId,
+        locationStructured: d.locationStructured,
+        inspectionOpened: d.inspectionOpened, // preserved — where the record FIRST appeared
+        createdAt: now,
       }).returning().get();
 
-      // Seed history rows for carried-forward text (so user sees "this came from Insp-N")
-      const now = new Date().toISOString();
+      // Seed prior history rows pointing at the SOURCE report so they render as "prior".
       if (d.comment?.trim()) {
         db.insert(observationHistory).values({
           defectId: newDefect.id,
@@ -815,10 +877,10 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Copy photos (preserve origin_report_id so carry-over photos keep their original source)
+      // Clone photos: new reportId = newReport.id but preserve originReportId so age
+      // (current vs prior) is computed correctly. All cloned photos render "OLD".
       const defectPhotos = db.select().from(photos).where(eq(photos.defectId, d.id)).all();
       for (const p of defectPhotos) {
-        // Copy file on disk
         const srcPath = path.join(uploadDir, p.filename);
         if (fs.existsSync(srcPath)) {
           const ext = path.extname(p.filename);
@@ -832,11 +894,16 @@ export class DatabaseStorage implements IStorage {
             slot: p.slot,
             reportId: newReport.id,
             originReportId: p.originReportId ?? p.reportId, // preserve original source report
-            createdAt: new Date().toISOString(),
+            captureDate: p.captureDate ?? null,
+            createdAt: now,
           }).run();
         }
       }
     }
+
+    // Write the meta key LAST so a partial run is detectable.
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`)
+      .run(`start_next_inspection_for_report_${sourceReportId}`, JSON.stringify({ newReportId: newReport.id, at: now }));
 
     return newReport;
   }
@@ -985,6 +1052,14 @@ export class DatabaseStorage implements IStorage {
   }
   async createStatusHistory(entry: InsertStatusHistory): Promise<StatusHistory> {
     return db.insert(statusHistory).values(entry).returning().get();
+  }
+
+  // Inspection Notes
+  async getInspectionNotes(defectId: number): Promise<InspectionNote[]> {
+    return db.select().from(inspectionNotes).where(eq(inspectionNotes.defectId, defectId)).orderBy(desc(inspectionNotes.id)).all();
+  }
+  async createInspectionNote(entry: InsertInspectionNote): Promise<InspectionNote> {
+    return db.insert(inspectionNotes).values(entry).returning().get();
   }
 
   // Share Links

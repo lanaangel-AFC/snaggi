@@ -197,6 +197,9 @@ export default function DefectForm() {
   const [obsNoteText, setObsNoteText] = useState("");
   const [actNoteOpen, setActNoteOpen] = useState(false);
   const [actNoteText, setActNoteText] = useState("");
+  const [priorHistoryOpen, setPriorHistoryOpen] = useState(false);
+  const [inspNoteOpen, setInspNoteOpen] = useState(false);
+  const [inspNoteText, setInspNoteText] = useState("");
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const actionRef = useRef<HTMLTextAreaElement>(null);
 
@@ -498,6 +501,16 @@ export default function DefectForm() {
     queryKey: [`/api/defects/${defectId}/action-history`],
     enabled: isEdit,
   });
+  // Unified, merged history (observation + action + note + status), newest-first, with
+  // age (current vs prior) computed relative to the report being viewed.
+  const { data: unifiedHistory } = useQuery<Array<{ kind: string; date: string; inspectionNumber: string; author: string; text: string; age: "current" | "prior"; reportId: number | null }>>({
+    queryKey: [`/api/defects/${defectId}/history`, reportId],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/defects/${defectId}/history?currentReportId=${reportId}`);
+      return res.json();
+    },
+    enabled: isEdit,
+  });
 
   // Auto-suggest next number when workType changes (based on existing defects in report)
   useEffect(() => {
@@ -740,6 +753,23 @@ export default function DefectForm() {
       queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
       queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/report-data`] });
       toast({ title: "Action update added" });
+    },
+  });
+
+  // "Add note for this inspection" — inserts an inspectionNotes row (does NOT overwrite
+  // the canonical observation/action). Flips the "Amended this inspection" badge.
+  const inspectionNoteMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const res = await apiRequest("POST", `/api/defects/${defectId}/notes`, { text, reportId: Number(reportId) });
+      return res.json();
+    },
+    onSuccess: () => {
+      setInspNoteOpen(false);
+      setInspNoteText("");
+      queryClient.invalidateQueries({ queryKey: [`/api/defects/${defectId}/history`, reportId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/report-data`] });
+      toast({ title: "Note added for this inspection" });
     },
   });
 
@@ -1574,6 +1604,89 @@ export default function DefectForm() {
           )}
         </div>
 
+        {/* Inspection history — unified log (observation/action/note/status), newest-first.
+            Current cluster at full strength; prior cluster collapsed and muted. */}
+        {isEdit && (() => {
+          const all = unifiedHistory ?? [];
+          const current = all.filter((e) => e.age === "current");
+          const prior = all.filter((e) => e.age === "prior");
+          const kindLabel = (k: string) =>
+            k === "observation" ? "Observation" : k === "action" ? "Action" : k === "note" ? "Note" : "Status";
+          const renderEntry = (e: typeof all[number], idx: number, muted: boolean) => {
+            const meta = `[Insp-${e.inspectionNumber || "?"}] ${formatHistoryDate(e.date)}${e.author ? ` \u00b7 ${e.author}` : ""} \u00b7 ${kindLabel(e.kind)}`;
+            return (
+              <div key={`${e.kind}-${e.reportId}-${idx}`} className={`rounded-md border p-2.5 ${muted ? "bg-muted/30 opacity-70" : "bg-emerald-50/40 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-900"}`}>
+                <div className="flex items-center justify-between mb-1 gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">{meta}</span>
+                </div>
+                <p className="text-xs text-muted-foreground whitespace-pre-wrap">{e.text}</p>
+              </div>
+            );
+          };
+          return (
+            <div className="border-t pt-4">
+              <div className="flex items-center gap-1.5 mb-2">
+                <History className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Inspection history</h3>
+              </div>
+
+              {/* Add note for this inspection */}
+              <div className="mb-3">
+                {!inspNoteOpen ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setInspNoteOpen(true)} className="text-xs">
+                    <Plus className="w-3 h-3 mr-1" />
+                    Add note for this inspection
+                  </Button>
+                ) : (
+                  <div className="rounded-md border border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 p-2.5 space-y-2">
+                    <p className="text-xs font-medium text-emerald-800 dark:text-emerald-400">Add note for this inspection</p>
+                    <Textarea
+                      placeholder="Note about this defect for the current inspection..."
+                      value={inspNoteText}
+                      onChange={(e) => setInspNoteText(e.target.value)}
+                      rows={2}
+                      autoFocus
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <Button type="button" variant="ghost" size="sm" onClick={() => { setInspNoteOpen(false); setInspNoteText(""); }}>
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!inspNoteText.trim() || inspectionNoteMutation.isPending}
+                        onClick={() => inspectionNoteMutation.mutate(inspNoteText.trim())}
+                      >
+                        {inspectionNoteMutation.isPending ? "Saving..." : "Save note"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {current.length > 0 && (
+                <div className="space-y-2 mb-2">
+                  {current.map((e, i) => renderEntry(e, i, false))}
+                </div>
+              )}
+              {prior.length > 0 && (
+                <Collapsible open={priorHistoryOpen} onOpenChange={setPriorHistoryOpen}>
+                  <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${priorHistoryOpen ? "rotate-0" : "-rotate-90"}`} />
+                    Show prior history ({prior.length} {prior.length === 1 ? "entry" : "entries"})
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-2 space-y-2">
+                    {prior.map((e, i) => renderEntry(e, i, true))}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+              {current.length === 0 && prior.length === 0 && (
+                <p className="text-xs text-muted-foreground">No history yet for this defect.</p>
+              )}
+            </div>
+          );
+        })()}
+
         {/* By Whom / By When */}
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -1783,7 +1896,7 @@ export default function DefectForm() {
                           <img
                             src={`${API_BASE}/api/uploads/${photo.filename}`}
                             alt={slot.label}
-                            className="w-full aspect-[4/3] object-cover"
+                            className={`w-full aspect-[4/3] object-cover ${isPhotoNew(photo) ? "" : "opacity-[0.55]"}`}
                           />
                           <button
                             type="button"
