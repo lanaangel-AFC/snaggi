@@ -28,6 +28,7 @@ export default function ProjectDetail() {
   const { toast } = useToast();
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editHideLegacyAliases, setEditHideLegacyAliases] = useState(false);
   const [customElevation, setCustomElevation] = useState("");
   const [newReportOpen, setNewReportOpen] = useState(false);
   const [newReportForm, setNewReportForm] = useState({
@@ -78,6 +79,7 @@ export default function ProjectDetail() {
       enabledUidParts: (project as any).enabledUidParts || '{"elevation":true,"drop":true,"level":true,"workType":true}',
       primaryWorkTypes: (project as any).primaryWorkTypes || "[]",
     });
+    setEditHideLegacyAliases(Boolean((project as any).hideLegacyAliases));
     setCustomElevation("");
     setEditOpen(true);
   };
@@ -95,8 +97,8 @@ export default function ProjectDetail() {
   };
 
   const updateProjectMutation = useMutation({
-    mutationFn: async (data: Record<string, string>) => {
-      const res = await apiRequest("PATCH", `/api/projects/${id}`, data);
+    mutationFn: async (data: Record<string, string | boolean>) => {
+      const res = await apiRequest("PATCH", `/api/projects/${id}`, { ...data, hideLegacyAliases: editHideLegacyAliases });
       return res.json();
     },
     onSuccess: () => {
@@ -366,6 +368,21 @@ export default function ProjectDetail() {
                   </div>
                 </div>
               )}
+
+              {/* SVR Stage 2 — legacy UID alias visibility */}
+              <div>
+                <Label className="mb-2 block">Legacy UID Aliases</Label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <Checkbox
+                    checked={editHideLegacyAliases}
+                    onCheckedChange={(c) => setEditHideLegacyAliases(c === true)}
+                  />
+                  Hide legacy UID aliases
+                </label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  When off, defect cards show "(prev. &#123;old UID&#125;)" for migrated IDs. Turn on after the next inspection.
+                </p>
+              </div>
 
               <Button type="submit" className="w-full" disabled={updateProjectMutation.isPending}>
                 {updateProjectMutation.isPending ? "Saving..." : "Save Changes"}

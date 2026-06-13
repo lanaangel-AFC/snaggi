@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes } from "./storage";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import { getLocationDimensions } from "@shared/location";
+import { escapeCsvField } from "@shared/csv";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -72,6 +73,30 @@ function computeDisplayStatus(status: string): "Open" | "Closed" | "Archived" {
   return "Open";
 }
 
+// Assemble a defect's proposed UID from its structured columns, honoring the project's
+// location dimensions and which UID parts are enabled. Single source of truth for the
+// UID-migration preview AND apply so the proposed value can never diverge between them.
+function assembleProposedUid(
+  d: any,
+  locationDimensions: string[],
+  enabled: Record<string, boolean>,
+): string {
+  const segs: string[] = [];
+  for (const dim of locationDimensions) {
+    if (enabled[dim] === false) continue;
+    let v: string | null = null;
+    if (dim === "elevation") v = d.elevation_code;
+    else if (dim === "drop") v = d.drop_code ? String(d.drop_code).padStart(2, "0") : null;
+    else if (dim === "level") v = d.level_code ? String(d.level_code).padStart(2, "0") : null;
+    else if (dim === "stage") v = d.drop_code ?? d.elevation_code;
+    else v = d[dim] ?? null;
+    if (v != null && String(v).trim() !== "") segs.push(String(v));
+  }
+  if (enabled.workType !== false && d.work_type_code) segs.push(String(d.work_type_code));
+  if (d.seq_number) segs.push(String(d.seq_number).padStart(2, "0"));
+  return segs.join("-");
+}
+
 // Non-destructive API enrichment for a defect. ADDS fields only (never removes the
 // existing ones the client already reads). Stage A: observation alias, displayStatus,
 // locationStructured passthrough, and a shaped photos array. history[] deferred to
@@ -139,9 +164,22 @@ export async function registerRoutes(
   });
 
   app.get("/api/projects/:id", async (req, res) => {
-    const project = await storage.getProject(Number(req.params.id));
+    const id = Number(req.params.id);
+    const project = await storage.getProject(id);
     if (!project) return res.status(404).json({ message: "Project not found" });
-    res.json(project);
+    // Attach SVR Stage 2 migration metadata so the UI can show the applied notice /
+    // summary and decide whether to render legacy aliases.
+    const appliedAtRow = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`)
+      .get(`uid_migration_applied_at_${id}`) as { value: string } | undefined;
+    const appliedRow = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`)
+      .get(`uid_migration_applied_project_${id}`) as { value: string } | undefined;
+    let uidMigrationSummary: any = null;
+    if (appliedRow) { try { uidMigrationSummary = JSON.parse(appliedRow.value).summary ?? null; } catch {} }
+    res.json({
+      ...project,
+      uidMigrationAppliedAt: appliedAtRow?.value ?? null,
+      uidMigrationSummary,
+    });
   });
 
   app.post("/api/projects", async (req, res) => {
@@ -953,25 +991,6 @@ export async function registerRoutes(
          ORDER BY d.id`
       ).all(projectId) as any[];
 
-      // Compute the proposed UID from structured parts, skipping empty/disabled segments
-      // (mirrors the b166a50 client-side assembly: segments.filter(s => s !== "")).
-      const computeProposedUid = (d: any): string => {
-        const segs: string[] = [];
-        for (const dim of locationDimensions) {
-          if (enabled[dim] === false) continue;
-          let v: string | null = null;
-          if (dim === "elevation") v = d.elevation_code;
-          else if (dim === "drop") v = d.drop_code ? String(d.drop_code).padStart(2, "0") : null;
-          else if (dim === "level") v = d.level_code ? String(d.level_code).padStart(2, "0") : null;
-          else if (dim === "stage") v = d.drop_code ?? d.elevation_code;
-          else v = (d as any)[dim] ?? null;
-          if (v != null && String(v).trim() !== "") segs.push(String(v));
-        }
-        if (enabled.workType !== false && d.work_type_code) segs.push(String(d.work_type_code));
-        if (d.seq_number) segs.push(String(d.seq_number).padStart(2, "0"));
-        return segs.join("-");
-      };
-
       // Group rows by their current UID (the "legacy" id, since defects are cloned per
       // inspection sharing a UID). The LATEST inspection's row is canonical.
       const groups = new Map<string, any[]>();
@@ -997,15 +1016,9 @@ export async function registerRoutes(
       const inspLabel = (d: any) => d.inspection_number ? `Insp-${d.inspection_number}` : `report ${d.report_id ?? "?"}`;
       const canonicalRowFor = (uid: string) => groups.get(uid)!.find((x) => x.id === canonicalIdByUid.get(uid));
 
-      const displayStatus = (status: string): string => {
-        if (status === "complete") return "Closed";
-        if (status === "archived") return "Archived";
-        return "Open"; // "Amended" is computed in the live app from amendment state; preview shows stored Open
-      };
-
       let changedCount = 0;
       const rows = defectRows.map((d) => {
-        const proposedUid = computeProposedUid(d);
+        const proposedUid = assembleProposedUid(d, locationDimensions, enabled);
         const legacyId = d.uid; // current stored UID is what would become legacy on apply
         const changed = proposedUid !== legacyId;
         if (changed) changedCount++;
@@ -1030,7 +1043,7 @@ export async function registerRoutes(
           location,
           workType: d.work_type_code || null,
           type: d.record_type === "observation" ? "Observation" : "Defect",
-          status: displayStatus(d.status),
+          status: computeDisplayStatus(d.status),
           changed,
           duplicateLegacyId: isDuplicate,
           notes,
@@ -1054,6 +1067,246 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Error in uid-migration-preview:", err);
       res.status(500).json({ message: err.message || "Failed to build preview" });
+    }
+  });
+
+  // ==================== UID MIGRATION APPLY (Stage 2 — WRITES) ====================
+  // Shared loader: builds the per-project migration plan (canonical vs duplicate rows,
+  // proposed UID, status transitions). Pure read — used by BOTH the apply endpoint and
+  // the CSV export so they can never disagree. Mirrors the Stage 1 preview's compute logic.
+  function buildMigrationPlan(projectId: number) {
+    const project = sqlite.prepare(`SELECT * FROM projects WHERE id = ?`).get(projectId) as any;
+    if (!project) return null;
+
+    const locationDimensions = getLocationDimensions(project.location_dimensions);
+    let enabled: Record<string, boolean> = { elevation: true, drop: true, level: true, workType: true };
+    try { enabled = { ...enabled, ...JSON.parse(project.enabled_uid_parts || "{}") }; } catch {}
+
+    const defectRows = sqlite.prepare(
+      `SELECT d.id, d.uid, d.legacy_id, d.record_type, d.status, d.report_id,
+              d.elevation_code, d.drop_code, d.level_code, d.work_type_code, d.seq_number,
+              d.location_structured, d.inspection_opened,
+              r.inspection_number, r.created_at AS report_created_at
+       FROM defects d
+       LEFT JOIN reports r ON r.id = d.report_id
+       WHERE d.project_id = ?
+       ORDER BY d.id`
+    ).all(projectId) as any[];
+
+    // Group by the original legacy UID. Pre-apply that's the current uid; post-apply we
+    // group by stored legacy_id (which canonical rows had set to their original UID) so a
+    // group whose canonical row was renamed stays intact for the CSV export.
+    // Canonical = the latest inspection's row: primary key max(inspection_opened); fallback
+    // to the latest report join (report created_at, then defect id) when missing/tied.
+    const groupKeyOf = (d: any): string =>
+      (d.legacy_id != null && String(d.legacy_id).trim() !== "" ? d.legacy_id : d.uid) || "";
+    const groups = new Map<string, any[]>();
+    for (const d of defectRows) {
+      const key = groupKeyOf(d);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(d);
+    }
+    const canonicalIdByUid = new Map<string, number>();
+    groups.forEach((list, uid) => {
+      const sorted = list.slice().sort((a, b) => {
+        const ia = a.inspection_opened != null ? Number(a.inspection_opened) : -Infinity;
+        const ib = b.inspection_opened != null ? Number(b.inspection_opened) : -Infinity;
+        if (ia !== ib) return ib - ia; // highest inspection first
+        const ta = a.report_created_at || ""; const tb = b.report_created_at || "";
+        if (ta !== tb) return ta < tb ? 1 : -1; // latest report first
+        return b.id - a.id;
+      });
+      canonicalIdByUid.set(uid, sorted[0].id);
+    });
+
+    // Build per-row plan entries.
+    const plan = defectRows.map((d) => {
+      const gk = groupKeyOf(d);
+      const isCanonical = canonicalIdByUid.get(gk) === d.id;
+      const isDuplicate = (groups.get(gk)?.length || 0) > 1 && !isCanonical;
+      const currentUid = d.uid;
+      // Original legacy id: once applied, the stored legacy_id holds the original UID
+      // (canonical rows had their uid rewritten). Pre-apply it's the current uid.
+      const legacyId = d.legacy_id != null && String(d.legacy_id).trim() !== "" ? d.legacy_id : currentUid;
+      const proposedUid = assembleProposedUid(d, locationDimensions, enabled);
+      const statusBefore = d.status;
+      let newUid = currentUid;
+      let newStatus = statusBefore;
+      if (isCanonical) {
+        newUid = proposedUid; // canonical rows take the proposed UID (even if unchanged)
+      } else {
+        // Duplicate carryover: keep UID. "open" → "archived"; "complete" stays (maps to Closed).
+        if (statusBefore === "open") newStatus = "archived";
+      }
+      return {
+        defectId: d.id,
+        legacyId,                    // becomes / is the legacy_id for every migrated row
+        currentUid,
+        proposedUid,
+        newUid,
+        isCanonical,
+        isDuplicateCarryover: isDuplicate,
+        statusBefore,
+        newStatus,
+        statusBeforeDisplay: computeDisplayStatus(statusBefore),
+        statusAfterDisplay: computeDisplayStatus(newStatus),
+        inspectionNumber: d.inspection_number ?? "",
+        locationStructured: d.location_structured || "",
+      };
+    });
+
+    return { project, locationDimensions, plan, groups, canonicalIdByUid };
+  }
+
+  // POST /api/admin/uid-migration-apply — APPLIES the UID migration for a project.
+  // Body: { projectId: number, confirm: true }. Idempotent: a no-op if already applied.
+  // No multi-statement transaction is relied upon — the meta marker is written LAST so a
+  // partial apply is detectable and the endpoint can be safely re-run to finish.
+  app.post("/api/admin/uid-migration-apply", async (req, res) => {
+    try {
+      const projectId = Number(req.body?.projectId);
+      const confirm = req.body?.confirm;
+      if (!projectId) return res.status(400).json({ message: "projectId required in body" });
+      if (confirm !== true) return res.status(400).json({ message: "confirm:true required in body" });
+
+      const appliedKey = `uid_migration_applied_project_${projectId}`;
+      const existing = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`).get(appliedKey) as
+        { value: string } | undefined;
+      if (existing) {
+        let prior: any = {};
+        try { prior = JSON.parse(existing.value); } catch {}
+        return res.json({ ok: true, alreadyApplied: true, ...prior });
+      }
+
+      const built = buildMigrationPlan(projectId);
+      if (!built) return res.status(404).json({ message: "Project not found" });
+      const { plan } = built;
+
+      const updCanonical = sqlite.prepare(`UPDATE defects SET legacy_id = ?, uid = ? WHERE id = ?`);
+      const updDuplicate = sqlite.prepare(`UPDATE defects SET legacy_id = ?, status = ? WHERE id = ?`);
+
+      let canonicalRowsChanged = 0;
+      let canonicalRowsUnchanged = 0;
+      let duplicateRowsArchived = 0;
+      let duplicateRowsClosed = 0;
+
+      // Apply row writes. The meta marker is written AFTER all row updates so a crash
+      // mid-loop leaves no marker and the endpoint can be re-run safely.
+      const applyAll = sqlite.transaction(() => {
+        for (const p of plan) {
+          if (p.isDuplicateCarryover) {
+            updDuplicate.run(p.legacyId, p.newStatus, p.defectId);
+            if (p.statusBefore === "complete") duplicateRowsClosed++;
+            else if (p.newStatus === "archived") duplicateRowsArchived++;
+          } else {
+            // Canonical rows (incl. singleton groups) take the proposed UID.
+            updCanonical.run(p.legacyId, p.newUid, p.defectId);
+            if (p.newUid !== p.legacyId) canonicalRowsChanged++; else canonicalRowsUnchanged++;
+          }
+        }
+      });
+      applyAll();
+
+      const summary = {
+        totalRowsMigrated: plan.length,
+        canonicalRowsChanged,
+        canonicalRowsUnchanged,
+        duplicateRowsArchived,
+        duplicateRowsClosed,
+      };
+      const appliedAt = new Date().toISOString();
+
+      // Snapshot the exact old→new mapping (with TRUE before/after status) at apply time.
+      // After apply the live rows no longer carry the original status, so the CSV endpoint
+      // serves this snapshot for an accurate historical record.
+      const mappingSnapshot = plan.map((p) => ({
+        defectId: p.defectId,
+        projectId,
+        legacyId: p.legacyId,
+        newUid: p.newUid,
+        isCanonical: p.isCanonical,
+        isDuplicateCarryover: p.isDuplicateCarryover,
+        statusBefore: p.statusBeforeDisplay,
+        statusAfter: p.statusAfterDisplay,
+        inspectionNumber: p.inspectionNumber,
+        locationStructured: p.locationStructured,
+      }));
+
+      // Write the marker rows LAST.
+      sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`)
+        .run(`uid_migration_mapping_project_${projectId}`, JSON.stringify(mappingSnapshot));
+      sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`)
+        .run(`uid_migration_applied_at_${projectId}`, appliedAt);
+      sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`)
+        .run(appliedKey, JSON.stringify({ appliedAt, summary }));
+
+      res.json({ ok: true, alreadyApplied: false, appliedAt, summary });
+    } catch (err: any) {
+      console.error("Error in uid-migration-apply:", err);
+      res.status(500).json({ message: err.message || "Failed to apply migration" });
+    }
+  });
+
+  // GET /api/admin/uid-migration-export.csv?projectId=4 — downloadable old→new mapping.
+  // Reflects the CURRENT DB state via the shared plan builder (after apply, canonical
+  // rows already carry their new UID / legacy_id, so newUid === current uid).
+  app.get("/api/admin/uid-migration-export.csv", async (req, res) => {
+    try {
+      const projectId = Number(req.query.projectId);
+      if (!projectId) return res.status(400).json({ message: "projectId query param required" });
+
+      const header = [
+        "defectId", "projectId", "legacyId", "newUid", "isCanonical", "isDuplicateCarryover",
+        "statusBefore", "statusAfter", "inspectionNumber", "locationStructured",
+      ];
+      const esc = escapeCsvField;
+
+      // Prefer the snapshot written at apply time (true before/after status). Fall back to a
+      // live computation (pre-apply preview, or older applies without a snapshot).
+      const snapRow = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`)
+        .get(`uid_migration_mapping_project_${projectId}`) as { value: string } | undefined;
+      let rows: any[];
+      if (snapRow) {
+        try { rows = JSON.parse(snapRow.value); } catch { rows = []; }
+      } else {
+        const built = buildMigrationPlan(projectId);
+        if (!built) return res.status(404).json({ message: "Project not found" });
+        rows = built.plan.map((p) => ({
+          defectId: p.defectId,
+          projectId,
+          legacyId: p.legacyId,
+          newUid: p.newUid,
+          isCanonical: p.isCanonical,
+          isDuplicateCarryover: p.isDuplicateCarryover,
+          statusBefore: p.statusBeforeDisplay,
+          statusAfter: p.statusAfterDisplay,
+          inspectionNumber: p.inspectionNumber,
+          locationStructured: p.locationStructured,
+        }));
+      }
+
+      const lines = [header.join(",")];
+      for (const p of rows) {
+        lines.push([
+          p.defectId,
+          p.projectId,
+          p.legacyId,
+          p.newUid,
+          p.isCanonical ? "true" : "false",
+          p.isDuplicateCarryover ? "true" : "false",
+          p.statusBefore,
+          p.statusAfter,
+          p.inspectionNumber,
+          p.locationStructured,
+        ].map(esc).join(","));
+      }
+      const csv = lines.join("\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="uid-migration-project-${projectId}.csv"`);
+      res.send(csv);
+    } catch (err: any) {
+      console.error("Error in uid-migration-export:", err);
+      res.status(500).json({ message: err.message || "Failed to export CSV" });
     }
   });
 

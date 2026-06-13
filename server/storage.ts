@@ -194,6 +194,9 @@ safeAddColumn("defects", "inspection_opened", "INTEGER"); // inspection_number w
 // (see CREATE TABLE above). Mapping noted; not re-added to avoid touching live data.
 // Project location dimensions — drives the project-general formatLocation() helper.
 safeAddColumn("projects", "location_dimensions", `TEXT DEFAULT '["elevation","drop","level"]'`);
+// SVR reformat Stage 2 — project flag to hide legacy UID aliases on cards/register.
+// Stored as INTEGER 0/1 (drizzle boolean mode). Default off (aliases visible after apply).
+safeAddColumn("projects", "hide_legacy_aliases", "INTEGER DEFAULT 0");
 
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);

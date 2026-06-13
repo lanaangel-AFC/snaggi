@@ -1,10 +1,25 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useParams, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ArrowLeft, Download, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Download, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { formatLocation } from "@shared/location";
+import { escapeCsvField } from "@shared/csv";
+import { useToast } from "@/hooks/use-toast";
+
+interface MigrationSummary {
+  totalRowsMigrated: number;
+  canonicalRowsChanged: number;
+  canonicalRowsUnchanged: number;
+  duplicateRowsArchived: number;
+  duplicateRowsClosed: number;
+}
+
+interface ProjectMeta {
+  uidMigrationAppliedAt: string | null;
+  uidMigrationSummary: MigrationSummary | null;
+}
 
 interface PreviewRow {
   defectId: number;
@@ -38,10 +53,7 @@ interface PreviewResponse {
 // share it with their team for review before Stage 2 (apply) is requested.
 function buildCsv(data: PreviewResponse): string {
   const header = ["Defect ID", "Legacy ID", "Proposed UID", "Location", "Work Type", "Type", "Status", "Changed", "Duplicate", "Notes"];
-  const esc = (v: unknown) => {
-    const s = v == null ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  const esc = escapeCsvField;
   const lines = [header.join(",")];
   for (const r of data.rows) {
     lines.push([
@@ -65,6 +77,9 @@ export default function MigrationPreview() {
   // projectId can come from the route (/admin/migration-preview/:projectId) or default to 4.
   const projectId = Number(params.projectId) || 4;
 
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
   const { data, isLoading, error } = useQuery<PreviewResponse>({
     queryKey: ["uid-migration-preview", projectId],
     queryFn: async () => {
@@ -72,6 +87,42 @@ export default function MigrationPreview() {
       return res.json();
     },
   });
+
+  // Migration applied state comes from the project endpoint's meta fields.
+  const { data: projectMeta } = useQuery<ProjectMeta>({
+    queryKey: ["/api/projects", projectId, "migration-meta"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/projects/${projectId}`);
+      return res.json();
+    },
+  });
+  const appliedAt = projectMeta?.uidMigrationAppliedAt ?? null;
+  const summary = projectMeta?.uidMigrationSummary ?? null;
+
+  const applyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/uid-migration-apply`, { projectId, confirm: true });
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      toast({
+        title: result?.alreadyApplied ? "Already applied" : "Migration applied",
+        description: result?.summary
+          ? `${result.summary.totalRowsMigrated} rows migrated, ${result.summary.canonicalRowsChanged} UIDs changed`
+          : undefined,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "migration-meta"] });
+      queryClient.invalidateQueries({ queryKey: ["uid-migration-preview", projectId] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Apply failed", description: err?.message || String(err), variant: "destructive" });
+    },
+  });
+
+  // Server-generated CSV (matches the Stage 2 export schema). Opens the download endpoint.
+  const downloadMappingCsv = () => {
+    window.open(`/api/admin/uid-migration-export.csv?projectId=${projectId}`, "_blank");
+  };
 
   const downloadCsv = () => {
     if (!data) return;
@@ -101,18 +152,38 @@ export default function MigrationPreview() {
 
       {data && (
         <>
-          {/* Stage 2 gate banner */}
-          <Card className="p-4 border-amber-300 bg-amber-50 dark:bg-amber-900/20">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium text-amber-800 dark:text-amber-300">This is a preview only — nothing has been written.</p>
-                <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-                  Stage 2 (apply) is not enabled yet — review the preview and request approval.
-                </p>
+          {/* Applied notice / Stage 2 gate banner */}
+          {appliedAt ? (
+            <Card className="p-4 border-green-300 bg-green-50 dark:bg-green-900/20">
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-green-800 dark:text-green-300">
+                    MIGRATION APPLIED on {new Date(appliedAt).toLocaleString()}
+                  </p>
+                  {summary && (
+                    <p className="text-sm text-green-700 dark:text-green-400 mt-1">
+                      {summary.totalRowsMigrated} rows migrated • {summary.canonicalRowsChanged} canonical UIDs changed •{" "}
+                      {summary.canonicalRowsUnchanged} canonical unchanged • {summary.duplicateRowsArchived} duplicates archived •{" "}
+                      {summary.duplicateRowsClosed} duplicates closed
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          </Card>
+            </Card>
+          ) : (
+            <Card className="p-4 border-amber-300 bg-amber-50 dark:bg-amber-900/20">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-amber-800 dark:text-amber-300">This is a preview — applying writes to the database.</p>
+                  <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+                    Review the preview, then click APPLY MIGRATION. The apply is idempotent (safe to re-run).
+                  </p>
+                </div>
+              </div>
+            </Card>
+          )}
 
           {/* Summary block */}
           <Card className="p-4">
@@ -131,10 +202,20 @@ export default function MigrationPreview() {
                 <Button onClick={downloadCsv} variant="outline" size="sm" disabled={data.rows.length === 0}>
                   <Download className="w-4 h-4 mr-1" />Download preview as CSV
                 </Button>
-                {/* APPLY MIGRATION is intentionally DISABLED in Stage 1. */}
-                <Button disabled title="Stage 2 (apply) is not enabled yet" size="sm">
-                  APPLY MIGRATION
-                </Button>
+                {appliedAt ? (
+                  <Button onClick={downloadMappingCsv} variant="outline" size="sm">
+                    <Download className="w-4 h-4 mr-1" />Download mapping CSV
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => applyMutation.mutate()}
+                    disabled={applyMutation.isPending || data.rows.length === 0}
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    {applyMutation.isPending ? "Applying…" : "APPLY MIGRATION"}
+                  </Button>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-sm">

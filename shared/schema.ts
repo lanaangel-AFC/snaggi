@@ -19,6 +19,9 @@ export const projects = sqliteTable("projects", {
   // e.g. ["elevation","drop","level"] (East Elevation) or ["stage","level"] (waterproofing).
   // Drives the single formatLocation() helper so the register and card never disagree.
   locationDimensions: text("location_dimensions").default('["elevation","drop","level"]'),
+  // SVR reformat (Stage 2) — when true, hide the "(prev. {legacy_id})" alias on defect
+  // cards/register. User flips this on after cycling through the next inspection.
+  hideLegacyAliases: integer("hide_legacy_aliases", { mode: "boolean" }).default(false),
   createdAt: text("created_at").notNull(),
 });
 

@@ -234,6 +234,8 @@ export default function ReportDetail() {
 
   // Project's location dimensions — drives the single formatLocation() helper for the card.
   const cardDims = useMemo(() => getLocationDimensions((project as any)?.locationDimensions), [(project as any)?.locationDimensions]);
+  // SVR Stage 2 — whether to hide the "(prev. {legacy_id})" alias on cards/register.
+  const hideLegacyAliases = Boolean((project as any)?.hideLegacyAliases);
 
   const { data: defects, isLoading: defectsLoading } = useQuery<Defect[]>({
     queryKey: [`/api/reports/${reportId}/defects`],
@@ -2334,6 +2336,7 @@ export default function ReportDetail() {
                     changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
+                    hideLegacyAliases={hideLegacyAliases}
                   />
                 ))}
               </div>
@@ -2359,6 +2362,7 @@ export default function ReportDetail() {
                     changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
+                    hideLegacyAliases={hideLegacyAliases}
                   />
                 ))}
               </div>
@@ -2384,6 +2388,7 @@ export default function ReportDetail() {
                     changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
+                    hideLegacyAliases={hideLegacyAliases}
                   />
                 ))}
               </div>
@@ -2395,9 +2400,13 @@ export default function ReportDetail() {
   );
 }
 
-function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[] }) {
+function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims, hideLegacyAliases }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[]; hideLegacyAliases?: boolean }) {
   const isComplete = defect.status === "complete";
   const locationText = formatDefectLocation(defect, dims || getLocationDimensions(undefined));
+  // SVR Stage 2 — show "(prev. {legacy_id})" alias when the UID was migrated and aliases
+  // aren't hidden for this project.
+  const legacyAlias = defect.legacyId;
+  const showLegacyAlias = !hideLegacyAliases && legacyAlias != null && String(legacyAlias).trim() !== "" && legacyAlias !== defect.uid;
 
   return (
     <Card className="group relative">
@@ -2406,6 +2415,9 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-1">
               <span className="font-mono text-sm font-semibold">{defect.uid}</span>
+              {showLegacyAlias && (
+                <span className="font-mono text-xs text-muted-foreground">(prev. {legacyAlias})</span>
+              )}
               <Badge
                 variant="secondary"
                 className={isComplete
