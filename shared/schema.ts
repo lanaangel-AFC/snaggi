@@ -25,6 +25,10 @@ export const projects = sqliteTable("projects", {
   // Inspection-workflow (D3): when true, the export renders a "completed register" tail
   // section. Wire-only this round — rendering deferred (no UI checkbox yet).
   showCompletedRegister: integer("show_completed_register", { mode: "boolean" }).default(false),
+  // Export-profiles (Pass 1): follow-up action categories, JSON [{code,label,isDefault?}].
+  categories: text("categories").default("[]"),
+  // Per-profile export config (contractor/client): filenameSuffix + ordered categoryTreatments.
+  exportProfiles: text("export_profiles").default('{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'),
   createdAt: text("created_at").notNull(),
 });
 
@@ -67,6 +71,9 @@ export const defects = sqliteTable("defects", {
   levelCode: text("level_code"),
   workTypeCode: text("work_type_code"),
   seqNumber: text("seq_number"),
+  // Export-profiles (Pass 1): audience tag + follow-up category code.
+  audience: text("audience").default("both"), // "both" | "contractor" | "client"
+  categoryCode: text("category_code"), // references one of project.categories[].code; nullable -> "(uncategorised)"
   // SVR reformat (Stage A) additions:
   legacyId: text("legacy_id"), // NULL until Stage 2 (apply) populates it — DO NOT backfill in Stage 1
   locationStructured: text("location_structured"), // JSON: {elevation,drop,level} etc. Source of truth for location string.
@@ -218,6 +225,56 @@ export const inspectionNotes = sqliteTable("inspection_notes", {
 export const insertInspectionNoteSchema = createInsertSchema(inspectionNotes).omit({ id: true });
 export type InsertInspectionNote = z.infer<typeof insertInspectionNoteSchema>;
 export type InspectionNote = typeof inspectionNotes.$inferSelect;
+
+// Project Status — Narrative/Hold blocks (multiple per project)
+export const narrativeHolds = sqliteTable("narrative_holds", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  title: text("title").notNull().default(""),
+  body: text("body").notNull().default(""),
+  status: text("status").notNull().default("Active"), // "Active" | "Lifted" | "For information"
+  dateRaised: text("date_raised").default(""),
+  dateLifted: text("date_lifted"),
+  figures: text("figures").default("[]"), // JSON: [{filename, caption}]
+  audience: text("audience").notNull().default("both"), // "both" | "contractor" | "client"
+  sortOrder: integer("sort_order").default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
+});
+
+// Project Status — Program/Schedule (single per project, UNIQUE projectId)
+export const programSchedule = sqliteTable("program_schedule", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull().unique(),
+  programImageFilename: text("program_image_filename"),
+  asAtDate: text("as_at_date").default(""),
+  varianceText: text("variance_text").default(""),
+  projectedCompletion: text("projected_completion").default(""),
+  statusNarrative: text("status_narrative").default(""),
+  audience: text("audience").notNull().default("both"),
+  updatedAt: text("updated_at"),
+});
+
+// Project Status — Stage Progress Map (single per project, UNIQUE projectId)
+export const stageProgressMap = sqliteTable("stage_progress_map", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull().unique(),
+  planImageFilename: text("plan_image_filename"),
+  stages: text("stages").default("[]"), // JSON: [{stageName, status: "Not started"|"Underway"|"Complete"}]
+  audience: text("audience").notNull().default("both"),
+  updatedAt: text("updated_at"),
+});
+
+export const insertNarrativeHoldSchema = createInsertSchema(narrativeHolds).omit({ id: true });
+export const insertProgramScheduleSchema = createInsertSchema(programSchedule).omit({ id: true });
+export const insertStageProgressMapSchema = createInsertSchema(stageProgressMap).omit({ id: true });
+
+export type InsertNarrativeHold = z.infer<typeof insertNarrativeHoldSchema>;
+export type NarrativeHold = typeof narrativeHolds.$inferSelect;
+export type InsertProgramSchedule = z.infer<typeof insertProgramScheduleSchema>;
+export type ProgramSchedule = typeof programSchedule.$inferSelect;
+export type InsertStageProgressMap = z.infer<typeof insertStageProgressMapSchema>;
+export type StageProgressMap = typeof stageProgressMap.$inferSelect;
 
 // Users (kept from template)
 export const users = sqliteTable("users", {

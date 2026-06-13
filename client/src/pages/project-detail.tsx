@@ -16,6 +16,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Report, Defect, Elevation } from "@shared/schema";
 import { useState, useMemo } from "react";
+import ProjectStatusSection from "@/components/ProjectStatusSection";
+import ProjectSetupEditors from "@/components/ProjectSetupEditors";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -411,6 +413,9 @@ export default function ProjectDetail() {
               <Button type="submit" className="w-full" disabled={updateProjectMutation.isPending}>
                 {updateProjectMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>
+
+              {/* Categories + Export Profiles editors (saved independently via their own endpoints) */}
+              <ProjectSetupEditors projectId={id!} />
             </form>
           </DialogContent>
         </Dialog>
@@ -653,6 +658,9 @@ export default function ProjectDetail() {
           </div>
         )}
       </div>
+
+      {/* Project Status (narratives/holds, program, stage map) */}
+      <ProjectStatusSection projectId={id!} />
     </div>
   );
 }

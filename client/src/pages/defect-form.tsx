@@ -180,6 +180,25 @@ export default function DefectForm() {
   const [workType, setWorkType] = useState("");
   const [seqNumber, setSeqNumber] = useState("01");
 
+  // Export-profiles (Pass 1): follow-up category + audience tag on the record.
+  const projectCategories = useMemo(() => {
+    try {
+      const arr = JSON.parse((project as any)?.categories || "[]");
+      return Array.isArray(arr) ? arr.filter((c: any) => c && c.code) : [];
+    } catch { return []; }
+  }, [(project as any)?.categories]);
+  const [categoryCode, setCategoryCode] = useState<string>("");
+  const [audience, setAudience] = useState<string>("both");
+  const categoryInitRef = useRef(false);
+  // Default new records to the project's isDefault category, else the first category.
+  useEffect(() => {
+    if (isEdit) return; // edit path seeds from existingDefect in the init effect
+    if (categoryInitRef.current) return;
+    if (projectCategories.length === 0) return;
+    const def = projectCategories.find((c: any) => c.isDefault) || projectCategories[0];
+    if (def?.code) { setCategoryCode(def.code); categoryInitRef.current = true; }
+  }, [projectCategories, isEdit]);
+
   const [uid, setUid] = useState("");
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
@@ -554,6 +573,8 @@ export default function DefectForm() {
       if ((existingDefect as any).recordType) {
         setRecordType((existingDefect as any).recordType);
       }
+      setCategoryCode((existingDefect as any).categoryCode || "");
+      setAudience((existingDefect as any).audience || "both");
       // Prefer the structured UID columns (source of truth) — no fragile re-parsing.
       // A record counts as "structured" if ANY of the part columns is populated; this is
       // true for all records after the uid_parts_backfill_v1 migration.
@@ -670,7 +691,7 @@ export default function DefectForm() {
       if (isEdit) {
         // Include updated UID if the fields were changed (open items only)
         const updatedUid = assembledUid || uid;
-        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { ...form, uid: updatedUid, ...uidParts });
+        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { ...form, uid: updatedUid, ...uidParts, categoryCode: categoryCode || null, audience });
         return res.json();
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
@@ -680,6 +701,8 @@ export default function DefectForm() {
           uidOverride: assembledUid,
           recordType,
           ...uidParts,
+          categoryCode: categoryCode || null,
+          audience,
         });
         return res.json();
       }
@@ -1327,6 +1350,48 @@ export default function DefectForm() {
           <p className="text-xs text-muted-foreground">
             All fields optional — empty segments are skipped. The number auto-suggests but you can change it.
           </p>
+        </Card>
+
+        {/* Category + Audience (export profiles) */}
+        <Card className="p-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="category" className="text-xs">Category</Label>
+              <Select value={categoryCode || "__none__"} onValueChange={(v) => setCategoryCode(v === "__none__" ? "" : v)}>
+                <SelectTrigger data-testid="select-category">
+                  <SelectValue placeholder="(uncategorised)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">(uncategorised)</SelectItem>
+                  {projectCategories.map((c: any) => (
+                    <SelectItem key={c.code} value={c.code}>{c.label} ({c.code})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Audience</Label>
+              <div className="flex gap-1 mt-1" data-testid="audience-pill">
+                {([
+                  { value: "both", label: "Both" },
+                  { value: "contractor", label: "Contractor only" },
+                  { value: "client", label: "Client only" },
+                ] as const).map((opt) => (
+                  <Button
+                    key={opt.value}
+                    type="button"
+                    size="sm"
+                    variant={audience === opt.value ? "default" : "outline"}
+                    className="flex-1 text-xs h-9"
+                    onClick={() => setAudience(opt.value)}
+                    data-testid={`audience-${opt.value}`}
+                  >
+                    {opt.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
         </Card>
 
         {/* Dates */}

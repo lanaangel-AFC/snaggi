@@ -1,4 +1,4 @@
-const CACHE_NAME = 'snaggi-v24';
+const CACHE_NAME = 'snaggi-v25';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',

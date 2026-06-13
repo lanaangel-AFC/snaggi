@@ -8,6 +8,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
@@ -25,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Report, Defect, Photo } from "@shared/schema";
 import { formatLocation, getLocationDimensions } from "@shared/location";
+import { buildReportTree, type ProfileKey } from "@/lib/report-tree";
 import { useState, useMemo } from "react";
 
 const STANDARD_ELEVATIONS = [
@@ -223,6 +229,12 @@ export default function ReportDetail() {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareRecipient, setShareRecipient] = useState("");
   const [generatedLink, setGeneratedLink] = useState("");
+  // afcReference export guard: when afcReference is blank we block export and
+  // prompt for it. pendingExport stores the {profile, format} to resume after save.
+  const [afcGuardOpen, setAfcGuardOpen] = useState(false);
+  const [afcGuardValue, setAfcGuardValue] = useState("");
+  const [afcGuardSaving, setAfcGuardSaving] = useState(false);
+  const [pendingExport, setPendingExport] = useState<{ profile: ProfileKey; format: "word" | "pdf" } | null>(null);
 
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -660,12 +672,54 @@ export default function ReportDetail() {
     }
   };
 
+  // ==================== EXPORT ORCHESTRATION ====================
+  // Single entry point for the Export Report menu. Enforces the afcReference
+  // guard (Pass 1): if the project has no afcReference, block and prompt; the
+  // chosen export resumes after the reference is saved.
+  const runExport = (profile: ProfileKey, format: "word" | "pdf") => {
+    if (format === "word") handleGenerateWord(profile);
+    else handleGeneratePdf(profile);
+  };
+
+  const handleGenerate = (profile: ProfileKey, format: "word" | "pdf") => {
+    const afcRef = ((project as any)?.afcReference || "").trim();
+    if (!afcRef) {
+      setPendingExport({ profile, format });
+      setAfcGuardValue("");
+      setAfcGuardOpen(true);
+      return;
+    }
+    runExport(profile, format);
+  };
+
+  const saveAfcAndContinue = async () => {
+    const value = afcGuardValue.trim();
+    if (!value) {
+      toast({ title: "AFC reference required", variant: "destructive" });
+      return;
+    }
+    setAfcGuardSaving(true);
+    try {
+      await apiRequest("PATCH", `/api/projects/${projectId}`, { afcReference: value });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      setAfcGuardOpen(false);
+      const next = pendingExport;
+      setPendingExport(null);
+      if (next) runExport(next.profile, next.format);
+    } catch (e: any) {
+      toast({ title: e?.message || "Save failed", variant: "destructive" });
+    } finally {
+      setAfcGuardSaving(false);
+    }
+  };
+
   // ==================== PDF GENERATION (AFC Template) ====================
-  const handleGeneratePdf = async () => {
+  const handleGeneratePdf = async (profile: ProfileKey = "contractor") => {
     setGenerating("pdf");
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
+      const tree = buildReportTree(data, profile);
       const pdfDims = getLocationDimensions(data.project?.locationDimensions);
 
       const globalRes = await apiRequest("GET", "/api/global-settings");
@@ -1092,7 +1146,7 @@ export default function ReportDetail() {
         }
       }
 
-      doc.save(`${data.project.name.replace(/[^a-zA-Z0-9]/g, "_")}_SVR.pdf`);
+      doc.save(`${tree.filenameBase}.pdf`);
       toast({ title: "PDF report downloaded" });
     } catch (err) {
       console.error(err);
@@ -1103,11 +1157,12 @@ export default function ReportDetail() {
   };
 
   // ==================== WORD GENERATION (AFC Template) ====================
-  const handleGenerateWord = async () => {
+  const handleGenerateWord = async (profile: ProfileKey = "contractor") => {
     setGenerating("word");
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
+      const tree = buildReportTree(data, profile);
       const wordDims = getLocationDimensions(data.project?.locationDimensions);
 
       const globalResW = await apiRequest("GET", "/api/global-settings");
@@ -1937,7 +1992,7 @@ export default function ReportDetail() {
       });
 
       const blob = await Packer.toBlob(wordDoc);
-      const filename = `${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${afcRef}-${data.project.name.replace(/[^a-zA-Z0-9]/g, "_")}-SVR.docx`;
+      const filename = `${tree.filenameBase}.docx`;
       saveAs(blob, filename);
       toast({ title: "Word report downloaded" });
     } catch (err) {
@@ -2146,6 +2201,33 @@ export default function ReportDetail() {
           </DialogContent>
         </Dialog>
 
+        {/* AFC reference export guard */}
+        <Dialog open={afcGuardOpen} onOpenChange={setAfcGuardOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>AFC Reference Required</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                This project has no AFC reference. It's used in the report filename and cover, so enter it before exporting.
+              </p>
+              <div>
+                <Label>AFC reference</Label>
+                <Input
+                  placeholder="e.g. AFC-24123"
+                  value={afcGuardValue}
+                  onChange={(e) => setAfcGuardValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") saveAfcAndContinue(); }}
+                  autoFocus
+                />
+              </div>
+              <Button className="w-full" disabled={afcGuardSaving} onClick={saveAfcAndContinue}>
+                {afcGuardSaving ? "Saving..." : "Save & Continue"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={shareOpen} onOpenChange={setShareOpen}>
           <DialogContent>
             <DialogHeader>
@@ -2258,14 +2340,36 @@ export default function ReportDetail() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={handleGenerateWord}>
-              <FileText className="w-4 h-4 mr-2" />
-              Word Document (.docx)
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleGeneratePdf}>
-              <FileText className="w-4 h-4 mr-2" />
-              PDF (.pdf)
-            </DropdownMenuItem>
+            <DropdownMenuLabel>Generate Report</DropdownMenuLabel>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <FileText className="w-4 h-4 mr-2" />
+                Contractor
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={() => handleGenerate("contractor", "word")}>
+                  Word Document (.docx)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleGenerate("contractor", "pdf")}>
+                  PDF (.pdf)
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <FileText className="w-4 h-4 mr-2" />
+                Client
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={() => handleGenerate("client", "word")}>
+                  Word Document (.docx)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleGenerate("client", "pdf")}>
+                  PDF (.pdf)
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => {
               window.open(`${API_BASE}/api/reports/${reportId}/photos-zip?scope=current`, "_blank");
             }}>

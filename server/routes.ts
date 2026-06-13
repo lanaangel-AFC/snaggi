@@ -227,6 +227,179 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
+  // === CATEGORIES (project.categories JSON) ===
+  app.get("/api/projects/:id/categories", async (req, res) => {
+    const project = await storage.getProject(Number(req.params.id));
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    let categories: any[] = [];
+    try { categories = JSON.parse(project.categories || "[]"); } catch {}
+    res.json(categories);
+  });
+
+  // PUT replaces the categories array. Any NEW code is auto-appended to BOTH export
+  // profiles' categoryTreatments with treatment "itemise" (spec D2) so nothing silently vanishes.
+  app.put("/api/projects/:id/categories", async (req, res) => {
+    const id = Number(req.params.id);
+    const project = await storage.getProject(id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const incoming = req.body;
+    if (!Array.isArray(incoming)) return res.status(400).json({ message: "Body must be an array of categories" });
+    // Sanitise: keep code/label/isDefault only; require code+label.
+    const categories = incoming
+      .map((c: any) => ({
+        code: String(c.code || "").trim(),
+        label: String(c.label || "").trim(),
+        ...(c.isDefault ? { isDefault: true } : {}),
+      }))
+      .filter((c: any) => c.code && c.label);
+
+    // Auto-append new codes to both profiles.
+    let profiles: any = {};
+    try { profiles = JSON.parse(project.exportProfiles || "{}"); } catch {}
+    for (const key of ["contractor", "client"]) {
+      if (!profiles[key]) profiles[key] = { filenameSuffix: key === "client" ? "Client" : "Contractor", categoryTreatments: [] };
+      if (!Array.isArray(profiles[key].categoryTreatments)) profiles[key].categoryTreatments = [];
+      const present = new Set(profiles[key].categoryTreatments.map((t: any) => t.code));
+      for (const cat of categories) {
+        if (!present.has(cat.code)) {
+          profiles[key].categoryTreatments.push({ code: cat.code, treatment: "itemise" });
+          present.add(cat.code);
+        }
+      }
+    }
+
+    const updated = await storage.updateProject(id, {
+      categories: JSON.stringify(categories),
+      exportProfiles: JSON.stringify(profiles),
+    });
+    let out: any[] = [];
+    try { out = JSON.parse(updated?.categories || "[]"); } catch {}
+    res.json(out);
+  });
+
+  // === EXPORT PROFILES (project.exportProfiles JSON) ===
+  app.get("/api/projects/:id/export-profiles", async (req, res) => {
+    const project = await storage.getProject(Number(req.params.id));
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    let profiles: any = {};
+    try { profiles = JSON.parse(project.exportProfiles || "{}"); } catch {}
+    res.json(profiles);
+  });
+
+  // PUT replaces the export profiles. Also auto-syncs any project category not yet present
+  // in a profile's treatment list (appended as "itemise") so the lists stay complete.
+  app.put("/api/projects/:id/export-profiles", async (req, res) => {
+    const id = Number(req.params.id);
+    const project = await storage.getProject(id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const profiles = req.body;
+    if (!profiles || typeof profiles !== "object") return res.status(400).json({ message: "Body must be an export-profiles object" });
+
+    let categories: any[] = [];
+    try { categories = JSON.parse(project.categories || "[]"); } catch {}
+    const codes = categories.map((c: any) => c.code);
+    for (const key of ["contractor", "client"]) {
+      if (!profiles[key]) continue;
+      if (!Array.isArray(profiles[key].categoryTreatments)) profiles[key].categoryTreatments = [];
+      const present = new Set(profiles[key].categoryTreatments.map((t: any) => t.code));
+      for (const code of codes) {
+        if (!present.has(code)) {
+          profiles[key].categoryTreatments.push({ code, treatment: "itemise" });
+          present.add(code);
+        }
+      }
+    }
+
+    const updated = await storage.updateProject(id, { exportProfiles: JSON.stringify(profiles) });
+    let out: any = {};
+    try { out = JSON.parse(updated?.exportProfiles || "{}"); } catch {}
+    res.json(out);
+  });
+
+  // === PROJECT STATUS — Narrative/Hold blocks ===
+  app.get("/api/projects/:id/narrative-holds", async (req, res) => {
+    const holds = await storage.getNarrativeHolds(Number(req.params.id));
+    res.json(holds);
+  });
+
+  app.post("/api/projects/:id/narrative-holds", async (req, res) => {
+    const projectId = Number(req.params.id);
+    const now = new Date().toISOString();
+    const body = req.body || {};
+    const hold = await storage.createNarrativeHold({
+      projectId,
+      title: String(body.title ?? ""),
+      body: String(body.body ?? ""),
+      status: String(body.status ?? "Active"),
+      dateRaised: body.dateRaised != null ? String(body.dateRaised) : "",
+      dateLifted: body.dateLifted != null ? String(body.dateLifted) : null,
+      figures: typeof body.figures === "string" ? body.figures : JSON.stringify(body.figures ?? []),
+      audience: String(body.audience ?? "both"),
+      sortOrder: Number.isFinite(Number(body.sortOrder)) ? Number(body.sortOrder) : 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    res.status(201).json(hold);
+  });
+
+  app.patch("/api/narrative-holds/:id", async (req, res) => {
+    const body = req.body || {};
+    const patch: any = { updatedAt: new Date().toISOString() };
+    for (const k of ["title", "body", "status", "dateRaised", "dateLifted", "audience"]) {
+      if (body[k] !== undefined) patch[k] = body[k] === null ? null : String(body[k]);
+    }
+    if (body.figures !== undefined) patch.figures = typeof body.figures === "string" ? body.figures : JSON.stringify(body.figures);
+    if (body.sortOrder !== undefined) patch.sortOrder = Number(body.sortOrder);
+    const hold = await storage.updateNarrativeHold(Number(req.params.id), patch);
+    if (!hold) return res.status(404).json({ message: "Narrative hold not found" });
+    res.json(hold);
+  });
+
+  app.delete("/api/narrative-holds/:id", async (req, res) => {
+    await storage.deleteNarrativeHold(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  // === PROJECT STATUS — Program/Schedule (single per project, upsert) ===
+  app.get("/api/projects/:id/program-schedule", async (req, res) => {
+    const prog = await storage.getProgramSchedule(Number(req.params.id));
+    res.json(prog ?? null);
+  });
+
+  app.put("/api/projects/:id/program-schedule", async (req, res) => {
+    const projectId = Number(req.params.id);
+    const body = req.body || {};
+    const patch: any = {};
+    for (const k of ["programImageFilename", "asAtDate", "varianceText", "projectedCompletion", "statusNarrative", "audience"]) {
+      if (body[k] !== undefined) patch[k] = body[k] === null ? null : String(body[k]);
+    }
+    const prog = await storage.upsertProgramSchedule(projectId, patch);
+    res.json(prog);
+  });
+
+  // === PROJECT STATUS — Stage Progress Map (single per project, upsert) ===
+  app.get("/api/projects/:id/stage-progress-map", async (req, res) => {
+    const map = await storage.getStageProgressMap(Number(req.params.id));
+    res.json(map ?? null);
+  });
+
+  app.put("/api/projects/:id/stage-progress-map", async (req, res) => {
+    const projectId = Number(req.params.id);
+    const body = req.body || {};
+    const patch: any = {};
+    if (body.planImageFilename !== undefined) patch.planImageFilename = body.planImageFilename === null ? null : String(body.planImageFilename);
+    if (body.audience !== undefined) patch.audience = String(body.audience);
+    if (body.stages !== undefined) patch.stages = typeof body.stages === "string" ? body.stages : JSON.stringify(body.stages);
+    const map = await storage.upsertStageProgressMap(projectId, patch);
+    res.json(map);
+  });
+
+  // === PROJECT STATUS — image upload (reuses /uploads). Returns {filename}. ===
+  app.post("/api/projects/:id/status-images", upload.single("image"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No image uploaded" });
+    res.status(201).json({ filename: req.file.filename });
+  });
+
   // === REPORTS ===
   app.get("/api/projects/:projectId/reports", async (req, res) => {
     const reports = await storage.getReportsByProject(Number(req.params.projectId));
@@ -772,7 +945,15 @@ export async function registerRoutes(
     );
     // Include all project defects for the cumulative summary section
     const allProjectDefects = await storage.getDefectsByProject(project.id);
-    res.json({ project, report, defects: defectsWithPhotos, allProjectDefects });
+    // Project Status blocks (per-project; render on every report). Pass 1: returned in full,
+    // no audience filtering — the tree-builder will filter in Pass 2.
+    const narrativeHolds = await storage.getNarrativeHolds(project.id);
+    const programSchedule = await storage.getProgramSchedule(project.id);
+    const stageProgressMap = await storage.getStageProgressMap(project.id);
+    res.json({
+      project, report, defects: defectsWithPhotos, allProjectDefects,
+      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null },
+    });
   });
 
   // Legacy: project-level report-data (returns all defects across all reports)

@@ -12,6 +12,9 @@ import {
   type ShareLink, type InsertShareLink, shareLinks,
   type StatusHistory, type InsertStatusHistory, statusHistory,
   type InspectionNote, type InsertInspectionNote, inspectionNotes,
+  type NarrativeHold, type InsertNarrativeHold, narrativeHolds,
+  type ProgramSchedule, type InsertProgramSchedule, programSchedule,
+  type StageProgressMap, type InsertStageProgressMap, stageProgressMap,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -166,6 +169,39 @@ sqlite.exec(`
     created_at TEXT NOT NULL,
     FOREIGN KEY (defect_id) REFERENCES defects(id) ON DELETE CASCADE
   );
+  CREATE TABLE IF NOT EXISTS narrative_holds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'Active',
+    date_raised TEXT DEFAULT '',
+    date_lifted TEXT,
+    figures TEXT DEFAULT '[]',
+    audience TEXT NOT NULL DEFAULT 'both',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS program_schedule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL UNIQUE,
+    program_image_filename TEXT,
+    as_at_date TEXT DEFAULT '',
+    variance_text TEXT DEFAULT '',
+    projected_completion TEXT DEFAULT '',
+    status_narrative TEXT DEFAULT '',
+    audience TEXT NOT NULL DEFAULT 'both',
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS stage_progress_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL UNIQUE,
+    plan_image_filename TEXT,
+    stages TEXT DEFAULT '[]',
+    audience TEXT NOT NULL DEFAULT 'both',
+    updated_at TEXT
+  );
 `);
 
 // Add new columns to existing tables (safe: ALTER TABLE ADD COLUMN IF NOT EXISTS via try/catch)
@@ -211,6 +247,11 @@ safeAddColumn("projects", "hide_legacy_aliases", "INTEGER DEFAULT 0");
 safeAddColumn("reports", "prior_report_id", "INTEGER"); // report this one was cloned from (Start Next Inspection)
 safeAddColumn("photos", "capture_date", "TEXT"); // when photo was taken (EXIF/manual); display falls back to created_at
 safeAddColumn("projects", "show_completed_register", "INTEGER DEFAULT 0"); // D3: wire-only, render deferred
+// Export-profiles (Pass 1) additions.
+safeAddColumn("projects", "categories", "TEXT DEFAULT '[]'"); // follow-up action categories [{code,label,isDefault?}]
+safeAddColumn("projects", "export_profiles", `TEXT DEFAULT '{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'`);
+safeAddColumn("defects", "audience", "TEXT DEFAULT 'both'"); // "both" | "contractor" | "client"
+safeAddColumn("defects", "category_code", "TEXT"); // references project.categories[].code; nullable
 
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
@@ -303,6 +344,71 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
 
     console.log(`[origin-backfill] Set origin_report_id for ${backfilled} photos`);
     sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('photo_origin_backfill_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// Export-profiles (Pass 1): seed default categories for any project with empty categories.
+// Gated by meta key; meta key written LAST so a crash mid-seed re-runs cleanly.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'categories_seed_v1'`).get();
+  if (!alreadyRan) {
+    const defaultCategories = JSON.stringify([
+      { code: "RR", label: "Rectify" },
+      { code: "PI", label: "Provide Information" },
+      { code: "RD", label: "Redesign" },
+      { code: "PN", label: "Project Note", isDefault: true },
+    ]);
+    const rows = sqlite.prepare(
+      `SELECT id, categories FROM projects`
+    ).all() as { id: number; categories: string | null }[];
+    const updateStmt = sqlite.prepare(`UPDATE projects SET categories = ? WHERE id = ?`);
+    let seeded = 0;
+    for (const row of rows) {
+      const raw = (row.categories || "").trim();
+      const isEmpty = raw === "" || raw === "[]";
+      if (isEmpty) { updateStmt.run(defaultCategories, row.id); seeded++; }
+    }
+    console.log(`[categories-seed] Seeded default categories for ${seeded} projects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('categories_seed_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// Export-profiles (Pass 1): seed default export profiles for any project with empty exportProfiles.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'export_profiles_seed_v1'`).get();
+  if (!alreadyRan) {
+    const defaultProfiles = JSON.stringify({
+      contractor: {
+        filenameSuffix: "Contractor",
+        categoryTreatments: [
+          { code: "RR", treatment: "itemise" },
+          { code: "PI", treatment: "itemise" },
+          { code: "RD", treatment: "itemise" },
+          { code: "PN", treatment: "summarise" },
+        ],
+      },
+      client: {
+        filenameSuffix: "Client",
+        categoryTreatments: [
+          { code: "RD", treatment: "itemise" },
+          { code: "PN", treatment: "itemise" },
+          { code: "PI", treatment: "itemise" },
+          { code: "RR", treatment: "summarise" },
+        ],
+      },
+    });
+    const rows = sqlite.prepare(
+      `SELECT id, export_profiles FROM projects`
+    ).all() as { id: number; export_profiles: string | null }[];
+    const updateStmt = sqlite.prepare(`UPDATE projects SET export_profiles = ? WHERE id = ?`);
+    let seeded = 0;
+    for (const row of rows) {
+      const raw = (row.export_profiles || "").trim();
+      const isEmpty = raw === "" || raw === "{}";
+      if (isEmpty) { updateStmt.run(defaultProfiles, row.id); seeded++; }
+    }
+    console.log(`[export-profiles-seed] Seeded default export profiles for ${seeded} projects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('export_profiles_seed_v1', ?)`).run(new Date().toISOString());
   }
 }
 
@@ -709,6 +815,18 @@ export interface IStorage {
   // Inspection Notes
   getInspectionNotes(defectId: number): Promise<InspectionNote[]>;
   createInspectionNote(entry: InsertInspectionNote): Promise<InspectionNote>;
+  // Project Status — Narrative/Hold blocks
+  getNarrativeHolds(projectId: number): Promise<NarrativeHold[]>;
+  getNarrativeHold(id: number): Promise<NarrativeHold | undefined>;
+  createNarrativeHold(entry: InsertNarrativeHold): Promise<NarrativeHold>;
+  updateNarrativeHold(id: number, patch: Partial<InsertNarrativeHold>): Promise<NarrativeHold | undefined>;
+  deleteNarrativeHold(id: number): Promise<void>;
+  // Project Status — Program/Schedule (single per project, upsert)
+  getProgramSchedule(projectId: number): Promise<ProgramSchedule | undefined>;
+  upsertProgramSchedule(projectId: number, patch: Partial<InsertProgramSchedule>): Promise<ProgramSchedule>;
+  // Project Status — Stage Progress Map (single per project, upsert)
+  getStageProgressMap(projectId: number): Promise<StageProgressMap | undefined>;
+  upsertStageProgressMap(projectId: number, patch: Partial<InsertStageProgressMap>): Promise<StageProgressMap>;
 }
 
 // Metadata accepted by startNextInspection — set ONCE via the Start Next Inspection modal.
@@ -1074,6 +1192,53 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteShareLink(id: number): Promise<void> {
     db.delete(shareLinks).where(eq(shareLinks.id, id)).run();
+  }
+
+  // Project Status — Narrative/Hold blocks
+  async getNarrativeHolds(projectId: number): Promise<NarrativeHold[]> {
+    return db.select().from(narrativeHolds)
+      .where(eq(narrativeHolds.projectId, projectId))
+      .orderBy(narrativeHolds.sortOrder, narrativeHolds.id).all();
+  }
+  async getNarrativeHold(id: number): Promise<NarrativeHold | undefined> {
+    return db.select().from(narrativeHolds).where(eq(narrativeHolds.id, id)).get();
+  }
+  async createNarrativeHold(entry: InsertNarrativeHold): Promise<NarrativeHold> {
+    return db.insert(narrativeHolds).values(entry).returning().get();
+  }
+  async updateNarrativeHold(id: number, patch: Partial<InsertNarrativeHold>): Promise<NarrativeHold | undefined> {
+    return db.update(narrativeHolds).set(patch).where(eq(narrativeHolds.id, id)).returning().get();
+  }
+  async deleteNarrativeHold(id: number): Promise<void> {
+    db.delete(narrativeHolds).where(eq(narrativeHolds.id, id)).run();
+  }
+
+  // Project Status — Program/Schedule (single per project, upsert)
+  async getProgramSchedule(projectId: number): Promise<ProgramSchedule | undefined> {
+    return db.select().from(programSchedule).where(eq(programSchedule.projectId, projectId)).get();
+  }
+  async upsertProgramSchedule(projectId: number, patch: Partial<InsertProgramSchedule>): Promise<ProgramSchedule> {
+    const existing = await this.getProgramSchedule(projectId);
+    const now = new Date().toISOString();
+    if (existing) {
+      return db.update(programSchedule).set({ ...patch, updatedAt: now })
+        .where(eq(programSchedule.projectId, projectId)).returning().get();
+    }
+    return db.insert(programSchedule).values({ ...patch, projectId, updatedAt: now }).returning().get();
+  }
+
+  // Project Status — Stage Progress Map (single per project, upsert)
+  async getStageProgressMap(projectId: number): Promise<StageProgressMap | undefined> {
+    return db.select().from(stageProgressMap).where(eq(stageProgressMap.projectId, projectId)).get();
+  }
+  async upsertStageProgressMap(projectId: number, patch: Partial<InsertStageProgressMap>): Promise<StageProgressMap> {
+    const existing = await this.getStageProgressMap(projectId);
+    const now = new Date().toISOString();
+    if (existing) {
+      return db.update(stageProgressMap).set({ ...patch, updatedAt: now })
+        .where(eq(stageProgressMap.projectId, projectId)).returning().get();
+    }
+    return db.insert(stageProgressMap).values({ ...patch, projectId, updatedAt: now }).returning().get();
   }
 }
 
