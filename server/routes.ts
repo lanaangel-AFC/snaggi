@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes } from "./storage";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
+import { getLocationDimensions } from "@shared/location";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -46,6 +47,54 @@ const elevationUpload = multer({
     }
   },
 });
+
+// Format a photo's "age" annotation used by the export: "(added DD MMM YYYY)" when
+// the photo originated in a report other than the current one, else null.
+function formatPhotoAge(photo: any, currentReportId: number | null): string | null {
+  const origin = photo.originReportId ?? photo.origin_report_id ?? null;
+  if (origin == null || currentReportId == null || origin === currentReportId) return null;
+  const raw = photo.createdAt ?? photo.created_at ?? photo.uploadedAt ?? null;
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return null;
+  const day = String(d.getDate()).padStart(2, "0");
+  const mon = d.toLocaleString("en-AU", { month: "short" });
+  return `(added ${day} ${mon} ${d.getFullYear()})`;
+}
+
+// COMPUTED display status for API responses. Stored status stays lowercase
+// (open/complete/archived); the API surface uses proper-case display values.
+// "Amended" is computed in the live UI from amendment state; the base mapping here
+// returns Open/Closed/Archived and callers may override to "Amended" when relevant.
+function computeDisplayStatus(status: string): "Open" | "Closed" | "Archived" {
+  if (status === "complete") return "Closed";
+  if (status === "archived") return "Archived";
+  return "Open";
+}
+
+// Non-destructive API enrichment for a defect. ADDS fields only (never removes the
+// existing ones the client already reads). Stage A: observation alias, displayStatus,
+// locationStructured passthrough, and a shaped photos array. history[] deferred to
+// Prompt 2 (empty array for now).
+async function enrichDefect(d: any): Promise<any> {
+  const photos = await storage.getPhotosByDefect(d.id);
+  const shapedPhotos = photos.map((p: any) => ({
+    ...p,
+    url: `/api/uploads/${p.filename}`,
+    caption: p.caption ?? null,
+    capture_date: p.createdAt ?? p.created_at ?? null,
+    age: formatPhotoAge(p, d.reportId ?? d.report_id ?? null),
+  }));
+  return {
+    ...d,
+    observation: d.comment, // alias per spec — DO NOT rename the stored column
+    displayStatus: computeDisplayStatus(d.status),
+    locationStructured: d.locationStructured ?? null,
+    legacyId: d.legacyId ?? null, // Stage 1: always NULL (Stage 2 populates)
+    history: [], // deferred to Prompt 2
+    photos: shapedPhotos,
+  };
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -175,7 +224,7 @@ export async function registerRoutes(
   app.get("/api/defects/:id", async (req, res) => {
     const defect = await storage.getDefect(Number(req.params.id));
     if (!defect) return res.status(404).json({ message: "Defect not found" });
-    res.json(defect);
+    res.json(await enrichDefect(defect));
   });
 
   app.post("/api/projects/:projectId/defects", async (req, res) => {
@@ -856,6 +905,156 @@ export async function registerRoutes(
   app.post("/api/admin/cleanup-custom-work-types", async (_req, res) => {
     const result = cleanupCustomWorkTypes();
     res.json({ ok: true, ...result });
+  });
+
+  // ==================== UID MIGRATION PREVIEW (Stage 1 — READ ONLY) ====================
+  // PREVIEW ONLY. This endpoint writes NOTHING. It computes what the UID migration
+  // WOULD produce. Stage 2 (apply) is gated on explicit user approval and is NOT
+  // implemented. Project-general: all config flows from the project record.
+  app.get("/api/admin/uid-migration-preview", async (req, res) => {
+    try {
+      const projectId = Number(req.query.projectId);
+      if (!projectId) return res.status(400).json({ message: "projectId query param required" });
+
+      const project = sqlite.prepare(`SELECT * FROM projects WHERE id = ?`).get(projectId) as any;
+      if (!project) {
+        // Unknown project — return an empty, well-formed preview (generality requirement).
+        return res.json({
+          projectId, projectName: null,
+          locationDimensions: getLocationDimensions(null),
+          uidProtocol: null, rows: [],
+          summary: { totalRows: 0, uniqueLegacyIds: 0, rowsWhereProposedDiffersFromLegacy: 0, duplicateLegacyIdGroups: 0,
+            duplicateResolutionStrategy: "Keep latest inspection's row as canonical; mark older copies as legacy duplicates" },
+        });
+      }
+
+      const locationDimensions = getLocationDimensions(project.location_dimensions);
+      // Which UID parts are enabled for this project (blank-allowed config from b166a50).
+      let enabled: Record<string, boolean> = { elevation: true, drop: true, level: true, workType: true };
+      try { enabled = { ...enabled, ...JSON.parse(project.enabled_uid_parts || "{}") }; } catch {}
+
+      // Build a human-readable protocol string from the project's location dims + work type + seq.
+      const protocolSegments = [
+        ...locationDimensions.filter((d) => enabled[d] !== false),
+        ...(enabled.workType !== false ? ["workType"] : []),
+        "seq",
+      ];
+      const uidProtocol = protocolSegments.map((s) => `{${s}}`).join("-");
+
+      // Pull all defects for the project, joined with their report's inspection metadata.
+      const defectRows = sqlite.prepare(
+        `SELECT d.id, d.uid, d.record_type, d.status, d.report_id,
+                d.elevation_code, d.drop_code, d.level_code, d.work_type_code, d.seq_number,
+                d.location_structured,
+                r.inspection_number, r.created_at AS report_created_at
+         FROM defects d
+         LEFT JOIN reports r ON r.id = d.report_id
+         WHERE d.project_id = ?
+         ORDER BY d.id`
+      ).all(projectId) as any[];
+
+      // Compute the proposed UID from structured parts, skipping empty/disabled segments
+      // (mirrors the b166a50 client-side assembly: segments.filter(s => s !== "")).
+      const computeProposedUid = (d: any): string => {
+        const segs: string[] = [];
+        for (const dim of locationDimensions) {
+          if (enabled[dim] === false) continue;
+          let v: string | null = null;
+          if (dim === "elevation") v = d.elevation_code;
+          else if (dim === "drop") v = d.drop_code ? String(d.drop_code).padStart(2, "0") : null;
+          else if (dim === "level") v = d.level_code ? String(d.level_code).padStart(2, "0") : null;
+          else if (dim === "stage") v = d.drop_code ?? d.elevation_code;
+          else v = (d as any)[dim] ?? null;
+          if (v != null && String(v).trim() !== "") segs.push(String(v));
+        }
+        if (enabled.workType !== false && d.work_type_code) segs.push(String(d.work_type_code));
+        if (d.seq_number) segs.push(String(d.seq_number).padStart(2, "0"));
+        return segs.join("-");
+      };
+
+      // Group rows by their current UID (the "legacy" id, since defects are cloned per
+      // inspection sharing a UID). The LATEST inspection's row is canonical.
+      const groups = new Map<string, any[]>();
+      for (const d of defectRows) {
+        const key = d.uid || "";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(d);
+      }
+      // Determine the canonical (latest) row per group by report createdAt, then defect id.
+      const canonicalIdByUid = new Map<string, number>();
+      let duplicateGroupCount = 0;
+      groups.forEach((list, uid) => {
+        if (list.length > 1) duplicateGroupCount++;
+        const sorted = list.slice().sort((a, b) => {
+          const ta = a.report_created_at || ""; const tb = b.report_created_at || "";
+          if (ta !== tb) return ta < tb ? 1 : -1; // latest first
+          return b.id - a.id;
+        });
+        canonicalIdByUid.set(uid, sorted[0].id);
+      });
+
+      // Inspection label lookup for duplicate notes.
+      const inspLabel = (d: any) => d.inspection_number ? `Insp-${d.inspection_number}` : `report ${d.report_id ?? "?"}`;
+      const canonicalRowFor = (uid: string) => groups.get(uid)!.find((x) => x.id === canonicalIdByUid.get(uid));
+
+      const displayStatus = (status: string): string => {
+        if (status === "complete") return "Closed";
+        if (status === "archived") return "Archived";
+        return "Open"; // "Amended" is computed in the live app from amendment state; preview shows stored Open
+      };
+
+      let changedCount = 0;
+      const rows = defectRows.map((d) => {
+        const proposedUid = computeProposedUid(d);
+        const legacyId = d.uid; // current stored UID is what would become legacy on apply
+        const changed = proposedUid !== legacyId;
+        if (changed) changedCount++;
+        const isCanonical = canonicalIdByUid.get(d.uid) === d.id;
+        const isDuplicate = (groups.get(d.uid)?.length || 0) > 1 && !isCanonical;
+        let notes: string | null = null;
+        if (isDuplicate) {
+          const canon = canonicalRowFor(d.uid);
+          notes = `Duplicate of canonical row in ${inspLabel(canon)} (defect ${canon.id}); will be marked as archived/historical on apply`;
+        }
+        // Location object from the project's declared dimensions.
+        const location: Record<string, string> = {};
+        let locStruct: Record<string, any> = {};
+        try { locStruct = JSON.parse(d.location_structured || "{}"); } catch {}
+        for (const dim of locationDimensions) {
+          if (locStruct[dim] != null && String(locStruct[dim]).trim() !== "") location[dim] = String(locStruct[dim]);
+        }
+        return {
+          defectId: d.id,
+          legacyId,
+          proposedUid,
+          location,
+          workType: d.work_type_code || null,
+          type: d.record_type === "observation" ? "Observation" : "Defect",
+          status: displayStatus(d.status),
+          changed,
+          duplicateLegacyId: isDuplicate,
+          notes,
+        };
+      });
+
+      res.json({
+        projectId,
+        projectName: project.name,
+        locationDimensions,
+        uidProtocol,
+        rows,
+        summary: {
+          totalRows: rows.length,
+          uniqueLegacyIds: groups.size,
+          rowsWhereProposedDiffersFromLegacy: changedCount,
+          duplicateLegacyIdGroups: duplicateGroupCount,
+          duplicateResolutionStrategy: "Keep latest inspection's row as canonical; mark older copies as legacy duplicates",
+        },
+      });
+    } catch (err: any) {
+      console.error("Error in uid-migration-preview:", err);
+      res.status(500).json({ message: err.message || "Failed to build preview" });
+    }
   });
 
   // ==================== SHARE LINKS ====================

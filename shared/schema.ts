@@ -15,6 +15,10 @@ export const projects = sqliteTable("projects", {
   customWorkTypes: text("custom_work_types").default("[]"), // JSON array of {code, label}
   enabledUidParts: text("enabled_uid_parts").default('{"elevation":true,"drop":true,"level":true,"workType":true}'),
   primaryWorkTypes: text("primary_work_types").default("[]"), // JSON array of codes
+  // Ordered list of this project's location dimensions, JSON-encoded.
+  // e.g. ["elevation","drop","level"] (East Elevation) or ["stage","level"] (waterproofing).
+  // Drives the single formatLocation() helper so the register and card never disagree.
+  locationDimensions: text("location_dimensions").default('["elevation","drop","level"]'),
   createdAt: text("created_at").notNull(),
 });
 
@@ -48,7 +52,7 @@ export const defects = sqliteTable("defects", {
   dueDate: text("due_date").default(""),
   verificationMethod: text("verification_method").notNull(),
   verificationPerson: text("verification_person").notNull(),
-  status: text("status").notNull().default("open"), // open, complete
+  status: text("status").notNull().default("open"), // stored: open, complete, archived (displayStatus computes Open|Amended|Closed|Archived)
   recordType: text("record_type").notNull().default("defect"), // defect, observation
   // Structured UID parts — source of truth for the form so it never re-parses the assembled uid string.
   elevationCode: text("elevation_code"),
@@ -56,6 +60,10 @@ export const defects = sqliteTable("defects", {
   levelCode: text("level_code"),
   workTypeCode: text("work_type_code"),
   seqNumber: text("seq_number"),
+  // SVR reformat (Stage A) additions:
+  legacyId: text("legacy_id"), // NULL until Stage 2 (apply) populates it — DO NOT backfill in Stage 1
+  locationStructured: text("location_structured"), // JSON: {elevation,drop,level} etc. Source of truth for location string.
+  inspectionOpened: integer("inspection_opened"), // inspection_number (as INTEGER) where this record FIRST appeared
   updatedAt: text("updated_at"),
   createdAt: text("created_at"),
 });

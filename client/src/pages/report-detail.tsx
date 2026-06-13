@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Report, Defect, Photo } from "@shared/schema";
+import { formatLocation, getLocationDimensions } from "@shared/location";
 import { useState, useMemo } from "react";
 
 const STANDARD_ELEVATIONS = [
@@ -163,6 +164,19 @@ function deriveLocation(uid: string): string {
   return segments.join(", ");
 }
 
+// SINGLE source of truth for a defect's location string in BOTH the register and
+// the card. Prefers the structured location object (location_structured) via the
+// shared formatLocation() helper; falls back to UID parsing for any legacy row that
+// has no structured data yet. dims = the project's configured location dimensions.
+function formatDefectLocation(defect: any, dims: string[]): string {
+  const structured = defect?.locationStructured;
+  if (structured) {
+    const s = formatLocation(structured, dims);
+    if (s) return s;
+  }
+  return deriveLocation(defect?.uid || "");
+}
+
 // Format date for report
 function formatReportDate(dateStr?: string): string {
   if (!dateStr) return "";
@@ -217,6 +231,9 @@ export default function ReportDetail() {
   const { data: report, isLoading: reportLoading } = useQuery<Report>({
     queryKey: ["/api/reports", reportId],
   });
+
+  // Project's location dimensions — drives the single formatLocation() helper for the card.
+  const cardDims = useMemo(() => getLocationDimensions((project as any)?.locationDimensions), [(project as any)?.locationDimensions]);
 
   const { data: defects, isLoading: defectsLoading } = useQuery<Defect[]>({
     queryKey: [`/api/reports/${reportId}/defects`],
@@ -429,8 +446,9 @@ export default function ReportDetail() {
     doc: any, defect: any, margin: number, contentWidth: number, pageWidth: number, pageHeight: number,
     addHeader: () => void, addFooter: () => void,
     autoTable: any, DARK_TEXT: readonly number[], CAPTION_BLUE: readonly number[],
-    options?: { showChangeSummary?: boolean },
+    options?: { showChangeSummary?: boolean; dims?: string[] },
   ) => {
+    const locDims = options?.dims || getLocationDimensions(undefined);
     const hasMultipleLocations = defect.locations && defect.locations.length > 0;
     const events = defect.events;
     const photosAddedIds = events ? new Set<number>(events.photosAddedThisInspection || []) : undefined;
@@ -476,7 +494,7 @@ export default function ReportDetail() {
       doc.setFontSize(9);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(100);
-      doc.text(deriveLocation(defect.uid), margin, y);
+      doc.text(formatDefectLocation(defect, locDims), margin, y);
       y += 5;
     } else {
       y += 2;
@@ -646,6 +664,7 @@ export default function ReportDetail() {
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
+      const pdfDims = getLocationDimensions(data.project?.locationDimensions);
 
       const globalRes = await apiRequest("GET", "/api/global-settings");
       const globalSettingsData = await globalRes.json();
@@ -907,7 +926,7 @@ export default function ReportDetail() {
         summaryBody.push([
           d.uid,
           d.recordType === "observation" ? "Obs" : "Defect",
-          deriveLocation(d.uid),
+          formatDefectLocation(d, pdfDims),
           getWorkTypeLabel(d.uid),
           d.assignedTo || "—",
           d.dueDate || "—",
@@ -994,7 +1013,7 @@ export default function ReportDetail() {
         doc.text("Items added during this inspection.", margin, y);
 
         for (const defect of allNewPdf) {
-          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { dims: pdfDims });
         }
       }
 
@@ -1017,7 +1036,7 @@ export default function ReportDetail() {
         doc.text("Existing items updated during this inspection.", margin, y);
 
         for (const defect of allAmendedPdf) {
-          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { showChangeSummary: true });
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { showChangeSummary: true, dims: pdfDims });
         }
       }
 
@@ -1040,14 +1059,14 @@ export default function ReportDetail() {
         doc.text("Items marked complete during this inspection.", margin, y);
 
         for (const defect of allCompletedPdf) {
-          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { showChangeSummary: true });
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { showChangeSummary: true, dims: pdfDims });
         }
       }
 
       // Legacy fallback (no events data)
       if (!allHaveEventsPdf && legacyDetailPdf.length > 0) {
         for (const defect of legacyDetailPdf) {
-          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { dims: pdfDims });
         }
       }
       if (!allHaveEventsPdf && legacyObsDetailPdf.length > 0) {
@@ -1067,7 +1086,7 @@ export default function ReportDetail() {
         doc.text("General observations noted during inspection.", margin, y);
 
         for (const defect of legacyObsDetailPdf) {
-          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE);
+          await renderDefectPagePdf(doc, defect, margin, contentWidth, pageWidth, pageHeight, addHeader, addFooter, autoTable, DARK_TEXT, CAPTION_BLUE, { dims: pdfDims });
         }
       }
 
@@ -1087,6 +1106,7 @@ export default function ReportDetail() {
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
+      const wordDims = getLocationDimensions(data.project?.locationDimensions);
 
       const globalResW = await apiRequest("GET", "/api/global-settings");
       const globalSettingsW = await globalResW.json();
@@ -1491,7 +1511,7 @@ export default function ReportDetail() {
 
         if (!hasMultipleLocations) {
           elements.push(new Paragraph({
-            children: [new TextRun({ text: deriveLocation(safeText(defect.uid)), size: 18, font: "Aptos", color: "666666" })],
+            children: [new TextRun({ text: formatDefectLocation(defect, wordDims), size: 18, font: "Aptos", color: "666666" })],
             spacing: { after: options?.showChangeSummary ? 100 : 200 },
           }));
         } else {
@@ -1697,8 +1717,11 @@ export default function ReportDetail() {
         const statusText = defect.status === "complete" ? "Complete" : "Open";
         const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
         const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
+        const locationText = rowUid === defect.uid
+          ? formatDefectLocation(defect, wordDims)
+          : deriveLocation(safeText(rowUid));
         const cellTexts = [
-          safeText(rowUid), typeText, deriveLocation(safeText(rowUid)),
+          safeText(rowUid), typeText, locationText,
           getWorkTypeLabel(safeText(defect.uid)),
           safeText(defect.assignedTo) || "\u2014",
           safeText(defect.dueDate) || "\u2014", statusText,
@@ -2310,6 +2333,7 @@ export default function ReportDetail() {
                     onDelete={() => deleteMutation.mutate(defect.id)}
                     changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
+                    dims={cardDims}
                   />
                 ))}
               </div>
@@ -2334,6 +2358,7 @@ export default function ReportDetail() {
                     onDelete={() => deleteMutation.mutate(defect.id)}
                     changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
+                    dims={cardDims}
                   />
                 ))}
               </div>
@@ -2358,6 +2383,7 @@ export default function ReportDetail() {
                     onDelete={() => deleteMutation.mutate(defect.id)}
                     changeTag={defectEventsMap.get(defect.id)?.tag ?? undefined}
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
+                    dims={cardDims}
                   />
                 ))}
               </div>
@@ -2369,8 +2395,9 @@ export default function ReportDetail() {
   );
 }
 
-function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string }) {
+function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[] }) {
   const isComplete = defect.status === "complete";
+  const locationText = formatDefectLocation(defect, dims || getLocationDimensions(undefined));
 
   return (
     <Card className="group relative">
@@ -2409,6 +2436,11 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
               )}
             </div>
             <p className="text-sm text-muted-foreground truncate">{defect.comment}</p>
+            {locationText && (
+              <p className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                <MapPin className="w-3 h-3 shrink-0" />{locationText}
+              </p>
+            )}
             {changeSummary && (
               <p className={`text-[11px] mt-0.5 truncate ${changeTag === "COMPLETED" ? "text-slate-600 dark:text-slate-400" : "text-amber-600 dark:text-amber-400"}`}>{changeSummary}</p>
             )}

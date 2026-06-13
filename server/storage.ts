@@ -185,6 +185,15 @@ safeAddColumn("defects", "drop_code", "TEXT");
 safeAddColumn("defects", "level_code", "TEXT");
 safeAddColumn("defects", "work_type_code", "TEXT");
 safeAddColumn("defects", "seq_number", "TEXT");
+// SVR template reformat — Stage A schema additions.
+// legacy_id stays NULL in Stage 1 (Stage 2 / apply populates it). DO NOT backfill here.
+safeAddColumn("defects", "legacy_id", "TEXT");
+safeAddColumn("defects", "location_structured", "TEXT"); // JSON {elevation,drop,level} etc — source of truth for location string
+safeAddColumn("defects", "inspection_opened", "INTEGER"); // inspection_number where this record first appeared
+// date_opened / date_closed / verification_method / verification_person already exist on defects
+// (see CREATE TABLE above). Mapping noted; not re-added to avoid touching live data.
+// Project location dimensions — drives the project-general formatLocation() helper.
+safeAddColumn("projects", "location_dimensions", `TEXT DEFAULT '["elevation","drop","level"]'`);
 
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
@@ -455,6 +464,101 @@ export function cleanupCustomWorkTypes(): { projectsChanged: number; removed: st
   }
 }
 
+// ── SVR reformat Stage A backfills (all gated; run ONCE) ──────────────────────
+// NOTE: legacy_id is deliberately NOT backfilled here. It stays NULL until Stage 2
+// (apply) is approved. Stage 1 is preview-only.
+
+// Helper: read a project's ordered location dimensions (JSON array). Falls back to
+// the East Elevation default. Project-general — no hard-coded project IDs.
+function readLocationDimensions(rawConfig: string | null | undefined): string[] {
+  if (rawConfig) {
+    try {
+      const parsed = JSON.parse(rawConfig);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as string[];
+    } catch {}
+  }
+  return ["elevation", "drop", "level"];
+}
+
+// Backfill location_structured from the existing structured UID columns, keyed by
+// each project's configured location dimensions. Source of truth for the location
+// string in BOTH the register and the card.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'svr_location_structured_backfill_v1'`).get();
+  if (!alreadyRan) {
+    const projDims = new Map<number, string[]>();
+    const projRows = sqlite.prepare(`SELECT id, location_dimensions FROM projects`).all() as
+      { id: number; location_dimensions: string | null }[];
+    for (const p of projRows) projDims.set(p.id, readLocationDimensions(p.location_dimensions));
+
+    const rows = sqlite.prepare(
+      `SELECT id, project_id, elevation_code, drop_code, level_code FROM defects WHERE location_structured IS NULL`
+    ).all() as { id: number; project_id: number; elevation_code: string | null; drop_code: string | null; level_code: string | null }[];
+    const upd = sqlite.prepare(`UPDATE defects SET location_structured = ? WHERE id = ?`);
+    let filled = 0;
+    for (const d of rows) {
+      const dims = projDims.get(d.project_id) || ["elevation", "drop", "level"];
+      // Map the project's known structured columns onto its declared dimensions.
+      // Available source values from the b166a50 structured columns:
+      const source: Record<string, string | null> = {
+        elevation: d.elevation_code,
+        drop: d.drop_code,
+        level: d.level_code,
+        // For projects whose first dimension is "stage", reuse the level-like slot.
+        stage: d.drop_code ?? d.elevation_code,
+      };
+      const obj: Record<string, string> = {};
+      for (const dim of dims) {
+        const v = source[dim];
+        if (v != null && String(v).trim() !== "") obj[dim] = String(v);
+      }
+      upd.run(JSON.stringify(obj), d.id);
+      filled++;
+    }
+    console.log(`[svr-location-structured-backfill] Populated location_structured for ${filled} defects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('svr_location_structured_backfill_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// Backfill date_opened from createdAt for any row where date_opened is null/empty.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'svr_date_opened_backfill_v1'`).get();
+  if (!alreadyRan) {
+    const res = sqlite.prepare(
+      `UPDATE defects SET date_opened = created_at
+       WHERE (date_opened IS NULL OR date_opened = '') AND created_at IS NOT NULL`
+    ).run();
+    console.log(`[svr-date-opened-backfill] Set date_opened from created_at for ${res.changes} defects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('svr_date_opened_backfill_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// Backfill date_closed from status_history (when status last changed to "complete")
+// for any complete defect that has no date_closed recorded.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'svr_date_closed_backfill_v1'`).get();
+  if (!alreadyRan) {
+    const rows = sqlite.prepare(
+      `SELECT d.id,
+              (SELECT sh.created_at FROM status_history sh
+               WHERE sh.defect_id = d.id AND sh.new_status = 'complete'
+               ORDER BY sh.created_at DESC LIMIT 1) AS closed_at
+       FROM defects d
+       WHERE d.status = 'complete' AND (d.date_closed IS NULL OR d.date_closed = '')`
+    ).all() as { id: number; closed_at: string | null }[];
+    const upd = sqlite.prepare(`UPDATE defects SET date_closed = ? WHERE id = ?`);
+    let filled = 0;
+    for (const r of rows) {
+      if (r.closed_at) { upd.run(r.closed_at, r.id); filled++; }
+    }
+    console.log(`[svr-date-closed-backfill] Set date_closed from status_history for ${filled} defects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('svr_date_closed_backfill_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// (inspection_opened backfill runs AFTER the orphan-report migration below, since
+//  it depends on every defect having a report_id assigned.)
+
 // Migration: for existing defects without reportId, create a default "Report 1" for each project
 {
   const orphanRows = sqlite.prepare(
@@ -488,6 +592,34 @@ export function cleanupCustomWorkTypes(): { projectsChanged: number; removed: st
     sqlite.prepare(
       `UPDATE defects SET report_id = ? WHERE project_id = ? AND report_id IS NULL`
     ).run(reportId, row.project_id);
+  }
+}
+
+// Backfill inspection_opened: the inspection_number where each UID FIRST appeared.
+// Runs after the orphan-report migration so every defect has a report_id. Defects
+// are cloned per inspection sharing the same UID, so the earliest report (by
+// createdAt) containing a given UID within a project defines the open inspection.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'svr_inspection_opened_backfill_v1'`).get();
+  if (!alreadyRan) {
+    const rows = sqlite.prepare(
+      `SELECT d.id, d.project_id, d.uid,
+              (SELECT r.inspection_number FROM defects d2
+                 JOIN reports r ON r.id = d2.report_id
+               WHERE d2.project_id = d.project_id AND d2.uid = d.uid AND r.id IS NOT NULL
+               ORDER BY r.created_at ASC LIMIT 1) AS first_insp
+       FROM defects d`
+    ).all() as { id: number; project_id: number; uid: string; first_insp: string | null }[];
+    const upd = sqlite.prepare(`UPDATE defects SET inspection_opened = ? WHERE id = ?`);
+    let filled = 0;
+    for (const r of rows) {
+      // inspection_number is stored as text (e.g. "05"); store its integer form.
+      const n = r.first_insp != null ? parseInt(String(r.first_insp), 10) : NaN;
+      upd.run(Number.isFinite(n) ? n : null, r.id);
+      if (Number.isFinite(n)) filled++;
+    }
+    console.log(`[svr-inspection-opened-backfill] Set inspection_opened for ${filled} defects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('svr_inspection_opened_backfill_v1', ?)`).run(new Date().toISOString());
   }
 }
 
