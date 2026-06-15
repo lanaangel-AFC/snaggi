@@ -781,6 +781,9 @@ export interface IStorage {
   // Photos
   getPhoto(id: number): Promise<Photo | undefined>;
   getPhotosByDefect(defectId: number): Promise<Photo[]>;
+  // Cumulative photo timeline for an item across its whole clone lineage (all
+  // defects rows sharing projectId+uid). Deduped + date-sorted. See impl for keys.
+  getAllPhotosForItem(projectId: number, uid: string): Promise<Photo[]>;
   createPhoto(photo: InsertPhoto): Promise<Photo>;
   updatePhotoCaption(id: number, caption: string): Promise<Photo | undefined>;
   updatePhotoReportId(id: number, reportId: number): Promise<Photo | undefined>;
@@ -995,27 +998,66 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Clone photos: new reportId = newReport.id but preserve originReportId so age
-      // (current vs prior) is computed correctly. All cloned photos render "OLD".
-      const defectPhotos = db.select().from(photos).where(eq(photos.defectId, d.id)).all();
-      for (const p of defectPhotos) {
+      // Clone photos: walk the FULL clone lineage (all defects rows sharing this
+      // projectId+uid), not just the immediate parent row. This makes cloning
+      // lossless AND self-healing: if an earlier inspection dropped a photo, this
+      // step recovers it because we traverse the whole lineage. New reportId =
+      // newReport.id but originReportId is preserved so age (current vs prior) is
+      // computed correctly — all cloned photos render "OLD".
+      const lineagePhotos = db
+        .select({ photo: photos })
+        .from(photos)
+        .innerJoin(defects, eq(defects.id, photos.defectId))
+        .where(and(eq(defects.projectId, d.projectId), eq(defects.uid, d.uid)))
+        .all()
+        .map((r) => r.photo);
+
+      // Dedupe by the same key as getAllPhotosForItem (Fix 1), keeping the earliest
+      // occurrence, so we don't re-clone a photo that was already cloned correctly.
+      const dedupedPhotos = new Map<string, typeof lineagePhotos[number]>();
+      for (const p of lineagePhotos) {
+        const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}|${p.caption ?? ""}|${p.createdAt}`;
+        const existing = dedupedPhotos.get(key);
+        if (!existing || p.id < existing.id) dedupedPhotos.set(key, p);
+      }
+
+      for (const p of Array.from(dedupedPhotos.values())) {
+        const originReportId = p.originReportId ?? p.reportId;
+        // Skip if a clone for this (newDefect.id, originReportId, slot) already exists.
+        const alreadyCloned = db
+          .select()
+          .from(photos)
+          .where(and(
+            eq(photos.defectId, newDefect.id),
+            eq(photos.slot, p.slot),
+            ...(originReportId != null ? [eq(photos.originReportId, originReportId)] : []),
+          ))
+          .get();
+        if (alreadyCloned) continue;
+
         const srcPath = path.join(uploadDir, p.filename);
-        if (fs.existsSync(srcPath)) {
-          const ext = path.extname(p.filename);
-          const newFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-          const destPath = path.join(uploadDir, newFilename);
-          fs.copyFileSync(srcPath, destPath);
-          db.insert(photos).values({
-            defectId: newDefect.id,
-            filename: newFilename,
-            caption: p.caption,
-            slot: p.slot,
-            reportId: newReport.id,
-            originReportId: p.originReportId ?? p.reportId, // preserve original source report
-            captureDate: p.captureDate ?? null,
-            createdAt: now,
-          }).run();
+        if (!fs.existsSync(srcPath)) {
+          // Do NOT silently skip — log so the dropped file is visible.
+          console.error(
+            `[startNextInspection] DROPPED photo: source file missing on disk. ` +
+            `photoId=${p.id} defectUid=${d.uid} filename=${p.filename} srcPath=${srcPath}`
+          );
+          continue;
         }
+        const ext = path.extname(p.filename);
+        const newFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+        const destPath = path.join(uploadDir, newFilename);
+        fs.copyFileSync(srcPath, destPath);
+        db.insert(photos).values({
+          defectId: newDefect.id,
+          filename: newFilename,
+          caption: p.caption,
+          slot: p.slot,
+          reportId: newReport.id,
+          originReportId, // preserve original source report
+          captureDate: p.captureDate ?? null,
+          createdAt: now,
+        }).run();
       }
     }
 
@@ -1075,6 +1117,41 @@ export class DatabaseStorage implements IStorage {
   }
   async getPhotosByDefect(defectId: number): Promise<Photo[]> {
     return db.select().from(photos).where(eq(photos.defectId, defectId)).all();
+  }
+  // Cumulative photo timeline for an item across its full clone lineage. Every defects
+  // row sharing the same projectId+uid is the same logical item (UIDs are unique per
+  // project), so all photos attached to any of those rows belong to one timeline.
+  //
+  // Dedupe key: (originReportId, slot, caption, createdAt) — the same logical asset gets
+  // re-cloned on each Start Next Inspection with originReportId/createdAt preserved, so
+  // these four fields identify duplicates. We keep the row with the LOWEST id (earliest
+  // clone). captureDate is intentionally NOT in the key: it can be edited after a clone
+  // and would otherwise split one asset into two timeline entries.
+  //
+  // Sort: captureDate ?? createdAt ascending (oldest -> newest in date order).
+  async getAllPhotosForItem(projectId: number, uid: string): Promise<Photo[]> {
+    const rows = db
+      .select({ photo: photos })
+      .from(photos)
+      .innerJoin(defects, eq(defects.id, photos.defectId))
+      .where(and(eq(defects.projectId, projectId), eq(defects.uid, uid)))
+      .all()
+      .map((r) => r.photo);
+
+    const byKey = new Map<string, Photo>();
+    for (const p of rows) {
+      const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}|${p.caption ?? ""}|${p.createdAt}`;
+      const existing = byKey.get(key);
+      if (!existing || p.id < existing.id) byKey.set(key, p);
+    }
+
+    return Array.from(byKey.values()).sort((a, b) => {
+      const da = a.captureDate ?? a.createdAt;
+      const dbb = b.captureDate ?? b.createdAt;
+      if (da < dbb) return -1;
+      if (da > dbb) return 1;
+      return a.id - b.id; // stable tiebreak
+    });
   }
   async createPhoto(photo: InsertPhoto): Promise<Photo> {
     return db.insert(photos).values(photo).returning().get();
