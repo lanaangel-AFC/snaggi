@@ -60,16 +60,50 @@ function getAllPhotosForItem(projectId: number, uid: string): (PhotoRow & { wipN
     )
     .all(projectId, uid) as PhotoRow[];
 
-  // Dedupe key (originReportId, slot) — both clone-stable. createdAt/caption are
-  // mutable per-row metadata, not identity.
-  const byKey = new Map<string, PhotoRow>();
+  // Dedupe key (originReportId, slot) — both clone-stable. Identity (id/filename/etc)
+  // comes from the earliest row in each group; caption and captureDate take the
+  // most-recent non-empty value across the group, preserving user edits made on later
+  // visits. Blanks are intentional and preserved when no row has a value.
+  const groups = new Map<string, PhotoRow[]>();
   for (const p of rows) {
     const key = `${p.origin_report_id ?? p.report_id ?? ""}|${p.slot}`;
-    const existing = byKey.get(key);
-    if (!existing || p.id < existing.id) byKey.set(key, p);
+    const g = groups.get(key);
+    if (g) g.push(p);
+    else groups.set(key, [p]);
   }
 
-  const deduped = Array.from(byKey.values()).sort((a, b) => {
+  const merged: PhotoRow[] = [];
+  for (const group of Array.from(groups.values())) {
+    const rep = group.reduce((a, b) => (a.id <= b.id ? a : b));
+
+    let captionRow: PhotoRow | undefined;
+    for (const p of group) {
+      if (p.caption != null && p.caption.trim() !== "") {
+        if (!captionRow || p.created_at > captionRow.created_at ||
+            (p.created_at === captionRow.created_at && p.id > captionRow.id)) {
+          captionRow = p;
+        }
+      }
+    }
+
+    let captureRow: PhotoRow | undefined;
+    for (const p of group) {
+      if (p.capture_date != null) {
+        if (!captureRow || p.created_at > captureRow.created_at ||
+            (p.created_at === captureRow.created_at && p.id > captureRow.id)) {
+          captureRow = p;
+        }
+      }
+    }
+
+    merged.push({
+      ...rep,
+      caption: captionRow ? captionRow.caption : rep.caption,
+      capture_date: captureRow ? captureRow.capture_date : rep.capture_date,
+    });
+  }
+
+  const deduped = merged.sort((a, b) => {
     const da = a.capture_date ?? a.created_at;
     const dbb = b.capture_date ?? b.created_at;
     if (da < dbb) return -1;

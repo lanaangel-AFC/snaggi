@@ -22,6 +22,65 @@ import { eq, and, desc } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 
+// Collapse a clone lineage's photos into one representative per (originReportId, slot)
+// dedupe group. Identity (id, filename, reportId, originReportId, slot, createdAt) comes
+// from the EARLIEST row (lowest id — the originating clone). caption and captureDate take
+// the MOST-RECENT non-empty value across the group, preserving user edits made on later
+// visits. Blanks are intentional: if no row in a group has a non-empty value, the field
+// stays as it was on the representative row.
+function dedupePhotoLineage<T extends {
+  id: number;
+  originReportId: number | null;
+  reportId: number | null;
+  slot: string;
+  caption: string | null;
+  captureDate: string | null;
+  createdAt: string;
+}>(rows: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  for (const p of rows) {
+    const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}`;
+    const g = groups.get(key);
+    if (g) g.push(p);
+    else groups.set(key, [p]);
+  }
+
+  const out: T[] = [];
+  for (const group of Array.from(groups.values())) {
+    // Representative = earliest row (lowest id).
+    const rep = group.reduce((a, b) => (a.id <= b.id ? a : b));
+
+    // Most-recent non-empty caption across the group (by createdAt, id as tiebreak).
+    let captionRow: T | undefined;
+    for (const p of group) {
+      if (p.caption != null && p.caption.trim() !== "") {
+        if (!captionRow || p.createdAt > captionRow.createdAt ||
+            (p.createdAt === captionRow.createdAt && p.id > captionRow.id)) {
+          captionRow = p;
+        }
+      }
+    }
+
+    // Most-recent non-null captureDate across the group (by createdAt, id as tiebreak).
+    let captureRow: T | undefined;
+    for (const p of group) {
+      if (p.captureDate != null) {
+        if (!captureRow || p.createdAt > captureRow.createdAt ||
+            (p.createdAt === captureRow.createdAt && p.id > captureRow.id)) {
+          captureRow = p;
+        }
+      }
+    }
+
+    out.push({
+      ...rep,
+      caption: captionRow ? captionRow.caption : rep.caption,
+      captureDate: captureRow ? captureRow.captureDate : rep.captureDate,
+    });
+  }
+  return out;
+}
+
 // Use DATA_DIR env var for persistent storage (Railway volume), fallback to cwd
 const dataDir = process.env.DATA_DIR || process.cwd();
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
@@ -1012,20 +1071,15 @@ export class DatabaseStorage implements IStorage {
         .all()
         .map((r) => r.photo);
 
-      // Dedupe by the same key as getAllPhotosForItem (Fix 1): (originReportId, slot),
-      // because both are clone-stable by design (milestone 9). createdAt and caption are
-      // mutable per-row metadata, not identity — createdAt is fresh on every clone, so
-      // including it would make each clone look unique and we'd re-clone every copy.
-      // Keep the earliest occurrence (lowest id) so we don't re-clone a photo that was
-      // already cloned correctly.
-      const dedupedPhotos = new Map<string, typeof lineagePhotos[number]>();
-      for (const p of lineagePhotos) {
-        const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}`;
-        const existing = dedupedPhotos.get(key);
-        if (!existing || p.id < existing.id) dedupedPhotos.set(key, p);
-      }
+      // Dedupe by the same rule as getAllPhotosForItem (Fix 1): identity from the earliest
+      // row per (originReportId, slot) group (both clone-stable by design, milestone 9),
+      // with caption and captureDate taking the most-recent non-empty value across the
+      // group so user edits made on later visits are carried into the new clone. createdAt
+      // is fresh on every clone, so it is not part of identity — otherwise each clone would
+      // look unique and we'd re-clone every copy.
+      const dedupedPhotos = dedupePhotoLineage(lineagePhotos);
 
-      for (const p of Array.from(dedupedPhotos.values())) {
+      for (const p of dedupedPhotos) {
         const originReportId = p.originReportId ?? p.reportId;
         // Skip if a clone for this (newDefect.id, originReportId, slot) already exists.
         const alreadyCloned = db
@@ -1128,11 +1182,13 @@ export class DatabaseStorage implements IStorage {
   //
   // Dedupe key is (originReportId, slot) because both are clone-stable by design
   // (milestone 9): every Start Next Inspection preserves originReportId and slot on the
-  // cloned row. createdAt and caption are mutable per-row metadata, not identity —
-  // createdAt is set fresh to the clone moment on each clone, so including it would make
-  // every clone look unique and surface all N clones instead of the one logical asset.
-  // We keep the row with the LOWEST id (the originating clone); its caption/captureDate
-  // are used.
+  // cloned row. createdAt is set fresh to the clone moment on each clone, so including it
+  // would make every clone look unique and surface all N clones instead of the one
+  // logical asset.
+  //
+  // Identity (id/filename/reportId/originReportId/slot/createdAt) comes from the earliest
+  // row in each group; caption and captureDate take the most-recent non-empty value
+  // across the group, preserving user edits made on later visits (see dedupePhotoLineage).
   //
   // Sort: captureDate ?? createdAt ascending (oldest -> newest in date order).
   async getAllPhotosForItem(projectId: number, uid: string): Promise<Photo[]> {
@@ -1144,14 +1200,7 @@ export class DatabaseStorage implements IStorage {
       .all()
       .map((r) => r.photo);
 
-    const byKey = new Map<string, Photo>();
-    for (const p of rows) {
-      const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}`;
-      const existing = byKey.get(key);
-      if (!existing || p.id < existing.id) byKey.set(key, p);
-    }
-
-    return Array.from(byKey.values()).sort((a, b) => {
+    return dedupePhotoLineage(rows).sort((a, b) => {
       const da = a.captureDate ?? a.createdAt;
       const dbb = b.captureDate ?? b.createdAt;
       if (da < dbb) return -1;
