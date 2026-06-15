@@ -1012,11 +1012,15 @@ export class DatabaseStorage implements IStorage {
         .all()
         .map((r) => r.photo);
 
-      // Dedupe by the same key as getAllPhotosForItem (Fix 1), keeping the earliest
-      // occurrence, so we don't re-clone a photo that was already cloned correctly.
+      // Dedupe by the same key as getAllPhotosForItem (Fix 1): (originReportId, slot),
+      // because both are clone-stable by design (milestone 9). createdAt and caption are
+      // mutable per-row metadata, not identity — createdAt is fresh on every clone, so
+      // including it would make each clone look unique and we'd re-clone every copy.
+      // Keep the earliest occurrence (lowest id) so we don't re-clone a photo that was
+      // already cloned correctly.
       const dedupedPhotos = new Map<string, typeof lineagePhotos[number]>();
       for (const p of lineagePhotos) {
-        const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}|${p.caption ?? ""}|${p.createdAt}`;
+        const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}`;
         const existing = dedupedPhotos.get(key);
         if (!existing || p.id < existing.id) dedupedPhotos.set(key, p);
       }
@@ -1122,11 +1126,13 @@ export class DatabaseStorage implements IStorage {
   // row sharing the same projectId+uid is the same logical item (UIDs are unique per
   // project), so all photos attached to any of those rows belong to one timeline.
   //
-  // Dedupe key: (originReportId, slot, caption, createdAt) — the same logical asset gets
-  // re-cloned on each Start Next Inspection with originReportId/createdAt preserved, so
-  // these four fields identify duplicates. We keep the row with the LOWEST id (earliest
-  // clone). captureDate is intentionally NOT in the key: it can be edited after a clone
-  // and would otherwise split one asset into two timeline entries.
+  // Dedupe key is (originReportId, slot) because both are clone-stable by design
+  // (milestone 9): every Start Next Inspection preserves originReportId and slot on the
+  // cloned row. createdAt and caption are mutable per-row metadata, not identity —
+  // createdAt is set fresh to the clone moment on each clone, so including it would make
+  // every clone look unique and surface all N clones instead of the one logical asset.
+  // We keep the row with the LOWEST id (the originating clone); its caption/captureDate
+  // are used.
   //
   // Sort: captureDate ?? createdAt ascending (oldest -> newest in date order).
   async getAllPhotosForItem(projectId: number, uid: string): Promise<Photo[]> {
@@ -1140,7 +1146,7 @@ export class DatabaseStorage implements IStorage {
 
     const byKey = new Map<string, Photo>();
     for (const p of rows) {
-      const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}|${p.caption ?? ""}|${p.createdAt}`;
+      const key = `${p.originReportId ?? p.reportId ?? ""}|${p.slot}`;
       const existing = byKey.get(key);
       if (!existing || p.id < existing.id) byKey.set(key, p);
     }

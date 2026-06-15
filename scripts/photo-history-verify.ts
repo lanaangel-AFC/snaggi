@@ -8,7 +8,7 @@
  * against the live SQLite DB:
  *   - gathers every photo attached to any defects row sharing projectId + uid
  *     (every clone-link in the item's lineage),
- *   - dedupes by (originReportId, slot, caption, createdAt) keeping the earliest id,
+ *   - dedupes by (originReportId, slot) keeping the earliest id,
  *   - sorts by captureDate ?? createdAt ascending,
  *   - assigns wipNumber = 1..N in that order.
  *
@@ -60,9 +60,11 @@ function getAllPhotosForItem(projectId: number, uid: string): (PhotoRow & { wipN
     )
     .all(projectId, uid) as PhotoRow[];
 
+  // Dedupe key (originReportId, slot) — both clone-stable. createdAt/caption are
+  // mutable per-row metadata, not identity.
   const byKey = new Map<string, PhotoRow>();
   for (const p of rows) {
-    const key = `${p.origin_report_id ?? p.report_id ?? ""}|${p.slot}|${p.caption ?? ""}|${p.created_at}`;
+    const key = `${p.origin_report_id ?? p.report_id ?? ""}|${p.slot}`;
     const existing = byKey.get(key);
     if (!existing || p.id < existing.id) byKey.set(key, p);
   }
