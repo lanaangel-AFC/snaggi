@@ -931,10 +931,22 @@ export async function registerRoutes(
           photosAddedThisInspection: photosAdded.map(p => p.id),
         };
 
+        // Build the rendered photo set.
+        //   Open items (covers display-Open + display-Amended): use the cumulative
+        //   timeline across the whole clone lineage so we never lose photo history if a
+        //   prior clone dropped a file. Deduped + date-sorted by getAllPhotosForItem.
+        //   Non-Open items (Complete/Closed/Archived): unchanged — only this row's photos.
+        const basePhotos = d.status === "open"
+          ? await storage.getAllPhotosForItem(d.projectId, d.uid)
+          : defectPhotos;
+
         // Mark each photo with isThisInspection flag (respects manual override)
-        // Uses originReportId (first inspection photo appeared in) instead of reportId
-        const photosWithFlag = defectPhotos.map(p => ({
+        // Uses originReportId (first inspection photo appeared in) instead of reportId.
+        // wipNumber is the 1-based position in the date-sorted timeline; renderers
+        // consume it for the "WIP {n}" caption instead of the stored slot.
+        const photosWithFlag = basePhotos.map((p, idx) => ({
           ...p,
+          wipNumber: idx + 1,
           isThisInspection: p.newOverride === "new" ? true
             : p.newOverride === "not-new" ? false
             : (p.originReportId ?? p.reportId) === report.id,

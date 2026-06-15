@@ -171,11 +171,20 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...DARK_TEXT);
     doc.text("Photos", margin, yy); yy += 4;
-    // Tree already trimmed; render slot photos then any extras (e.g. most-recent OLD).
-    const inSlot = slotOrder.map((s: string) => photoList.find((p: any) => p.slot === s)).filter(Boolean);
-    const inSlotIds = new Set(inSlot.map((p: any) => p.id));
-    const extras = photoList.filter((p: any) => !inSlotIds.has(p.id));
-    const sortedPhotos = [...inSlot, ...extras];
+    // When the server supplies wipNumber (Open items: cumulative date-sorted timeline),
+    // render in the order given — the timeline may legitimately contain several photos
+    // per slot, which slot-bucketing would collapse. Otherwise fall back to the legacy
+    // slot-order layout (one per slot, then any extras) for non-Open items.
+    const hasWip = photoList.some((p: any) => typeof p.wipNumber === "number");
+    let sortedPhotos: any[];
+    if (hasWip) {
+      sortedPhotos = photoList;
+    } else {
+      const inSlot = slotOrder.map((s: string) => photoList.find((p: any) => p.slot === s)).filter(Boolean);
+      const inSlotIds = new Set(inSlot.map((p: any) => p.id));
+      const extras = photoList.filter((p: any) => !inSlotIds.has(p.id));
+      sortedPhotos = [...inSlot, ...extras];
+    }
     const imgW = 85; const imgH = imgW * 0.75;
     for (let i = 0; i < sortedPhotos.length; i++) {
       const photo = sortedPhotos[i];
@@ -192,7 +201,11 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
         doc.setDrawColor(180); doc.rect(x, yy, imgW, imgH); doc.setFontSize(7); doc.text("[Photo unavailable]", x + 4, yy + imgH / 2);
       }
       doc.setFontSize(7); doc.setFont("helvetica", "bold"); doc.setTextColor(100);
-      const photoLabel = slotLabels[photo.slot] || photo.slot;
+      // Prefer the server-computed wipNumber (1-based position in the cumulative,
+      // date-sorted timeline). Falls back to the stored slot label when absent.
+      const photoLabel = photo.slot === "complete"
+        ? (slotLabels[photo.slot] || photo.slot)
+        : (typeof photo.wipNumber === "number" ? `WIP ${photo.wipNumber}` : (slotLabels[photo.slot] || photo.slot));
       const photoCaption = photo.caption ? ` — ${photo.caption}` : "";
       const isNewPhoto = photosAddedIds ? photosAddedIds.has(photo.id) : false;
       const dateSuffix = isNewPhoto && photo.createdAt ? ` (added ${formatPhotoDate(photo.createdAt)})` : "";

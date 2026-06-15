@@ -196,13 +196,20 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       children: [new TextRun({ text: "Photos", bold: true, size: 20, font: "Aptos" })],
       spacing: { before: 100, after: 80 },
     }));
-    // The tree already trimmed which photos appear. Render them in slot order, then
-    // any photos that fall outside the known slot list (e.g. the most-recent OLD
-    // photo on a client export) so nothing the tree included is dropped here.
-    const inSlot = slotOrder.map((s: string) => photoList.find((p: any) => p.slot === s)).filter(Boolean);
-    const inSlotIds = new Set(inSlot.map((p: any) => p.id));
-    const extras = photoList.filter((p: any) => !inSlotIds.has(p.id));
-    const sortedPhotos = [...inSlot, ...extras];
+    // When the server supplies wipNumber (Open items: cumulative date-sorted timeline),
+    // render in the order given — the timeline may legitimately contain several photos
+    // per slot, which slot-bucketing would collapse. Otherwise fall back to the legacy
+    // slot-order layout (one per slot, then any extras) for non-Open items.
+    const hasWip = photoList.some((p: any) => typeof p.wipNumber === "number");
+    let sortedPhotos: any[];
+    if (hasWip) {
+      sortedPhotos = photoList;
+    } else {
+      const inSlot = slotOrder.map((s: string) => photoList.find((p: any) => p.slot === s)).filter(Boolean);
+      const inSlotIds = new Set(inSlot.map((p: any) => p.id));
+      const extras = photoList.filter((p: any) => !inSlotIds.has(p.id));
+      sortedPhotos = [...inSlot, ...extras];
+    }
 
     for (let i = 0; i < sortedPhotos.length; i += 2) {
       const photoCells: any[] = [];
@@ -223,9 +230,14 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
           const isNewPhoto = photosAddedIds ? photosAddedIds.has(photo.id) : false;
           const dateSuffix = isNewPhoto && photo.createdAt ? ` (added ${formatPhotoDate(photo.createdAt)})` : "";
           const captionText = photo.caption ? ` \u2014 ${safeText(photo.caption)}` : "";
+          // Prefer the server-computed wipNumber (1-based position in the cumulative,
+          // date-sorted timeline). Falls back to the stored slot label when absent.
+          const photoLabel = photo.slot === "complete"
+            ? (slotLabels[photo.slot] || photo.slot)
+            : (typeof photo.wipNumber === "number" ? `WIP ${photo.wipNumber}` : (slotLabels[photo.slot] || photo.slot));
           cellChildren.push(new Paragraph({
             children: [
-              new TextRun({ text: safeText(slotLabels[photo.slot] || photo.slot), bold: true, size: 16, font: "Aptos", color: photo.slot === "complete" ? "228B22" : "666666" }),
+              new TextRun({ text: safeText(photoLabel), bold: true, size: 16, font: "Aptos", color: photo.slot === "complete" ? "228B22" : "666666" }),
               ...(captionText ? [new TextRun({ text: safeText(captionText), size: 14, font: "Aptos", color: "888888" })] : []),
               ...(dateSuffix ? [new TextRun({ text: safeText(dateSuffix), size: 13, font: "Aptos", color: "2563EB", italics: true })] : []),
             ],
