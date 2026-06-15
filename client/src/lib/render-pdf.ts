@@ -128,21 +128,34 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
 
   // ===================== SHARED RENDER HELPERS =====================
   const summaryHead = [["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"]];
-  const renderSummaryTable = (defects: any[], startY: number) => {
+  // Action List adds a "Category" column immediately after "Responsible".
+  const summaryHeadCat = [["ID", "Type", "Location", "Work Type", "Responsible", "Category", "By Date", "Status"]];
+  // showCategory is true only for the Action List section; Carried-forward (which
+  // shares this helper) keeps the original 7-column layout.
+  const renderSummaryTable = (defects: any[], startY: number, showCategory = false) => {
     const body: string[][] = [];
     for (const d of defects) {
-      body.push([d.uid, d.recordType === "observation" ? "Obs" : "Defect", formatDefectLocation(d, pdfDims), getWorkTypeLabel(d.uid), d.assignedTo || "\u2014", d.dueDate || "\u2014", d.status === "complete" ? "Complete" : "Open"]);
+      const cat = d.categoryLabel || "(uncategorised)";
+      const baseRow = [d.uid, d.recordType === "observation" ? "Obs" : "Defect", formatDefectLocation(d, pdfDims), getWorkTypeLabel(d.uid), d.assignedTo || "\u2014"];
+      const tail = [d.dueDate || "\u2014", d.status === "complete" ? "Complete" : "Open"];
+      body.push(showCategory ? [...baseRow, cat, ...tail] : [...baseRow, ...tail]);
       if (d.locations && d.locations.length > 0) for (const loc of d.locations) {
         const locUid = loc.uid || "";
-        body.push([locUid, d.recordType === "observation" ? "Obs" : "Defect", locUid ? deriveLocation(locUid) : "", getWorkTypeLabel(d.uid), d.assignedTo || "\u2014", d.dueDate || "\u2014", d.status === "complete" ? "Complete" : "Open"]);
+        const locBase = [locUid, d.recordType === "observation" ? "Obs" : "Defect", locUid ? deriveLocation(locUid) : "", getWorkTypeLabel(d.uid), d.assignedTo || "\u2014"];
+        body.push(showCategory ? [...locBase, cat, ...tail] : [...locBase, ...tail]);
       }
     }
     if (body.length === 0) return startY;
+    // Original widths sum to 166 (20+12+24+34+30+26+20). With Category added,
+    // shrink Work Type (description) to keep the table within the same span.
+    const columnStyles: Record<number, { cellWidth: number }> = showCategory
+      ? { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 14 }, 4: { cellWidth: 30 }, 5: { cellWidth: 20 }, 6: { cellWidth: 26 }, 7: { cellWidth: 20 } }
+      : { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 34 }, 4: { cellWidth: 30 }, 5: { cellWidth: 26 }, 6: { cellWidth: 20 } };
     autoTable(doc, {
-      startY, head: summaryHead, body, margin: { left: margin, right: margin },
+      startY, head: showCategory ? summaryHeadCat : summaryHead, body, margin: { left: margin, right: margin },
       styles: { fontSize: 6.5, cellPadding: 1.5, overflow: "linebreak", valign: "top" },
       headStyles: { fillColor: [255, 255, 255], textColor: [...CAPTION_BLUE], fontStyle: "bold", lineWidth: { bottom: 0.5 }, lineColor: [...DARK_TEXT] },
-      columnStyles: { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 34 }, 4: { cellWidth: 30 }, 5: { cellWidth: 26 }, 6: { cellWidth: 20 } },
+      columnStyles,
       didDrawPage: () => { addHeader(); addFooter(); },
       rowPageBreak: "auto",
     });
@@ -313,7 +326,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     actionHasContent = true;
     if (g.kind === "summary") { y = summaryNoteLine(g, y); continue; }
     y = groupSubheading(g.label, y);
-    y = renderSummaryTable(g.defects, y);
+    y = renderSummaryTable(g.defects, y, true);
   }
   if (!actionHasContent) { doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y); }
 

@@ -58,6 +58,9 @@ const DEFAULT_PROFILES: ExportProfiles = {
 };
 
 const UNCATEGORISED = "__uncat__";
+// Single fallback label for rows whose category cannot be resolved. Used for the
+// Action List "Category" column.
+const UNCATEGORISED_LABEL = "(uncategorised)";
 
 function safeFilenamePart(v: unknown): string {
   return String(v ?? "").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -272,6 +275,9 @@ function buildGroups(
   labelMap: Map<string, string>,
   profile: ProfileKey,
   ignoreTreatment: boolean,
+  // Action List only: resolve a per-row category label and sort completed
+  // (displayStatus === "Closed") rows to the bottom of each itemised group.
+  actionListMode: boolean = false,
 ): CategoryGroup[] {
   // Bucket defects by category code (uncategorised under sentinel).
   const buckets = new Map<string, any[]>();
@@ -284,9 +290,9 @@ function buildGroups(
   const groups: CategoryGroup[] = [];
 
   const emit = (code: string, treatment: Treatment) => {
-    const rows = (buckets.get(code) || []).slice().sort(sortByUid);
+    let rows = (buckets.get(code) || []).slice().sort(sortByUid);
     if (rows.length === 0) return; // nothing in this category this section
-    const label = code === UNCATEGORISED ? "(uncategorised)" : (labelMap.get(code) || code);
+    const label = code === UNCATEGORISED ? UNCATEGORISED_LABEL : (labelMap.get(code) || code);
     const effective: Treatment = ignoreTreatment ? "itemise" : treatment;
     if (effective === "hide") return; // omit entirely
     if (effective === "summarise") {
@@ -298,6 +304,20 @@ function buildGroups(
         note: profile === "client" ? "Itemised in the contractor report" : null,
       });
     } else {
+      if (actionListMode) {
+        // Resolve the category label once per row (looked up by the row's own
+        // categoryCode; single fallback constant for unresolved codes).
+        rows = rows.map((d) => {
+          const rowCode = d.categoryCode && String(d.categoryCode).trim() ? String(d.categoryCode) : "";
+          const categoryLabel = rowCode ? (labelMap.get(rowCode) || rowCode) : UNCATEGORISED_LABEL;
+          return { ...d, categoryLabel };
+        });
+        // Stable sort: completed (displayStatus === "Closed") rows to the bottom,
+        // preserving existing order within each partition.
+        const open = rows.filter((d) => displayStatusOf(d) !== "Closed");
+        const closed = rows.filter((d) => displayStatusOf(d) === "Closed");
+        rows = [...open, ...closed];
+      }
       groups.push({ kind: "itemise", categoryCode: code, label, defects: rows });
     }
   };
@@ -374,7 +394,7 @@ export function buildReportTree(data: any, profile: ProfileKey): ReportTree {
     allHaveEvents ? isCompletedThisInspection(d) : false);
 
   // ---- Action List: every defect on the report, grouped + treated ----
-  const actionGroups = buildGroups(defectsOnlyAndObs, categoryOrder, treatmentMap, labelMap, profile, false);
+  const actionGroups = buildGroups(defectsOnlyAndObs, categoryOrder, treatmentMap, labelMap, profile, false, true);
 
   // ---- This Inspection: three buckets, each grouped + treated ----
   const tiNew = buildGroups(newItems, categoryOrder, treatmentMap, labelMap, profile, false);

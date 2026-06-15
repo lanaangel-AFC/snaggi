@@ -369,29 +369,45 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     spacing: { after: 200 },
   }));
 
+  // Action List adds a "Category" column immediately after "Responsible".
+  // showCategory is true only for the Action List section (Carried-forward, which
+  // shares these builders, keeps the original 7-column layout).
   const summaryHeaderLabels = ["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"];
   const summaryHeaderWidths = [950, 600, 1300, 2300, 1850, 1300, 1400];
-  const buildSummaryHeaderRow = () => new TableRow({
-    tableHeader: true,
-    children: summaryHeaderLabels.map((label, i) =>
-      new TableCell({
-        width: { size: summaryHeaderWidths[i], type: WidthType.DXA },
-        children: [new Paragraph({ children: [new TextRun({ text: label, size: 16, font: "Aptos", bold: true, color: CAPTION_BLUE })], spacing: { before: 30, after: 30 } })],
-        borders: { top: noBorder, left: noBorder, right: noBorder, bottom: { style: BorderStyle.SINGLE, size: 4, color: DARK_TEXT } },
-      })
-    ),
-  });
-  const buildSummaryRow = (rowUid: string, defect: any) => {
+  // Category-aware layout: insert "Category" after "Responsible" (index 5) and
+  // shrink Work Type (the description column) to keep the total width constant.
+  const summaryHeaderLabelsCat = ["ID", "Type", "Location", "Work Type", "Responsible", "Category", "By Date", "Status"];
+  const summaryHeaderWidthsCat = [950, 600, 1300, 900, 1850, 1400, 1300, 1400];
+  const buildSummaryHeaderRow = (showCategory = false) => {
+    const labels = showCategory ? summaryHeaderLabelsCat : summaryHeaderLabels;
+    const widths = showCategory ? summaryHeaderWidthsCat : summaryHeaderWidths;
+    return new TableRow({
+      tableHeader: true,
+      children: labels.map((label, i) =>
+        new TableCell({
+          width: { size: widths[i], type: WidthType.DXA },
+          children: [new Paragraph({ children: [new TextRun({ text: label, size: 16, font: "Aptos", bold: true, color: CAPTION_BLUE })], spacing: { before: 30, after: 30 } })],
+          borders: { top: noBorder, left: noBorder, right: noBorder, bottom: { style: BorderStyle.SINGLE, size: 4, color: DARK_TEXT } },
+        })
+      ),
+    });
+  };
+  const buildSummaryRow = (rowUid: string, defect: any, showCategory = false) => {
     const statusText = defect.status === "complete" ? "Complete" : "Open";
     const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
     const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
     const locationText = rowUid === defect.uid ? formatDefectLocation(defect, wordDims) : deriveLocation(safeText(rowUid));
-    const cellTexts = [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
+    const widths = showCategory ? summaryHeaderWidthsCat : summaryHeaderWidths;
+    const categoryText = safeText(defect.categoryLabel) || "(uncategorised)";
+    const cellTexts = showCategory
+      ? [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", categoryText, safeText(defect.dueDate) || "\u2014", statusText]
+      : [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
+    const statusIdx = showCategory ? 7 : 6;
     return new TableRow({
       children: cellTexts.map((text: string, i: number) =>
         new TableCell({
-          width: { size: summaryHeaderWidths[i], type: WidthType.DXA },
-          children: [new Paragraph({ children: [new TextRun({ text: safeText(text), size: 14, font: "Aptos", color: i === 6 ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined), bold: i === 0 })], spacing: { before: 25, after: 25 } })],
+          width: { size: widths[i], type: WidthType.DXA },
+          children: [new Paragraph({ children: [new TextRun({ text: safeText(text), size: 14, font: "Aptos", color: i === statusIdx ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined), bold: i === 0 })], spacing: { before: 25, after: 25 } })],
           borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
         })
       ),
@@ -411,10 +427,10 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       children: [new TextRun({ text: safeText(g.label), bold: true, size: 24, font: "Aptos", color: CAPTION_BLUE })],
       spacing: { before: 160, after: 60 },
     }));
-    const rows: any[] = [buildSummaryHeaderRow()];
+    const rows: any[] = [buildSummaryHeaderRow(true)];
     for (const d of g.defects) {
-      rows.push(buildSummaryRow(d.uid, d));
-      if (d.locations && d.locations.length > 0) for (const loc of d.locations) rows.push(buildSummaryRow(loc.uid || "", d));
+      rows.push(buildSummaryRow(d.uid, d, true));
+      if (d.locations && d.locations.length > 0) for (const loc of d.locations) rows.push(buildSummaryRow(loc.uid || "", d, true));
     }
     actionChildren.push(new Table({ width: { size: 9700, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows }));
   }
