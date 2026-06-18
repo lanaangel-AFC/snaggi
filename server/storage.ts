@@ -413,6 +413,9 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
   if (!alreadyRan) {
     const defaultCategories = JSON.stringify([
       { code: "RR", label: "Rectify" },
+      // WIP — "Work in progress" — is a built-in base category present on every
+      // inspection. Seeded BEFORE Project Note so order is RR, WIP, PI, RD, PN.
+      { code: "WIP", label: "Work in progress" },
       { code: "PI", label: "Provide Information" },
       { code: "RD", label: "Redesign" },
       { code: "PN", label: "Project Note", isDefault: true },
@@ -441,6 +444,7 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
         filenameSuffix: "Contractor",
         categoryTreatments: [
           { code: "RR", treatment: "itemise" },
+          { code: "WIP", treatment: "itemise" },
           { code: "PI", treatment: "itemise" },
           { code: "RD", treatment: "itemise" },
           { code: "PN", treatment: "summarise" },
@@ -450,6 +454,7 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
         filenameSuffix: "Client",
         categoryTreatments: [
           { code: "RD", treatment: "itemise" },
+          { code: "WIP", treatment: "itemise" },
           { code: "PN", treatment: "itemise" },
           { code: "PI", treatment: "itemise" },
           { code: "RR", treatment: "summarise" },
@@ -468,6 +473,68 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
     }
     console.log(`[export-profiles-seed] Seeded default export profiles for ${seeded} projects`);
     sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('export_profiles_seed_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// WIP-category backfill (gated by 'wip_category_backfill_v1'). Adds the built-in
+// "WIP — Work in progress" base category to every EXISTING project that doesn't
+// already have it, plus the matching "itemise" treatment row in BOTH export
+// profiles. New projects pick WIP up from the seed blocks / schema defaults
+// above; this block retrofits projects created before WIP became a base
+// category. Meta key is written LAST so a crash mid-backfill re-runs cleanly.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'wip_category_backfill_v1'`).get();
+  if (!alreadyRan) {
+    const WIP_CODE = "WIP";
+    const WIP_CATEGORY = { code: WIP_CODE, label: "Work in progress" };
+    const WIP_TREATMENT = { code: WIP_CODE, treatment: "itemise" };
+
+    // Insert `item` into `list` before the first element with code "PN"; if no PN
+    // row exists, append to the end.
+    const insertBeforePN = (list: any[], item: any): any[] => {
+      const pnIdx = list.findIndex((x: any) => x && x.code === "PN");
+      if (pnIdx === -1) return [...list, item];
+      return [...list.slice(0, pnIdx), item, ...list.slice(pnIdx)];
+    };
+
+    const rows = sqlite.prepare(
+      `SELECT id, categories, export_profiles FROM projects`
+    ).all() as { id: number; categories: string | null; export_profiles: string | null }[];
+    const updateStmt = sqlite.prepare(
+      `UPDATE projects SET categories = ?, export_profiles = ? WHERE id = ?`
+    );
+
+    let backfilled = 0;
+    for (const row of rows) {
+      // 1) categories: append WIP (before PN) if not already present.
+      let categories: any[] = [];
+      try { categories = JSON.parse(row.categories || "[]"); } catch {}
+      if (!Array.isArray(categories)) categories = [];
+      if (!categories.some((c: any) => c && c.code === WIP_CODE)) {
+        categories = insertBeforePN(categories, { ...WIP_CATEGORY });
+      }
+
+      // 2) export profiles: for BOTH contractor and client, append the WIP
+      //    treatment (before PN) if not already present.
+      let profiles: any = {};
+      try { profiles = JSON.parse(row.export_profiles || "{}"); } catch {}
+      if (!profiles || typeof profiles !== "object") profiles = {};
+      for (const key of ["contractor", "client"]) {
+        if (!profiles[key]) {
+          profiles[key] = { filenameSuffix: key === "client" ? "Client" : "Contractor", categoryTreatments: [] };
+        }
+        if (!Array.isArray(profiles[key].categoryTreatments)) profiles[key].categoryTreatments = [];
+        if (!profiles[key].categoryTreatments.some((t: any) => t && t.code === WIP_CODE)) {
+          profiles[key].categoryTreatments = insertBeforePN(profiles[key].categoryTreatments, { ...WIP_TREATMENT });
+        }
+      }
+
+      updateStmt.run(JSON.stringify(categories), JSON.stringify(profiles), row.id);
+      backfilled++;
+    }
+
+    console.log(`[wip-category-backfill] Ensured WIP category + treatments on ${backfilled} projects`);
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('wip_category_backfill_v1', ?)`).run(new Date().toISOString());
   }
 }
 

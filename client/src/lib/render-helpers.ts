@@ -22,6 +22,30 @@ const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 export const safeText = (v: unknown): string => (v == null ? "" : String(v));
 
 // ---------------------------------------------------------------------------
+// Overdue helpers (shared by DOCX + PDF Action List status columns)
+// ---------------------------------------------------------------------------
+
+// Today as a local YYYY-MM-DD string. dueDate is captured via <input type="date">
+// which stores YYYY-MM-DD, so a plain string compare against todayISO() is both
+// correct and timezone-safe (no Date parsing / UTC-shift surprises).
+export const todayISO = (): string => {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+};
+
+// An Action List row is overdue iff it has a dueDate strictly before today AND
+// the item is NOT closed/archived. Closed (status === "complete") and Archived
+// items are NEVER flagged overdue even when their dueDate is in the past.
+export const isDefectOverdue = (defect: any): boolean => {
+  if (!defect) return false;
+  if (defect.status === "complete" || defect.status === "archived") return false;
+  const due = safeText(defect.dueDate);
+  return !!due && due < todayISO();
+};
+
+// ---------------------------------------------------------------------------
 // Image loading / compression
 // ---------------------------------------------------------------------------
 

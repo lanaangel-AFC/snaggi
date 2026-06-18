@@ -428,6 +428,33 @@ export function buildReportTree(data: any, profile: ProfileKey): ReportTree {
   const projectStatusEmpty = narratives.length === 0 && !program && !stageMap;
 
   // ---- Progress Summary (client only) ----
+  // "Closed this period" rule:
+  //   A defect counts as closed this period iff its STORED status is "complete"
+  //   AND its closing event — a statusHistory row with newStatus === "complete"
+  //   whose reportId === the currently-rendered report's id — occurred on this
+  //   report. statusHistory is authoritative (server includes it in report-data).
+  //
+  //   The previous implementation relied on isCompletedThisInspection, which
+  //   only fires when the server's per-inspection events bundle flags a
+  //   statusChange.to === "complete" inside this report's time window. That
+  //   missed defects closed earlier in the same report cycle, defects closed via
+  //   a different path, or any case where the event window didn't capture the
+  //   status flip — making the count perpetually 0. The statusHistory check is
+  //   robust to all of those.
+  //
+  //   Fallback: if a defect has no statusHistory at all (legacy rows predating
+  //   the table) but is stored complete and carries a dateClosed, we can't
+  //   verify the closing report client-side, so we do NOT count it here —
+  //   statusHistory is treated as the single source of truth to avoid
+  //   over-counting closures from earlier reports.
+  const closedOnThisReport = (d: any): boolean => {
+    if (d.status !== "complete") return false;
+    const rows: any[] = Array.isArray(d.statusHistory) ? d.statusHistory : [];
+    return rows.some(
+      (r) => r && r.newStatus === "complete" && r.reportId === currentReportId
+    );
+  };
+
   let progressSummary: ProgressSummary | null = null;
   if (profile === "client") {
     const today = new Date();
@@ -438,8 +465,10 @@ export function buildReportTree(data: any, profile: ProfileKey): ReportTree {
         open++;
         if (d.dueDate && new Date(d.dueDate) < today) overdue++;
       }
-      // Closed this period: stored status complete AND closed on the current report.
-      if (ds === "Closed" && isCompletedThisInspection(d)) closedThisPeriod++;
+      // Closed this period := any defect on this report whose stored status is
+      // 'complete' AND whose closing event (newStatus='complete' row in
+      // statusHistory) occurred on the currently-rendered report.
+      if (ds === "Closed" && closedOnThisReport(d)) closedThisPeriod++;
     }
     progressSummary = { open, closedThisPeriod, overdue, total: includedDefects.length };
   }

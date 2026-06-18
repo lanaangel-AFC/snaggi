@@ -12,7 +12,7 @@ import type { ReportTree, CategoryGroup } from "./report-tree";
 import {
   loadImageBlob, blobToDataUrl, compressImageForPdfExport, loadAfcLogo,
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
-  getLocationDimensions, formatReportDate, formatPhotoDate,
+  getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
 } from "./render-helpers";
 
 export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -35,6 +35,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   const ACCENT_BLUE = [69, 176, 225] as const;
   const DARK_TEXT = [58, 58, 58] as const;
   const CAPTION_BLUE = [14, 40, 65] as const;
+  const OVERDUE_RED = [192, 0, 0] as const; // matches DOCX OVERDUE_RED (#C00000)
 
   const afcRef = data.project.afcReference || "AFC-24XXX";
 
@@ -134,15 +135,26 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   // shares this helper) keeps the original 7-column layout.
   const renderSummaryTable = (defects: any[], startY: number, showCategory = false) => {
     const body: string[][] = [];
+    // Per-body-row overdue flag (parallel to `body`). A defect's sub-location
+    // rows inherit the parent's overdue state since they share the same status.
+    const overdueByRow: boolean[] = [];
+    // Status column index depends on whether the Category column is present.
+    const statusColIdx = showCategory ? 7 : 6;
     for (const d of defects) {
       const cat = d.categoryLabel || "(uncategorised)";
+      // Overdue := dueDate < today AND not closed/archived (shared helper).
+      // Closed items are never flagged overdue. The base status text is left
+      // intact; the red " - Overdue" suffix is drawn in didDrawCell below.
+      const overdue = isDefectOverdue(d);
       const baseRow = [d.uid, d.recordType === "observation" ? "Obs" : "Defect", formatDefectLocation(d, pdfDims), getWorkTypeLabel(d.uid), d.assignedTo || "\u2014"];
       const tail = [d.dueDate || "\u2014", d.status === "complete" ? "Complete" : "Open"];
       body.push(showCategory ? [...baseRow, cat, ...tail] : [...baseRow, ...tail]);
+      overdueByRow.push(overdue);
       if (d.locations && d.locations.length > 0) for (const loc of d.locations) {
         const locUid = loc.uid || "";
         const locBase = [locUid, d.recordType === "observation" ? "Obs" : "Defect", locUid ? deriveLocation(locUid) : "", getWorkTypeLabel(d.uid), d.assignedTo || "\u2014"];
         body.push(showCategory ? [...locBase, cat, ...tail] : [...locBase, ...tail]);
+        overdueByRow.push(overdue);
       }
     }
     if (body.length === 0) return startY;
@@ -157,6 +169,26 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
       headStyles: { fillColor: [255, 255, 255], textColor: [...CAPTION_BLUE], fontStyle: "bold", lineWidth: { bottom: 0.5 }, lineColor: [...DARK_TEXT] },
       columnStyles,
       didDrawPage: () => { addHeader(); addFooter(); },
+      // For overdue Action List rows, append a red " - Overdue" suffix after the
+      // base status text in the Status column. autoTable still paints the base
+      // status (e.g. "Open"); we only draw the suffix here, positioned right
+      // after it using the cell's own text position so it shares autoTable's
+      // baseline/alignment exactly. Closed items are never overdue (filtered in
+      // overdueByRow), so they never get the suffix.
+      didDrawCell: (hookData: any) => {
+        if (hookData.section !== "body") return;
+        if (hookData.column.index !== statusColIdx) return;
+        if (!overdueByRow[hookData.row.index]) return;
+        const cell = hookData.cell;
+        const baseText = Array.isArray(cell.text) ? cell.text.join("") : String(cell.text ?? "");
+        const pos = cell.getTextPos();
+        const baseWidth = doc.getTextWidth(baseText);
+        doc.setTextColor(...OVERDUE_RED);
+        // doc.autoTableText mirrors autoTable's internal text placement so the
+        // suffix lines up with the base status on the same baseline.
+        (doc as any).autoTableText(" - Overdue", pos.x + baseWidth, pos.y, { halign: "left", valign: "top" });
+        doc.setTextColor(0);
+      },
       rowPageBreak: "auto",
     });
     return (doc as any).lastAutoTable.finalY + 6;

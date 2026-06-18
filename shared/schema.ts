@@ -28,7 +28,7 @@ export const projects = sqliteTable("projects", {
   // Export-profiles (Pass 1): follow-up action categories, JSON [{code,label,isDefault?}].
   categories: text("categories").default("[]"),
   // Per-profile export config (contractor/client): filenameSuffix + ordered categoryTreatments.
-  exportProfiles: text("export_profiles").default('{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'),
+  exportProfiles: text("export_profiles").default('{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"WIP","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"WIP","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'),
   createdAt: text("created_at").notNull(),
 });
 

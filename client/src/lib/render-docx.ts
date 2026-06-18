@@ -12,7 +12,7 @@ import type { ReportTree, CategoryGroup } from "./report-tree";
 import {
   safeText, loadImageBlob, blobToArrayBuffer, compressImageForExport, loadAfcLogo,
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
-  getLocationDimensions, formatReportDate, formatPhotoDate,
+  getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
 } from "./render-helpers";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -36,6 +36,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   const ACCENT_BLUE = "45B0E1";
   const DARK_TEXT = "3A3A3A";
   const CAPTION_BLUE = "0E2841";
+  const OVERDUE_RED = "C00000";
 
   const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const thinBorder = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
@@ -406,6 +407,10 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   };
   const buildSummaryRow = (rowUid: string, defect: any, showCategory = false) => {
     const statusText = defect.status === "complete" ? "Complete" : "Open";
+    // Overdue := dueDate exists AND dueDate < today AND the item is NOT closed.
+    // Closed/Complete (and Archived) items are NEVER flagged overdue even if
+    // their dueDate is in the past. (Shared helper — see render-helpers.ts.)
+    const overdue = isDefectOverdue(defect);
     const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
     const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
     const locationText = rowUid === defect.uid ? formatDefectLocation(defect, wordDims) : deriveLocation(safeText(rowUid));
@@ -415,11 +420,26 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       ? [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", categoryText, safeText(defect.dueDate) || "\u2014", statusText]
       : [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
     const statusIdx = showCategory ? 7 : 6;
+    const statusColor = statusText === "Complete" ? "228B22" : "C89600";
+    // The Status cell shows the base status, and for overdue items appends a
+    // red " - Overdue" suffix as a second TextRun (e.g. "Open - Overdue").
+    const buildStatusCellRuns = () => {
+      const runs = [new TextRun({ text: statusText, size: 14, font: "Aptos", color: statusColor, bold: false })];
+      if (overdue) {
+        runs.push(new TextRun({ text: " - Overdue", size: 14, font: "Aptos", color: OVERDUE_RED, bold: false }));
+      }
+      return runs;
+    };
     return new TableRow({
       children: cellTexts.map((text: string, i: number) =>
         new TableCell({
           width: { size: widths[i], type: WidthType.DXA },
-          children: [new Paragraph({ children: [new TextRun({ text: safeText(text), size: 14, font: "Aptos", color: i === statusIdx ? (statusText === "Complete" ? "228B22" : "C89600") : (i === 1 ? "666666" : undefined), bold: i === 0 })], spacing: { before: 25, after: 25 } })],
+          children: [new Paragraph({
+            children: i === statusIdx
+              ? buildStatusCellRuns()
+              : [new TextRun({ text: safeText(text), size: 14, font: "Aptos", color: i === 1 ? "666666" : undefined, bold: i === 0 })],
+            spacing: { before: 25, after: 25 },
+          })],
           borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
         })
       ),
