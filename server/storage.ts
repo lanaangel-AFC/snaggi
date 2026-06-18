@@ -140,7 +140,7 @@ sqlite.exec(`
     defect_id INTEGER NOT NULL,
     filename TEXT NOT NULL,
     caption TEXT,
-    slot TEXT NOT NULL DEFAULT 'wip1',
+    slot TEXT NOT NULL DEFAULT 'wip1', -- wip<N> for any positive integer N, or 'complete'
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS users (

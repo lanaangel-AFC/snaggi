@@ -1,6 +1,7 @@
 import { useParams } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
+import { comparePhotoSlots } from "@/lib/render-helpers";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -80,10 +81,9 @@ export default function SharedReport() {
 }
 
 function DefectCardReadOnly({ defect, token }: { defect: any; token: string }) {
-  const slotOrder = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
-  const sortedPhotos = slotOrder
-    .map((s) => (defect.photos || []).find((p: any) => p.slot === s))
-    .filter(Boolean);
+  const sortedPhotos = [...(defect.photos || [])].sort((a: any, b: any) =>
+    comparePhotoSlots(a.slot, b.slot),
+  );
 
   return (
     <Card className="p-4 mb-4">

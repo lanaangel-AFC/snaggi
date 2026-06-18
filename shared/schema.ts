@@ -89,7 +89,7 @@ export const photos = sqliteTable("photos", {
   originReportId: integer("origin_report_id"), // report where this photo FIRST appeared (survives carry-over cloning)
   filename: text("filename").notNull(),
   caption: text("caption"),
-  slot: text("slot").notNull().default("wip1"), // wip1, wip2, wip3, wip4, wip5, complete
+  slot: text("slot").notNull().default("wip1"), // wip<N> for any positive integer N, or 'complete'
   newOverride: text("new_override"), // "new" | "not-new" | null (auto-detect via originReportId)
   captureDate: text("capture_date"), // when the photo was taken (EXIF/manual); falls back to createdAt for display
   createdAt: text("created_at").notNull(),

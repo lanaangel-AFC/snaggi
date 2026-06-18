@@ -239,6 +239,27 @@ export function parseUidParts(uid: string) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Photo slot ordering (shared by both renderers, the shared report, and the form)
+// ---------------------------------------------------------------------------
+
+// Compare two photo slot keys for ascending order. WIP slots sort numerically
+// (wip1 < wip2 < ... < wip10 ...); the "complete" slot always sorts last.
+// e.g. ["complete","wip3","wip1","wip7"] => ["wip1","wip3","wip7","complete"].
+export function comparePhotoSlots(a: string, b: string): number {
+  const aVal = a === "complete" ? Number.POSITIVE_INFINITY : parseInt(a.replace(/^wip/, ""), 10);
+  const bVal = b === "complete" ? Number.POSITIVE_INFINITY : parseInt(b.replace(/^wip/, ""), 10);
+  return aVal - bVal;
+}
+
+// Human-readable label for any photo slot key: "complete" => "Complete",
+// "wip6" => "WIP 6". Falls back to the raw key for anything unexpected.
+export function photoSlotLabel(slot: string): string {
+  if (slot === "complete") return "Complete";
+  const m = /^wip([0-9]+)$/.exec(slot);
+  return m ? `WIP ${m[1]}` : slot;
+}
+
 // Sort by: Elevation, Drop (asc), Level (desc/highest first), WorkType, Number (asc).
 export function sortByUid(a: any, b: any): number {
   const ap = parseUidParts(a.uid);

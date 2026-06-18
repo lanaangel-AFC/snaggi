@@ -724,13 +724,12 @@ export async function registerRoutes(
     res.json(photos);
   });
 
-  // Upload photo with slot (wip1, wip2, wip3, wip4, wip5, complete)
+  // Upload photo with slot ('complete' or 'wip<N>' for any positive integer N)
   app.post("/api/defects/:defectId/photos", upload.single("photo"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     const slot = req.body.slot || "wip1";
-    const validSlots = ["wip1", "wip2", "wip3", "wip4", "wip5", "complete"];
-    if (!validSlots.includes(slot)) {
-      return res.status(400).json({ message: "Invalid slot. Must be wip1, wip2, wip3, wip4, wip5, or complete" });
+    if (!(slot === "complete" || /^wip[1-9][0-9]*$/.test(slot))) {
+      return res.status(400).json({ message: "Invalid slot. Must be 'complete' or 'wip<N>' where N is a positive integer." });
     }
 
     const defectId = Number(req.params.defectId);

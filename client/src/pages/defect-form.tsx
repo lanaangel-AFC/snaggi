@@ -74,16 +74,34 @@ const PERSON_ROLES = [
   "Facility Manager",
 ];
 
-const PHOTO_SLOTS = [
-  { key: "wip1", label: "WIP 1", description: "Progress photo 1" },
-  { key: "wip2", label: "WIP 2", description: "Progress photo 2" },
-  { key: "wip3", label: "WIP 3", description: "Progress photo 3" },
-  { key: "wip4", label: "WIP 4", description: "Progress photo 4" },
-  { key: "wip5", label: "WIP 5", description: "Progress photo 5" },
-  { key: "complete", label: "Complete", description: "Finished repair" },
-] as const;
+const DEFAULT_WIP_SLOT_COUNT = 5;
 
-type SlotKey = "wip1" | "wip2" | "wip3" | "wip4" | "wip5" | "complete";
+// Slot keys are dynamic now (wip1, wip2, ... wipN, complete), so SlotKey is just string.
+type SlotKey = string;
+
+type PhotoSlot = { key: string; label: string; description: string };
+
+// Build the ordered slot list for a given WIP slot count: WIP 1..N then Complete (last).
+function buildPhotoSlots(wipSlotCount: number): PhotoSlot[] {
+  const slots: PhotoSlot[] = [];
+  for (let i = 1; i <= wipSlotCount; i++) {
+    slots.push({ key: `wip${i}`, label: `WIP ${i}`, description: `Progress photo ${i}` });
+  }
+  slots.push({ key: "complete", label: "Complete", description: "Finished repair" });
+  return slots;
+}
+
+// From a set of loaded photos, compute the WIP slot count needed to show every
+// occupied WIP slot: max(default, highest occupied wipN rounded up to next even).
+function wipSlotCountForPhotos(photos: { slot: string }[]): number {
+  let maxWip = 0;
+  for (const p of photos) {
+    const m = /^wip([1-9][0-9]*)$/.exec(p.slot || "");
+    if (m) maxWip = Math.max(maxWip, parseInt(m[1], 10));
+  }
+  const rounded = Math.ceil(maxWip / 2) * 2;
+  return Math.max(DEFAULT_WIP_SLOT_COUNT, rounded);
+}
 
 function formatHistoryDate(dateStr?: string): string {
   if (!dateStr) return "";
@@ -202,6 +220,10 @@ export default function DefectForm() {
   const [uid, setUid] = useState("");
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
+  // Per-defect expandable WIP slot count (default 5). "Add more photos" bumps this
+  // by 2; on edit it auto-expands to fit the highest occupied WIP slot.
+  const [wipSlotCount, setWipSlotCount] = useState<number>(DEFAULT_WIP_SLOT_COUNT);
+  const photoSlots = useMemo(() => buildPhotoSlots(wipSlotCount), [wipSlotCount]);
   // Track whether we've already initialized the form from the loaded defect.
   // Without this, refetches (e.g. on window focus after returning from the photo
   // picker) would overwrite unsaved edits to Drop / Elevation / Level / Comment.
@@ -670,7 +692,12 @@ export default function DefectForm() {
   }, [defectId]);
 
   useEffect(() => {
-    if (existingPhotos) setPhotos(existingPhotos);
+    if (existingPhotos) {
+      setPhotos(existingPhotos);
+      // Auto-expand the grid so every occupied WIP slot is visible (rounded up to
+      // the next even number so the grid stays in pairs). Never shrinks below 5.
+      setWipSlotCount((prev) => Math.max(prev, wipSlotCountForPhotos(existingPhotos)));
+    }
   }, [existingPhotos]);
 
   // Helper to get photo for a specific slot
@@ -1940,11 +1967,11 @@ export default function DefectForm() {
             <div className="flex items-center gap-2">
               <Camera className="w-4 h-4 text-muted-foreground" />
               <h3 className="text-sm font-medium">Photos</h3>
-              <span className="text-xs text-muted-foreground">({photos.length}/6)</span>
+              <span className="text-xs text-muted-foreground">({photos.length}/{wipSlotCount + 1})</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              {PHOTO_SLOTS.map((slot) => {
+              {photoSlots.map((slot) => {
                 const photo = getPhotoForSlot(slot.key);
                 const isSlotUploading = uploading === slot.key;
                 const isCompleteSlot = slot.key === "complete";
@@ -2077,6 +2104,18 @@ export default function DefectForm() {
                 );
               })}
             </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => setWipSlotCount((n) => n + 2)}
+              disabled={uploading !== null}
+              data-testid="button-add-more-photos"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add more photos
+            </Button>
           </div>
         )}
 

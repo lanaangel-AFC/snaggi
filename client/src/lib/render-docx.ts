@@ -13,6 +13,7 @@ import {
   safeText, loadImageBlob, blobToArrayBuffer, compressImageForExport, loadAfcLogo,
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
+  comparePhotoSlots, photoSlotLabel,
 } from "./render-helpers";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -28,9 +29,6 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   } = docxLib as any;
 
   const logo = await loadAfcLogo();
-
-  const slotOrder = ["wip1", "wip2", "wip3", "complete"];
-  const slotLabels: Record<string, string> = { wip1: "WIP 1", wip2: "WIP 2", wip3: "WIP 3", complete: "Complete" };
 
   const DARK_BLUE = "0A1D30";
   const ACCENT_BLUE = "45B0E1";
@@ -206,7 +204,12 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     if (hasWip) {
       sortedPhotos = photoList;
     } else {
-      const inSlot = slotOrder.map((s: string) => photoList.find((p: any) => p.slot === s)).filter(Boolean);
+      // One photo per slot, ordered by slot (wip1..wipN then complete), with any
+      // extras (e.g. duplicate-slot rows) appended in their original order.
+      const seen = new Set<string>();
+      const inSlot = [...photoList]
+        .sort((a: any, b: any) => comparePhotoSlots(a.slot, b.slot))
+        .filter((p: any) => (seen.has(p.slot) ? false : (seen.add(p.slot), true)));
       const inSlotIds = new Set(inSlot.map((p: any) => p.id));
       const extras = photoList.filter((p: any) => !inSlotIds.has(p.id));
       sortedPhotos = [...inSlot, ...extras];
@@ -234,8 +237,8 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
           // Prefer the server-computed wipNumber (1-based position in the cumulative,
           // date-sorted timeline). Falls back to the stored slot label when absent.
           const photoLabel = photo.slot === "complete"
-            ? (slotLabels[photo.slot] || photo.slot)
-            : (typeof photo.wipNumber === "number" ? `WIP ${photo.wipNumber}` : (slotLabels[photo.slot] || photo.slot));
+            ? photoSlotLabel(photo.slot)
+            : (typeof photo.wipNumber === "number" ? `WIP ${photo.wipNumber}` : photoSlotLabel(photo.slot));
           cellChildren.push(new Paragraph({
             children: [
               new TextRun({ text: safeText(photoLabel), bold: true, size: 16, font: "Aptos", color: photo.slot === "complete" ? "228B22" : "666666" }),
