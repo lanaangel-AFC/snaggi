@@ -428,31 +428,55 @@ export function buildReportTree(data: any, profile: ProfileKey): ReportTree {
   const projectStatusEmpty = narratives.length === 0 && !program && !stageMap;
 
   // ---- Progress Summary (client only) ----
-  // "Closed this period" rule:
+  // "Closed this period" rule (three-tier):
   //   A defect counts as closed this period iff its STORED status is "complete"
-  //   AND its closing event — a statusHistory row with newStatus === "complete"
-  //   whose reportId === the currently-rendered report's id — occurred on this
-  //   report. statusHistory is authoritative (server includes it in report-data).
+  //   AND it was closed ON the currently-rendered report. "Closed on this report"
+  //   is detected with the following priority:
   //
-  //   The previous implementation relied on isCompletedThisInspection, which
-  //   only fires when the server's per-inspection events bundle flags a
-  //   statusChange.to === "complete" inside this report's time window. That
-  //   missed defects closed earlier in the same report cycle, defects closed via
-  //   a different path, or any case where the event window didn't capture the
-  //   status flip — making the count perpetually 0. The statusHistory check is
-  //   robust to all of those.
+  //   1. PRIMARY (authoritative when present): statusHistory contains a row with
+  //      newStatus === "complete" AND reportId === currentReport.id. This is the
+  //      milestone-8 status_history signal and is trusted whenever it exists.
   //
-  //   Fallback: if a defect has no statusHistory at all (legacy rows predating
-  //   the table) but is stored complete and carries a dateClosed, we can't
-  //   verify the closing report client-side, so we do NOT count it here —
-  //   statusHistory is treated as the single source of truth to avoid
-  //   over-counting closures from earlier reports.
+  //   2. FALLBACK (closure never recorded in history): the defect has NO
+  //      statusHistory row with newStatus === "complete" anywhere (so tier 1 can
+  //      never fire for it), AND defect.dateClosed is set, AND dateClosed >=
+  //      currentReport.inspectionDate. Many defects were closed before the
+  //      status_history table shipped (or via a path that didn't write a row),
+  //      so statusHistory is unreliable retroactively; dateClosed >= this
+  //      report's open date is the heuristic that this report is the closing one.
+  //
+  //   3. SAFETY NET (same-inspection create+close, no history at all): the defect
+  //      has NO statusHistory entries whatsoever, AND defect.reportId ===
+  //      currentReport.id (it lives on this report). Covers a defect created and
+  //      closed within one inspection before any history row was written.
+  //
+  //   If none of the three match, the defect is NOT counted — it was most likely
+  //   closed in an earlier inspection.
+  //
+  //   dateClosed may be a YYYY-MM-DD string (live close path) or a full ISO
+  //   timestamp (server date_closed backfill from status_history.created_at), and
+  //   inspectionDate is YYYY-MM-DD, so both are normalised to their date portion
+  //   (first 10 chars) before the lexical compare.
+  const dateOnly = (v: unknown): string => String(v ?? "").slice(0, 10);
   const closedOnThisReport = (d: any): boolean => {
     if (d.status !== "complete") return false;
     const rows: any[] = Array.isArray(d.statusHistory) ? d.statusHistory : [];
-    return rows.some(
-      (r) => r && r.newStatus === "complete" && r.reportId === currentReportId
-    );
+    const completeRows = rows.filter((r) => r && r.newStatus === "complete");
+
+    // Tier 1 — authoritative status_history signal for this report.
+    if (completeRows.some((r) => r.reportId === currentReportId)) return true;
+
+    // Tier 2 — no recorded closure in history at all; fall back to dateClosed.
+    const inspectionDate = dateOnly(data?.report?.inspectionDate);
+    if (completeRows.length === 0 && d.dateClosed && inspectionDate) {
+      if (dateOnly(d.dateClosed) >= inspectionDate) return true;
+    }
+
+    // Tier 3 — safety net: no history whatsoever, but the defect lives on this
+    // report (created + closed within this inspection before history existed).
+    if (rows.length === 0 && d.reportId === currentReportId) return true;
+
+    return false;
   };
 
   let progressSummary: ProgressSummary | null = null;
