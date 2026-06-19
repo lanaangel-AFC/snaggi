@@ -343,15 +343,28 @@ function buildGroups(
 // Build the Pass 2 report tree. `data` is the /report-data response.
 // ---------------------------------------------------------------------------
 
-export function buildReportTree(data: any, profile: ProfileKey): ReportTree {
+export function buildReportTree(
+  data: any,
+  profile: ProfileKey,
+  // Optional filename suffix override. The default unified "Report" export
+  // passes "" so no -Contractor/-Client part appears; the audience-split exports
+  // leave this undefined to keep the profile-derived suffix. This does NOT change
+  // any audience filtering, treatments, photo trimming, or appendix behaviour —
+  // it only affects the resolved download filename.
+  filenameSuffixOverride?: string,
+): ReportTree {
   const profiles = parseExportProfiles(data?.project?.exportProfiles);
   const chosen = profiles[profile] || DEFAULT_PROFILES[profile];
-  const filenameSuffix = (chosen?.filenameSuffix || (profile === "client" ? "Client" : "Contractor")).trim();
+  const filenameSuffix = filenameSuffixOverride !== undefined
+    ? filenameSuffixOverride.trim()
+    : (chosen?.filenameSuffix || (profile === "client" ? "Client" : "Contractor")).trim();
 
   const afcRef = safeFilenamePart(data?.project?.afcReference);
   const inspectionNumber = safeFilenamePart(data?.report?.inspectionNumber);
   const suffixPart = safeFilenamePart(filenameSuffix);
-  const filenameBase = `${afcRef}_SVR${inspectionNumber}_${suffixPart}`;
+  const filenameBase = suffixPart
+    ? `${afcRef}_SVR${inspectionNumber}_${suffixPart}`
+    : `${afcRef}_SVR${inspectionNumber}`;
 
   const treatments = chosen?.categoryTreatments || [];
   const categoryOrder = treatments.map((t) => t.code);
