@@ -81,11 +81,16 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   };
   const addFooter = () => {
     const pn = doc.internal.pages.length - 1;
-    doc.setFontSize(7);
+    // Teal rule above the footer, mirroring the header rule.
+    doc.setDrawColor(...ACCENT_BLUE);
+    doc.setLineWidth(0.5);
+    doc.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+    // Footer text styled to match the header (fontSize 8, DARK_TEXT).
+    doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(150);
-    doc.text(`Page ${pn}`, pageWidth / 2, pageHeight - 8, { align: "center" });
-    doc.text(String(afcRef), pageWidth - margin, pageHeight - 8, { align: "right" });
+    doc.setTextColor(...DARK_TEXT);
+    doc.text(`${afcRef} | ${data.project.address || ""}`, margin, pageHeight - 8);
+    doc.text(`Page ${pn}`, pageWidth - margin, pageHeight - 8, { align: "right" });
   };
 
   const newSection = () => { doc.addPage(); addHeader(); addFooter(); return 20; };

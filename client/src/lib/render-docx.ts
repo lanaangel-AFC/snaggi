@@ -39,6 +39,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const thinBorder = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
   const accentBottomBorder = { style: BorderStyle.SINGLE, size: 6, color: ACCENT_BLUE };
+  const accentTopBorder = { style: BorderStyle.SINGLE, size: 6, color: ACCENT_BLUE };
 
   const reportDate = formatReportDate(new Date().toISOString());
   const rev = data.report.revision || "01";
@@ -75,12 +76,13 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     children: [
       new Paragraph({
         children: [
-          new TextRun({ text: safeText(afcRef), size: 14, font: "Aptos", color: "999999" }),
+          new TextRun({ text: `${safeText(afcRef)} | ${safeText(data.project.address)}`, size: 16, font: "Aptos", color: DARK_TEXT }),
           new TextRun({ text: "\t" }),
-          new TextRun({ text: "Page ", size: 14, font: "Aptos", color: "999999" }),
-          new TextRun({ children: [PageNumber.CURRENT], size: 14, font: "Aptos", color: "999999" }),
+          new TextRun({ text: "Page ", size: 16, font: "Aptos", color: DARK_TEXT }),
+          new TextRun({ children: [PageNumber.CURRENT], size: 16, font: "Aptos", color: DARK_TEXT }),
         ],
         tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+        border: { top: accentTopBorder },
       }),
     ],
   });
