@@ -272,21 +272,43 @@ export function BackgroundDocsEditor({ value, onChange }: { value: string; onCha
 // ---- Area Ref template (NEW projects only) --------------------------------
 
 export function AreaRefTemplateEditor({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  // Live preview: substitute sample codes so the user sees exactly what a real
+  // defect UID will look like before saving the template.
+  const sample = (value || "")
+    .replace(/\{elevation\}/g, "E")
+    .replace(/\{drop\}/g, "04")
+    .replace(/\{level\}/g, "07");
+  const hasPlaceholder = /\{(elevation|drop|level)\}/.test(value || "");
+  const isLiteral = !!value && !hasPlaceholder;
   return (
     <div>
       <Label className="mb-2 block">Area Ref template (§1.5.1)</Label>
       <p className="text-xs text-muted-foreground mb-2">
-        Free-form pattern using <code>{"{elevation}"}</code>, <code>{"{drop}"}</code>,
-        <code>{"{level}"}</code> placeholders plus literal separators. Example:
-        {" "}<code>{"{elevation}{drop}-{level}"}</code> → <code>E4-7</code>. Final UID
-        becomes <code>AreaRef-WorkItem-Seq#</code>. Leave blank to keep the legacy
-        5-part UID.
+        Type a <strong>pattern</strong>, not a literal value. Use the placeholders{" "}
+        <code>{"{elevation}"}</code>, <code>{"{drop}"}</code>, <code>{"{level}"}</code>
+        {" "}with literal separators. Example: <code>{"{elevation}{drop}-{level}"}</code>{" "}
+        → <code>E04-07</code>. Final UID becomes <code>AreaRef-WorkItem-Seq#</code>.
+        Leave blank to keep the legacy 5-part UID.
       </p>
       <Input
         placeholder="{elevation}{drop}-{level}"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
+      {value ? (
+        <div className="mt-2 text-xs">
+          <span className="text-muted-foreground">Preview (with sample codes E/04/07/CR/01):</span>{" "}
+          <code className="font-mono">{sample}-CR-01</code>
+        </div>
+      ) : null}
+      {isLiteral ? (
+        <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+          ⚠ Your template has no <code>{"{...}"}</code> placeholders, so this exact text
+          will be reused for every defect (e.g. all UIDs become <code>{sample}-CR-01</code>,
+          <code>{sample}-CR-02</code>, …). To vary the Area Ref per defect, include at
+          least one placeholder like <code>{"{elevation}"}</code>.
+        </p>
+      ) : null}
     </div>
   );
 }
