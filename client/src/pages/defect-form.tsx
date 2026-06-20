@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin, ChevronDown, History, Copy, PenLine, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Camera, Upload, X, ImageIcon, Save, CheckCircle2, Clock, Wrench, Mic, Download, MapPin, ChevronDown, History, Copy, PenLine, Plus, Trash2, Sparkles, AlertCircle, Loader2 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DictationButton } from "@/components/DictationButton";
@@ -133,7 +133,13 @@ export default function DefectForm() {
     verificationMethod: "",
     verificationPerson: "",
     status: "open",
+    actionSummary: "" as string | null,
+    actionSummarySource: "" as string | null,
+    actionSummaryInputHash: "" as string | null,
   });
+
+  // Loading state for the AI Action Summary regenerate button.
+  const [regenSummaryLoading, setRegenSummaryLoading] = useState(false);
 
   const [recordType, setRecordType] = useState(() => isNewObservation ? "observation" : "defect");
 
@@ -590,6 +596,9 @@ export default function DefectForm() {
         verificationMethod: existingDefect.verificationMethod,
         verificationPerson: existingDefect.verificationPerson,
         status: existingDefect.status,
+        actionSummary: (existingDefect as any).actionSummary ?? "",
+        actionSummarySource: (existingDefect as any).actionSummarySource ?? "",
+        actionSummaryInputHash: (existingDefect as any).actionSummaryInputHash ?? "",
       });
       setUid(existingDefect.uid);
       if ((existingDefect as any).recordType) {
@@ -1695,6 +1704,103 @@ export default function DefectForm() {
             </div>
           )}
         </div>
+
+        {/* Action Summary (§2.2) — AI-generated one-sentence imperative used in the
+            exported Action List. Only meaningful when editing an existing defect because
+            the regenerate endpoint needs a persisted defectId. The textarea is editable;
+            any manual edit flips source to "manual" and Regenerate then asks for confirmation
+            before overwriting. */}
+        {isEdit && (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Label htmlFor="actionSummary">Action Summary</Label>
+              {form.actionSummarySource === "ai" && (
+                <Badge variant="secondary" className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0">
+                  <Sparkles className="w-2.5 h-2.5 mr-0.5" /> AI
+                </Badge>
+              )}
+              {form.actionSummarySource === "manual" && (
+                <Badge variant="secondary" className="bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 text-[10px] px-1.5 py-0">
+                  <PenLine className="w-2.5 h-2.5 mr-0.5" /> Manual
+                </Badge>
+              )}
+              {form.actionSummarySource === "fallback" && (
+                <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0">
+                  <AlertCircle className="w-2.5 h-2.5 mr-0.5" /> Fallback
+                </Badge>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-auto text-xs"
+                disabled={regenSummaryLoading}
+                onClick={async () => {
+                  // If the current summary is a manual edit, confirm before overwriting.
+                  if (form.actionSummarySource === "manual") {
+                    const ok = confirm(
+                      "This action summary was manually edited. Regenerating with AI will overwrite your edit. Continue?"
+                    );
+                    if (!ok) return;
+                  }
+                  setRegenSummaryLoading(true);
+                  try {
+                    const force = form.actionSummarySource === "manual" ? "?force=true" : "";
+                    const res = await apiRequest(
+                      "POST",
+                      `/api/defects/${defectId}/action-summary/regenerate${force}`
+                    );
+                    const data = await res.json();
+                    setForm((prev) => ({
+                      ...prev,
+                      actionSummary: data.actionSummary ?? "",
+                      actionSummarySource: data.actionSummarySource ?? data.source ?? "",
+                      actionSummaryInputHash: data.actionSummaryInputHash ?? "",
+                    }));
+                    queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
+                    if (data.source === "ai") {
+                      toast({ title: "Action summary regenerated" });
+                    } else if (data.source === "fallback") {
+                      toast({
+                        title: "Used fallback summary",
+                        description: data.fallbackReason || "AI unavailable; word-boundary trim applied.",
+                      });
+                    }
+                  } catch (err: any) {
+                    toast({ title: err?.message || "Regenerate failed", variant: "destructive" });
+                  } finally {
+                    setRegenSummaryLoading(false);
+                  }
+                }}
+              >
+                {regenSummaryLoading ? (
+                  <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Regenerating...</>
+                ) : (
+                  <><Sparkles className="w-3 h-3 mr-1" /> Regenerate</>
+                )}
+              </Button>
+            </div>
+            <Textarea
+              id="actionSummary"
+              placeholder="One-sentence imperative summary used in the exported Action List. Click Regenerate to generate from the observation and action above."
+              value={form.actionSummary ?? ""}
+              onChange={(e) => {
+                const value = e.target.value;
+                setForm((prev) => ({
+                  ...prev,
+                  actionSummary: value,
+                  // Any manual edit flips the source to "manual".
+                  actionSummarySource: "manual",
+                }));
+              }}
+              rows={2}
+              data-testid="input-action-summary"
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Used in the exported Action List table. Source: <span className="font-medium">{form.actionSummarySource || "none"}</span>.
+            </p>
+          </div>
+        )}
 
         {/* Inspection history — unified log (observation/action/note/status), newest-first.
             Current cluster at full strength; prior cluster collapsed and muted. */}

@@ -19,7 +19,8 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
-  ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link as LinkIcon
+  ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link as LinkIcon,
+  Sparkles, AlertCircle, Loader2
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -87,6 +88,52 @@ export default function ReportDetail() {
   const { data: defects, isLoading: defectsLoading } = useQuery<Defect[]>({
     queryKey: [`/api/reports/${reportId}/defects`],
   });
+
+  // §2.2 — Action summary staleness for this report. Lightweight endpoint returns
+  // { reportId, total, staleCount, stale: [{defectId, uid, reason}] } and is used to
+  // drive the "Regenerate (N stale)" button, per-defect Stale badges, and the
+  // export-time confirm dialog.
+  const { data: staleInfo, refetch: refetchStale } = useQuery<{
+    reportId: number;
+    total: number;
+    staleCount: number;
+    stale: Array<{ defectId: number; uid: string; reason: string }>;
+  }>({
+    queryKey: [`/api/reports/${reportId}/action-summaries/stale`],
+    enabled: !!reportId,
+  });
+  const staleDefectIds = useMemo(() => new Set((staleInfo?.stale ?? []).map((s) => s.defectId)), [staleInfo]);
+
+  // Bulk regenerate state
+  const [regenAllLoading, setRegenAllLoading] = useState(false);
+  const [staleExportConfirm, setStaleExportConfirm] = useState<{
+    open: boolean;
+    profile: ProfileKey;
+    format: "word" | "pdf";
+    audienceSuffix: string;
+    staleCount: number;
+  } | null>(null);
+
+  const runBulkRegenerate = async () => {
+    setRegenAllLoading(true);
+    try {
+      const res = await apiRequest(
+        "POST",
+        `/api/reports/${reportId}/action-summaries/regenerate`
+      );
+      const data = await res.json();
+      toast({
+        title: "Action summaries regenerated",
+        description: `${data.regenerated ?? 0} updated· ${data.skippedCached ?? 0} cached · ${data.skippedManual ?? 0} manual${data.failed ? ` · ${data.failed} failed` : ""}`,
+      });
+      refetchStale();
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
+    } catch (err: any) {
+      toast({ title: err?.message || "Bulk regenerate failed", variant: "destructive" });
+    } finally {
+      setRegenAllLoading(false);
+    }
+  };
 
   const openEditDialog = () => {
     if (!report) return;
@@ -242,6 +289,12 @@ export default function ReportDetail() {
       setPendingExport({ profile, format, audienceSuffix });
       setAfcGuardValue("");
       setAfcGuardOpen(true);
+      return;
+    }
+    // §2.2 — if any defects have stale action summaries, prompt before exporting.
+    const staleCount = staleInfo?.staleCount ?? 0;
+    if (staleCount > 0) {
+      setStaleExportConfirm({ open: true, profile, format, audienceSuffix, staleCount });
       return;
     }
     runExport(profile, format, audienceSuffix);
@@ -534,6 +587,70 @@ export default function ReportDetail() {
           </DialogContent>
         </Dialog>
 
+        {/* §2.2 — Stale action-summary export confirm. Shown when the user triggers
+            an export and one or more defects on the report have a stale
+            actionSummary (input fields changed since the summary was generated, or
+            never generated at all). Three choices: Regenerate now / Export anyway /
+            Cancel. */}
+        <Dialog
+          open={!!staleExportConfirm?.open}
+          onOpenChange={(open) => {
+            if (!open) setStaleExportConfirm(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-500" />
+                Stale action summaries
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                {staleExportConfirm?.staleCount ?? 0} defect{(staleExportConfirm?.staleCount ?? 0) === 1 ? "" : "s"} on this report ha{(staleExportConfirm?.staleCount ?? 0) === 1 ? "s" : "ve"} an action summary that is out of date or missing. The exported Action List will use the cached value (or a word-boundary fallback) for those rows.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  className="w-full"
+                  disabled={regenAllLoading}
+                  onClick={async () => {
+                    await runBulkRegenerate();
+                    const next = staleExportConfirm;
+                    setStaleExportConfirm(null);
+                    if (next) runExport(next.profile, next.format, next.audienceSuffix);
+                  }}
+                >
+                  {regenAllLoading ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Regenerating...</>
+                  ) : (
+                    <><Sparkles className="w-4 h-4 mr-2" /> Regenerate now, then export</>
+                  )}
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  disabled={regenAllLoading}
+                  onClick={() => {
+                    const next = staleExportConfirm;
+                    setStaleExportConfirm(null);
+                    if (next) runExport(next.profile, next.format, next.audienceSuffix);
+                  }}
+                >
+                  Export anyway
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="w-full"
+                  disabled={regenAllLoading}
+                  onClick={() => setStaleExportConfirm(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={shareOpen} onOpenChange={setShareOpen}>
           <DialogContent>
             <DialogHeader>
@@ -633,6 +750,23 @@ export default function ReportDetail() {
             Add Observation
           </Button>
         </Link>
+
+        {/* §2.2 — Bulk regenerate action summaries for this report. Only useful when
+            there are stale rows; we still show it so the user can refresh after edits. */}
+        {!!defects?.length && (
+          <Button
+            variant="outline"
+            disabled={regenAllLoading}
+            onClick={runBulkRegenerate}
+            title="Regenerate AI action summaries for defects whose underlying observation/action/category/work-type changed since the summary was last generated."
+          >
+            {regenAllLoading ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Regenerating...</>
+            ) : (
+              <><Sparkles className="w-4 h-4 mr-2" /> Regenerate action summaries{staleInfo?.staleCount ? ` (${staleInfo.staleCount} stale)` : ""}</>
+            )}
+          </Button>
+        )}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -757,6 +891,7 @@ export default function ReportDetail() {
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
                     hideLegacyAliases={hideLegacyAliases}
+                    isActionSummaryStale={staleDefectIds.has(defect.id)}
                   />
                 ))}
               </div>
@@ -783,6 +918,7 @@ export default function ReportDetail() {
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
                     hideLegacyAliases={hideLegacyAliases}
+                    isActionSummaryStale={staleDefectIds.has(defect.id)}
                   />
                 ))}
               </div>
@@ -809,6 +945,7 @@ export default function ReportDetail() {
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
                     hideLegacyAliases={hideLegacyAliases}
+                    isActionSummaryStale={staleDefectIds.has(defect.id)}
                   />
                 ))}
               </div>
@@ -820,7 +957,7 @@ export default function ReportDetail() {
   );
 }
 
-function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims, hideLegacyAliases }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[]; hideLegacyAliases?: boolean }) {
+function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims, hideLegacyAliases, isActionSummaryStale }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[]; hideLegacyAliases?: boolean; isActionSummaryStale?: boolean }) {
   const isComplete = defect.status === "complete";
   const locationText = formatDefectLocation(defect, dims || getLocationDimensions(undefined));
   // SVR Stage 2 — show "(prev. {legacy_id})" alias when the UID was migrated and aliases
@@ -864,6 +1001,15 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
               {changeTag === "COMPLETED" && (
                 <Badge variant="secondary" className="bg-slate-100 text-slate-700 dark:bg-slate-800/40 dark:text-slate-300 text-[10px] px-1.5 py-0 border border-slate-300">
                   COMPLETED
+                </Badge>
+              )}
+              {isActionSummaryStale && (
+                <Badge
+                  variant="secondary"
+                  className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border border-amber-300"
+                  title="Action summary is out of date or missing. Open the defect and Regenerate, or use the bulk button above."
+                >
+                  <AlertCircle className="w-3 h-3 mr-0.5" /> Stale summary
                 </Badge>
               )}
             </div>
