@@ -22,6 +22,78 @@ const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 export const safeText = (v: unknown): string => (v == null ? "" : String(v));
 
 // ---------------------------------------------------------------------------
+// Action List (§2.2) — truncation + AI-summary fallback shared by DOCX + PDF
+// ---------------------------------------------------------------------------
+
+// Truncate a string at the nearest word boundary not exceeding `maxChars`, and
+// also cap at `maxWords` words. Adds a trailing ellipsis when anything was cut.
+// Used for the Observation column in the Action List — the full text remains on
+// the per-defect card; this is the table-friendly preview only.
+export function truncateWordBoundary(
+  text: string | null | undefined,
+  opts: { maxWords?: number; maxChars?: number } = {}
+): string {
+  const maxWords = opts.maxWords ?? 12;
+  const maxChars = opts.maxChars ?? 80;
+  const raw = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  const words = raw.split(" ");
+  let truncated = false;
+  let out = raw;
+  if (words.length > maxWords) {
+    out = words.slice(0, maxWords).join(" ");
+    truncated = true;
+  }
+  if (out.length > maxChars) {
+    // Walk back to the last whitespace at or before maxChars to preserve word boundary.
+    let cut = out.lastIndexOf(" ", maxChars);
+    if (cut <= 0) cut = maxChars;
+    out = out.slice(0, cut);
+    truncated = true;
+  }
+  // Strip trailing punctuation/whitespace before the ellipsis for a cleaner read.
+  out = out.replace(/[\s,;:.\-\u2013\u2014]+$/, "");
+  return truncated ? `${out}\u2026` : out;
+}
+
+// Word-boundary fallback for the AI Action Summary column. Mirrors the server-
+// side fallback (server/action-summary.ts) so an export that runs against a
+// defect with no cached actionSummary still produces a sensible imperative
+// sentence — limited to ~25 words, prefers a sentence boundary, terminal ".".
+export function actionSummaryFallback(
+  observation: string | null | undefined,
+  actionRequired: string | null | undefined,
+  maxWords = 25
+): string {
+  const source = ((actionRequired ?? "").trim() || (observation ?? "").trim()).replace(/\s+/g, " ");
+  if (!source) return "";
+  // Prefer the first sentence if it fits within the word budget.
+  const firstSentenceMatch = source.match(/^[^.!?]+[.!?]/);
+  if (firstSentenceMatch) {
+    const sentence = firstSentenceMatch[0].trim();
+    if (sentence.split(" ").length <= maxWords) {
+      return sentence;
+    }
+  }
+  const words = source.split(" ");
+  if (words.length <= maxWords) {
+    // Ensure terminal period.
+    return /[.!?]$/.test(source) ? source : `${source}.`;
+  }
+  const trimmed = words.slice(0, maxWords).join(" ").replace(/[\s,;:\-\u2013\u2014]+$/, "");
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+// Resolve the Action column text for a single defect row. Prefers the cached
+// actionSummary; if missing/empty, derives a fallback from observation +
+// actionRequired. (No network call — renderers must stay pure-client.)
+export function resolveActionSummary(defect: any): string {
+  const cached = (defect?.actionSummary ?? "").trim();
+  if (cached) return cached;
+  return actionSummaryFallback(defect?.comment, defect?.actionRequired);
+}
+
+// ---------------------------------------------------------------------------
 // Overdue helpers (shared by DOCX + PDF Action List status columns)
 // ---------------------------------------------------------------------------
 

@@ -14,6 +14,7 @@ import {
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel,
+  truncateWordBoundary, resolveActionSummary,
 } from "./render-helpers";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -387,18 +388,31 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     spacing: { after: 200 },
   }));
 
-  // Action List adds a "Category" column immediately after "Responsible".
-  // showCategory is true only for the Action List section (Carried-forward, which
-  // shares these builders, keeps the original 7-column layout).
+  // The Action List uses a dedicated 8-column AI layout (§2.2):
+  //   UID | Location | Work item | Observation (truncated) | Action (AI) |
+  //   Responsible | Due Date | Status
+  // Carried-forward keeps the original Category-aware layout below.
   const summaryHeaderLabels = ["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"];
   const summaryHeaderWidths = [950, 600, 1300, 2300, 1850, 1300, 1400];
   // Category-aware layout: insert "Category" after "Responsible" (index 5) and
   // shrink Work Type (the description column) to keep the total width constant.
   const summaryHeaderLabelsCat = ["ID", "Type", "Location", "Work Type", "Responsible", "Category", "By Date", "Status"];
   const summaryHeaderWidthsCat = [950, 600, 1300, 900, 1850, 1400, 1300, 1400];
-  const buildSummaryHeaderRow = (showCategory = false) => {
-    const labels = showCategory ? summaryHeaderLabelsCat : summaryHeaderLabels;
-    const widths = showCategory ? summaryHeaderWidthsCat : summaryHeaderWidths;
+  // Action List AI layout. Widths sum to 9700 DXA (same total as the other modes).
+  const summaryHeaderLabelsAct = ["UID", "Location", "Work item", "Observation", "Action", "Responsible", "Due Date", "Status"];
+  const summaryHeaderWidthsAct = [900, 1100, 900, 1900, 2100, 1200, 800, 800];
+  type SummaryMode = { showCategory?: boolean; showAction?: boolean };
+  const buildSummaryHeaderRow = (mode: SummaryMode = {}) => {
+    const labels = mode.showAction
+      ? summaryHeaderLabelsAct
+      : mode.showCategory
+        ? summaryHeaderLabelsCat
+        : summaryHeaderLabels;
+    const widths = mode.showAction
+      ? summaryHeaderWidthsAct
+      : mode.showCategory
+        ? summaryHeaderWidthsCat
+        : summaryHeaderWidths;
     return new TableRow({
       tableHeader: true,
       children: labels.map((label, i) =>
@@ -410,7 +424,9 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       ),
     });
   };
-  const buildSummaryRow = (rowUid: string, defect: any, showCategory = false) => {
+  const buildSummaryRow = (rowUid: string, defect: any, mode: SummaryMode = {}) => {
+    const showCategory = !!mode.showCategory;
+    const showAction = !!mode.showAction;
     const statusText = defect.status === "complete" ? "Complete" : "Open";
     // Overdue := dueDate exists AND dueDate < today AND the item is NOT closed.
     // Closed/Complete (and Archived) items are NEVER flagged overdue even if
@@ -419,12 +435,31 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
     const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
     const locationText = rowUid === defect.uid ? formatDefectLocation(defect, wordDims) : deriveLocation(safeText(rowUid));
-    const widths = showCategory ? summaryHeaderWidthsCat : summaryHeaderWidths;
+    const widths = showAction
+      ? summaryHeaderWidthsAct
+      : showCategory
+        ? summaryHeaderWidthsCat
+        : summaryHeaderWidths;
     const categoryText = safeText(defect.categoryLabel) || "(uncategorised)";
-    const cellTexts = showCategory
-      ? [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", categoryText, safeText(defect.dueDate) || "\u2014", statusText]
-      : [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
-    const statusIdx = showCategory ? 7 : 6;
+    // Action List rows: only emit the cached AI summary / fallback for parent
+    // rows (rowUid === defect.uid). Sub-location rows leave Observation/Action
+    // blank to avoid duplication — the parent row already conveys the work for
+    // that defect.
+    const isParentRow = rowUid === defect.uid;
+    const observationCell = showAction
+      ? (isParentRow ? truncateWordBoundary(defect.comment, { maxWords: 12, maxChars: 80 }) : "")
+      : "";
+    const actionCell = showAction
+      ? (isParentRow ? resolveActionSummary(defect) : "")
+      : "";
+    const cellTexts = showAction
+      ? [safeText(rowUid), locationText, getWorkTypeLabel(safeText(defect.uid)), observationCell, actionCell, safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText]
+      : showCategory
+        ? [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", categoryText, safeText(defect.dueDate) || "\u2014", statusText]
+        : [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
+    const statusIdx = showAction ? 7 : showCategory ? 7 : 6;
+    // Type column index: index 1 in non-action modes, absent (-1) in action mode.
+    const typeColIdx = showAction ? -1 : 1;
     const statusColor = statusText === "Complete" ? "228B22" : "C89600";
     // The Status cell shows the base status, and for overdue items appends a
     // red " - Overdue" suffix as a second TextRun (e.g. "Open - Overdue").
@@ -442,7 +477,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
           children: [new Paragraph({
             children: i === statusIdx
               ? buildStatusCellRuns()
-              : [new TextRun({ text: safeText(text), size: 14, font: "Aptos", color: i === 1 ? "666666" : undefined, bold: i === 0 })],
+              : [new TextRun({ text: safeText(text), size: 14, font: "Aptos", color: i === typeColIdx ? "666666" : undefined, bold: i === 0 })],
             spacing: { before: 25, after: 25 },
           })],
           borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
@@ -464,10 +499,10 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       children: [new TextRun({ text: safeText(g.label), bold: true, size: 24, font: "Aptos", color: CAPTION_BLUE })],
       spacing: { before: 160, after: 60 },
     }));
-    const rows: any[] = [buildSummaryHeaderRow(true)];
+    const rows: any[] = [buildSummaryHeaderRow({ showAction: true })];
     for (const d of g.defects) {
-      rows.push(buildSummaryRow(d.uid, d, true));
-      if (d.locations && d.locations.length > 0) for (const loc of d.locations) rows.push(buildSummaryRow(loc.uid || "", d, true));
+      rows.push(buildSummaryRow(d.uid, d, { showAction: true }));
+      if (d.locations && d.locations.length > 0) for (const loc of d.locations) rows.push(buildSummaryRow(loc.uid || "", d, { showAction: true }));
     }
     actionChildren.push(new Table({ width: { size: 9700, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows }));
   }
