@@ -1039,8 +1039,35 @@ export class DatabaseStorage implements IStorage {
   async getReport(id: number): Promise<Report | undefined> {
     return db.select().from(reports).where(eq(reports.id, id)).get();
   }
+  // §2.3 spec — freeze project-setup data into the report at creation time so that
+  // later edits to the project row do not retroactively change historical reports.
+  // Shape MUST stay in sync with renderer expectations (see shared_schema reports.projectSnapshot).
+  private buildProjectSnapshot(project: Project): string {
+    const snap = {
+      name: project.name,
+      address: project.address,
+      reportTitle: (project as any).reportTitle || "",
+      client: project.client,
+      inspector: project.inspector,
+      afcReference: (project as any).afcReference || "",
+      roles: (project as any).roles || "[]",
+      scopeOfWorks: (project as any).scopeOfWorks || "[]",
+      backgroundDocs: (project as any).backgroundDocs || "[]",
+      areaRefTemplate: (project as any).areaRefTemplate || "",
+    };
+    return JSON.stringify(snap);
+  }
+
   async createReport(report: InsertReport): Promise<Report> {
-    return db.insert(reports).values(report).returning().get();
+    // If caller did not supply a snapshot, freeze the current project state now.
+    let toInsert: any = report;
+    if (!(report as any).projectSnapshot) {
+      const project = db.select().from(projects).where(eq(projects.id, report.projectId)).get();
+      if (project) {
+        toInsert = { ...report, projectSnapshot: this.buildProjectSnapshot(project) };
+      }
+    }
+    return db.insert(reports).values(toInsert).returning().get();
   }
   async updateReport(id: number, report: Partial<InsertReport>): Promise<Report | undefined> {
     return db.update(reports).set(report).where(eq(reports.id, id)).returning().get();
@@ -1085,6 +1112,15 @@ export class DatabaseStorage implements IStorage {
     const newInspectionNumber = String(newNum).padStart(2, "0");
     const now = new Date().toISOString();
 
+    // §2.3 spec — carry the prior report's frozen project snapshot forward (preserved
+    // across the cloned inspection). If the source predates snapshots (legacy data),
+    // build a fresh one from the current project state.
+    let inheritedSnapshot: string | null = (source as any).projectSnapshot ?? null;
+    if (!inheritedSnapshot) {
+      const project = db.select().from(projects).where(eq(projects.id, source.projectId)).get();
+      if (project) inheritedSnapshot = this.buildProjectSnapshot(project);
+    }
+
     const newReport = db.insert(reports).values({
       projectId: source.projectId,
       inspectionNumber: newInspectionNumber,
@@ -1093,6 +1129,7 @@ export class DatabaseStorage implements IStorage {
       locationsCovered: metadata.locationsCovered ?? source.locationsCovered,
       elevations: metadata.elevations ?? source.elevations,
       attendees: metadata.attendees ?? source.attendees,
+      projectSnapshot: inheritedSnapshot,
       priorReportId: source.id,
       createdAt: now,
     }).returning().get();
