@@ -754,9 +754,31 @@ export async function registerRoutes(
       slot,
       createdAt: new Date().toISOString(),
     });
+    // Compress/resize the stored original so we don't keep full phone-resolution
+    // files on disk. Write to a temp file and atomically rename over the original
+    // so a sharp failure can never lose the upload — if anything goes wrong, the
+    // raw multer-saved original is left in place.
+    const origPath = path.join(uploadDir, req.file.filename);
+    try {
+      const tmpPath = `${origPath}.resized.tmp`;
+      await sharp(origPath)
+        .resize(2000, 2000, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toFile(tmpPath);
+      fs.renameSync(tmpPath, origPath);
+    } catch (err) {
+      console.warn("Original photo resize failed; keeping raw upload:", err);
+      // Best-effort cleanup of a partial temp file if it exists.
+      try {
+        const tmpPath = `${origPath}.resized.tmp`;
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {
+        /* ignore */
+      }
+    }
+
     // Generate compressed thumbnail for report exports
     try {
-      const origPath = path.join(uploadDir, req.file.filename);
       const thumbPath = path.join(thumbDir, req.file.filename);
       await sharp(origPath)
         .resize(800, 600, { fit: "inside", withoutEnlargement: true })
