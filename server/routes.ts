@@ -180,22 +180,6 @@ export async function registerRoutes(
     }
   });
 
-  // === DIAGNOSTIC (temporary) ===
-  app.get("/api/_diag/env", async (_req, res) => {
-    const key = process.env.OPENAI_API_KEY;
-    res.json({
-      hasOpenAIKey: typeof key === "string" && key.length > 0,
-      keyLength: key ? key.length : 0,
-      keyPrefix: key ? key.slice(0, 7) : null,
-      keyTrailingWhitespace: key ? key !== key.trim() : false,
-      nodeEnv: process.env.NODE_ENV ?? null,
-      railwayEnv: process.env.RAILWAY_ENVIRONMENT_NAME ?? null,
-      railwayService: process.env.RAILWAY_SERVICE_NAME ?? null,
-      envVarCount: Object.keys(process.env).length,
-      openaiRelatedKeys: Object.keys(process.env).filter((k) => /openai|api.?key/i.test(k)),
-    });
-  });
-
   // === GLOBAL SETTINGS ===
   app.get("/api/global-settings", async (_req, res) => {
     res.json(getGlobalSettings());
