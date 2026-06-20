@@ -480,8 +480,27 @@ export default function DefectForm() {
     return [...WORK_TYPES, ...custom];
   }, [(project as any)?.customWorkTypes]);
 
-  // Flexible UID builder — only includes present segments
+  // §1.5.1 Area Ref template (NEW projects). Free-form pattern with placeholders
+  // {elevation} {drop} {level} substituted with the current defect's codes
+  // (drop/level zero-padded to 2 digits to match the legacy convention).
+  // Empty template => legacy 5-part UID assembly.
+  const areaRefTemplate: string = (project as any)?.areaRefTemplate || "";
+  const areaRef = useMemo(() => {
+    if (!areaRefTemplate) return "";
+    return areaRefTemplate
+      .replace(/\{elevation\}/g, elevation || "")
+      .replace(/\{drop\}/g, drop ? drop.padStart(2, "0") : "")
+      .replace(/\{level\}/g, level ? level.padStart(2, "0") : "");
+  }, [areaRefTemplate, elevation, drop, level]);
+
+  // Flexible UID builder — only includes present segments.
+  // New convention (template set): AreaRef - WorkItem  (server adds -Seq#)
+  // Legacy (no template):          Elevation - Drop - Level - WorkType
   const uidPrefix = useMemo(() => {
+    if (areaRefTemplate) {
+      const segments = [areaRef, workType || ""].filter((s) => s !== "");
+      return segments.join("-");
+    }
     const segments = [
       elevation || "",
       drop ? drop.padStart(2, "0") : "",
@@ -489,10 +508,19 @@ export default function DefectForm() {
       workType || "",
     ].filter((s) => s !== "");
     return segments.join("-");
-  }, [elevation, drop, level, workType]);
+  }, [areaRefTemplate, areaRef, elevation, drop, level, workType]);
 
-  // Full assembled UID — includes number if present
+  // Full assembled UID — includes seq number if present.
+  // New convention: {AreaRef}-{WorkItem}-{Seq#}.  Legacy: 5-part.
   const assembledUid = useMemo(() => {
+    if (areaRefTemplate) {
+      const segments = [
+        areaRef,
+        workType || "",
+        seqNumber ? seqNumber.padStart(2, "0") : "",
+      ].filter((s) => s !== "");
+      return segments.join("-");
+    }
     const segments = [
       elevation || "",
       drop ? drop.padStart(2, "0") : "",
@@ -501,7 +529,7 @@ export default function DefectForm() {
       seqNumber ? seqNumber.padStart(2, "0") : "",
     ].filter((s) => s !== "");
     return segments.join("-");
-  }, [elevation, drop, level, workType, seqNumber]);
+  }, [areaRefTemplate, areaRef, elevation, drop, level, workType, seqNumber]);
 
   // Fetch all defects in this report to check for duplicate UIDs
   const { data: reportDefects } = useQuery<Defect[]>({
