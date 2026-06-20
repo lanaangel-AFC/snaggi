@@ -31,7 +31,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   const logo = await loadAfcLogo();
 
   const DARK_BLUE = "0A1D30";
-  const ACCENT_BLUE = "45B0E1";
+  const ACCENT_BLUE = "00CDC8";
   const DARK_TEXT = "3A3A3A";
   const CAPTION_BLUE = "0E2841";
   const OVERDUE_RED = "C00000";

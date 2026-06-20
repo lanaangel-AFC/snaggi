@@ -33,7 +33,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
 
   const TEAL = [0, 235, 230] as const;
   const DARK_BLUE = [10, 29, 48] as const;
-  const ACCENT_BLUE = [69, 176, 225] as const;
+  const ACCENT_BLUE = [0, 205, 200] as const;
   const DARK_TEXT = [58, 58, 58] as const;
   const CAPTION_BLUE = [14, 40, 65] as const;
   const OVERDUE_RED = [192, 0, 0] as const; // matches DOCX OVERDUE_RED (#C00000)
