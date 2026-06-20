@@ -1,6 +1,12 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes } from "./storage";
+import {
+  buildActionSummaryInput,
+  generateActionSummary,
+  isActionSummaryStale,
+  type ActionSummaryInputs,
+} from "./action-summary";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import { getLocationDimensions } from "@shared/location";
 import { escapeCsvField } from "@shared/csv";
@@ -558,6 +564,216 @@ export async function registerRoutes(
 
     res.json(defect);
   });
+
+  // ===================== §2.2 — AI ACTION SUMMARY =====================
+  // Build the four canonical inputs (observation, actionRequired, category label,
+  // work-type label) from a defect + project + global settings. The category
+  // code and work-type code are resolved to human labels where possible because
+  // raw codes are meaningless to the model. The SAME resolved strings are then
+  // both prompted AND hashed (in buildActionSummaryInput) so the hash invariant
+  // (hash inputs ≡ prompt inputs) holds.
+  async function buildActionSummaryInputsForDefect(defect: any): Promise<ActionSummaryInputs> {
+    let categoryLabel = "";
+    let workTypeLabel = "";
+    try {
+      const project = await storage.getProject(defect.projectId);
+      if (project) {
+        if (defect.categoryCode) {
+          try {
+            const cats: Array<{ code: string; label: string }> = JSON.parse(project.categories || "[]");
+            const hit = cats.find((c) => c.code === defect.categoryCode);
+            categoryLabel = hit?.label || defect.categoryCode || "";
+          } catch {
+            categoryLabel = defect.categoryCode || "";
+          }
+        }
+        if (defect.workTypeCode) {
+          try {
+            const wts: Array<{ code: string; label: string }> = JSON.parse(project.customWorkTypes || "[]");
+            const hit = wts.find((w) => w.code === defect.workTypeCode);
+            workTypeLabel = hit?.label || "";
+          } catch { /* fall through */ }
+          if (!workTypeLabel) {
+            try {
+              const gs = getGlobalSettings();
+              const hit = (gs.workTypes || []).find((w) => w.code === defect.workTypeCode);
+              workTypeLabel = hit?.label || defect.workTypeCode || "";
+            } catch {
+              workTypeLabel = defect.workTypeCode || "";
+            }
+          }
+        }
+      } else {
+        categoryLabel = defect.categoryCode || "";
+        workTypeLabel = defect.workTypeCode || "";
+      }
+    } catch {
+      categoryLabel = defect.categoryCode || "";
+      workTypeLabel = defect.workTypeCode || "";
+    }
+    return {
+      observation: defect.comment || "",
+      actionRequired: defect.actionRequired || "",
+      category: categoryLabel,
+      workType: workTypeLabel,
+    };
+  }
+
+  // POST /api/defects/:id/action-summary/regenerate
+  // Short-circuits with the cached value when the live hash matches the stored
+  // hash. Refuses to overwrite a "manual" summary unless ?force=true.
+  app.post("/api/defects/:id/action-summary/regenerate", async (req, res) => {
+    try {
+      const defectId = Number(req.params.id);
+      const defect = await storage.getDefect(defectId);
+      if (!defect) return res.status(404).json({ message: "Defect not found" });
+
+      const force = String(req.query.force ?? "").toLowerCase() === "true";
+      if (defect.actionSummarySource === "manual" && !force) {
+        return res.status(409).json({
+          message: "Action summary is manually edited. Pass ?force=true to overwrite.",
+          actionSummary: defect.actionSummary,
+          actionSummarySource: defect.actionSummarySource,
+          actionSummaryInputHash: defect.actionSummaryInputHash,
+        });
+      }
+
+      const inputs = await buildActionSummaryInputsForDefect(defect);
+      const liveHash = buildActionSummaryInput(inputs).hash;
+
+      if (
+        !force &&
+        defect.actionSummary &&
+        defect.actionSummaryInputHash === liveHash
+      ) {
+        return res.json({
+          actionSummary: defect.actionSummary,
+          actionSummarySource: defect.actionSummarySource,
+          actionSummaryInputHash: defect.actionSummaryInputHash,
+          source: defect.actionSummarySource,
+          stale: false,
+          cached: true,
+        });
+      }
+
+      const result = await generateActionSummary(inputs);
+      const updated = await storage.updateDefect(defectId, {
+        actionSummary: result.summary,
+        actionSummarySource: result.source,
+        actionSummaryInputHash: result.hash,
+      } as any);
+      if (!updated) return res.status(500).json({ message: "Failed to persist action summary" });
+
+      res.json({
+        actionSummary: updated.actionSummary,
+        actionSummarySource: updated.actionSummarySource,
+        actionSummaryInputHash: updated.actionSummaryInputHash,
+        source: result.source,
+        fallbackReason: result.fallbackReason,
+        stale: false,
+        cached: false,
+      });
+    } catch (err: any) {
+      console.error("[action-summary] regenerate failed:", err);
+      res.status(500).json({ message: err?.message || "Failed to regenerate action summary" });
+    }
+  });
+
+  // POST /api/reports/:id/action-summaries/regenerate
+  // Bulk regenerate every defect in a report. Sequential to keep rate-limit
+  // risk low. Skips "manual" entries unless force=true. Cached-and-fresh
+  // defects do NOT trigger an API call.
+  app.post("/api/reports/:id/action-summaries/regenerate", async (req, res) => {
+    try {
+      const reportId = Number(req.params.id);
+      const report = await storage.getReport(reportId);
+      if (!report) return res.status(404).json({ message: "Report not found" });
+      const force = String(req.query.force ?? "").toLowerCase() === "true";
+
+      const defectsInReport = await storage.getDefectsByReport(reportId);
+      const results: Array<{
+        defectId: number;
+        uid: string;
+        action: "generated" | "cached" | "skipped-manual" | "error";
+        source?: "ai" | "fallback" | "manual";
+        fallbackReason?: string;
+        error?: string;
+      }> = [];
+      let counts = { generated: 0, cached: 0, skippedManual: 0, errors: 0, ai: 0, fallback: 0 };
+
+      for (const d of defectsInReport) {
+        try {
+          if (d.actionSummarySource === "manual" && !force) {
+            results.push({ defectId: d.id, uid: d.uid, action: "skipped-manual", source: "manual" });
+            counts.skippedManual++;
+            continue;
+          }
+          const inputs = await buildActionSummaryInputsForDefect(d);
+          const liveHash = buildActionSummaryInput(inputs).hash;
+          if (!force && d.actionSummary && d.actionSummaryInputHash === liveHash) {
+            results.push({ defectId: d.id, uid: d.uid, action: "cached", source: d.actionSummarySource as any });
+            counts.cached++;
+            continue;
+          }
+          const result = await generateActionSummary(inputs);
+          await storage.updateDefect(d.id, {
+            actionSummary: result.summary,
+            actionSummarySource: result.source,
+            actionSummaryInputHash: result.hash,
+          } as any);
+          results.push({
+            defectId: d.id,
+            uid: d.uid,
+            action: "generated",
+            source: result.source,
+            fallbackReason: result.fallbackReason,
+          });
+          counts.generated++;
+          if (result.source === "ai") counts.ai++; else counts.fallback++;
+        } catch (e: any) {
+          console.error(`[action-summary] bulk failure on defect ${d.id}:`, e);
+          results.push({ defectId: d.id, uid: d.uid, action: "error", error: e?.message || "unknown" });
+          counts.errors++;
+        }
+      }
+      res.json({ reportId, totalDefects: defectsInReport.length, counts, results });
+    } catch (err: any) {
+      console.error("[action-summary] bulk regenerate failed:", err);
+      res.status(500).json({ message: err?.message || "Failed to bulk-regenerate action summaries" });
+    }
+  });
+
+  // GET /api/reports/:id/action-summaries/stale
+  // Powers the per-row Stale badge, the "N stale" count next to the regenerate
+  // button, and the export-time confirm dialog.
+  app.get("/api/reports/:id/action-summaries/stale", async (req, res) => {
+    try {
+      const reportId = Number(req.params.id);
+      const report = await storage.getReport(reportId);
+      if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const defectsInReport = await storage.getDefectsByReport(reportId);
+      const stale: Array<{ defectId: number; uid: string; reason: "missing" | "hash-mismatch" }> = [];
+      for (const d of defectsInReport) {
+        const inputs = await buildActionSummaryInputsForDefect(d);
+        if (isActionSummaryStale(
+          { actionSummary: d.actionSummary ?? null, actionSummaryInputHash: d.actionSummaryInputHash ?? null },
+          inputs,
+        )) {
+          stale.push({
+            defectId: d.id,
+            uid: d.uid,
+            reason: d.actionSummary ? "hash-mismatch" : "missing",
+          });
+        }
+      }
+      res.json({ reportId, total: defectsInReport.length, staleCount: stale.length, stale });
+    } catch (err: any) {
+      console.error("[action-summary] stale check failed:", err);
+      res.status(500).json({ message: err?.message || "Failed to compute stale summaries" });
+    }
+  });
+  // ===================== END §2.2 endpoints =====================
 
   // === HISTORY ===
   app.get("/api/defects/:id/observation-history", async (req, res) => {
