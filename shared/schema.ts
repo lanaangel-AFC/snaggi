@@ -9,6 +9,25 @@ export const projects = sqliteTable("projects", {
   client: text("client").notNull(),
   inspector: text("inspector").notNull(),
   afcReference: text("afc_reference").default(""),
+  // §2.3 Title page + §1 spec: separate Report Title field (full-width, no truncation).
+  // Replaces the legacy combined "Report Title / Address" usage of `name` on the cover.
+  reportTitle: text("report_title").default(""),
+  // §1.1 Roles table — JSON array [{role, entity, contactDetails}].
+  // contactDetails is a free-text multi-line string so a single cell can hold
+  // "Lana Angel\nM | 0407 759 590\nE | lana@angelfacade.consulting" verbatim.
+  roles: text("roles").default("[]"),
+  // §1.2 Scope of works — JSON array [{areaRef, location, workItem, accessMethod}].
+  scopeOfWorks: text("scope_of_works").default("[]"),
+  // §1.4 Background information — JSON array of reference docs.
+  // [{type: "drawing"|"specification"|"manual"|"report"|"other",
+  //   originator, title, docNumbers?, revision?, date}]
+  backgroundDocs: text("background_docs").default("[]"),
+  // §1.5.1 Area Ref template (NEW projects only). Free-form pattern of UID part
+  // placeholders + literal separators, e.g. "{elevation}{drop}-{level}" → "E4-7".
+  // Placeholders: {elevation} {drop} {level} — substituted with each defect's codes.
+  // Final UID becomes: <AreaRef>-<workItem>-<seq#>. Legacy projects leave this
+  // empty/null and continue to render the original 5-part UID assembly.
+  areaRefTemplate: text("area_ref_template").default(""),
   elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
   customDrops: text("custom_drops").default("[]"), // JSON array of strings
   customLevels: text("custom_levels").default("[]"), // JSON array of strings
@@ -46,6 +65,12 @@ export const reports = sqliteTable("reports", {
   locationsCovered: text("locations_covered").default(""),
   elevations: text("elevations").default("[]"), // JSON array of strings: elevation labels for this report
   attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
+  // §2.3 spec — frozen snapshot of project-setup data captured at report creation.
+  // Editing the project later does NOT mutate existing reports. Snapshot is preserved
+  // across revisions of the same SVR. Renderers prefer this over the live project row.
+  // JSON shape: {name, address, reportTitle, client, inspector, afcReference,
+  //              roles, scopeOfWorks, backgroundDocs, areaRefTemplate}.
+  projectSnapshot: text("project_snapshot"),
   priorReportId: integer("prior_report_id"), // report this one was cloned from (Start Next Inspection). NULL for the first report.
   createdAt: text("created_at").notNull(),
 });

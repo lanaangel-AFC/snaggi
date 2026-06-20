@@ -318,6 +318,23 @@ safeAddColumn("defects", "action_summary", "TEXT");
 safeAddColumn("defects", "action_summary_source", "TEXT"); // "ai" | "fallback" | "manual"
 safeAddColumn("defects", "action_summary_input_hash", "TEXT"); // SHA-256 hex of normalised prompt input
 
+// §2.3 Title page + §1 spec — new project-setup fields.
+//   report_title    — separate Report Title (e.g. "East Elevation Repairs")
+//   roles           — §1.1 Roles table JSON: [{role, name, company}]
+//   scope_of_works  — §1.2 JSON: [{areaRef, location, workItem, accessMethod}]
+//   background_docs — §1.4 JSON: [{type, originator, title, docNumbers?, revision?, date}]
+safeAddColumn("projects", "report_title", "TEXT DEFAULT ''");
+safeAddColumn("projects", "roles", "TEXT DEFAULT '[]'");
+safeAddColumn("projects", "scope_of_works", "TEXT DEFAULT '[]'");
+safeAddColumn("projects", "background_docs", "TEXT DEFAULT '[]'");
+// §1.5.1 Area Ref template (NEW projects only). Empty/NULL = legacy 5-part UID.
+safeAddColumn("projects", "area_ref_template", "TEXT DEFAULT ''");
+
+// §2.3 spec — frozen snapshot of project-setup data captured at report creation,
+// preserved across revisions. NULL for legacy reports (renderers fall back to the
+// live project row in that case).
+safeAddColumn("reports", "project_snapshot", "TEXT");
+
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
 
