@@ -66,6 +66,79 @@ function safeFilenamePart(v: unknown): string {
   return String(v ?? "").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
+// Strip characters that are illegal in filenames on common filesystems, plus the
+// literal "#" (which must never appear in an emitted name). Keeps letters,
+// digits, and the structural separators the new convention relies on (hyphen).
+// Collapses any run of stripped characters away rather than substituting.
+function stripIllegalFilenameChars(v: string): string {
+  return String(v ?? "")
+    .replace(/[#<>:"/\\|?*\x00-\x1F]/g, "")
+    .replace(/^-+|-+$/g, "");
+}
+
+const MONTHS: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  jan: 1, feb: 2, mar: 3, apr: 4, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9,
+  oct: 10, nov: 11, dec: 12,
+};
+
+// Format a Date to YYMMDD (zero-padded), local-component based to avoid TZ drift
+// on date-only values.
+function toYYMMDD(d: Date): string {
+  const yy = String(d.getFullYear() % 100).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}${mm}${dd}`;
+}
+
+// Parse a long-form date like "17 June 2026" (also tolerates "17 Jun 2026").
+// Returns null if it cannot be parsed.
+function parseLongFormDate(raw: string): Date | null {
+  const m = raw.trim().match(/^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4})$/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const month = MONTHS[m[2].toLowerCase()];
+  const year = parseInt(m[3], 10);
+  if (!month || !day || !year) return null;
+  return new Date(year, month - 1, day);
+}
+
+// Resolve the report's date to a YYMMDD string. Tries inspectionDate as ISO
+// (YYYY-MM-DD), then long-form ("17 June 2026"), then createdAt, then today.
+function resolveYYMMDD(report: any): string {
+  const tryParse = (raw: unknown): Date | null => {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    // ISO date-only: parse components manually to avoid UTC interpretation.
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) {
+      const dt = new Date(parseInt(iso[1], 10), parseInt(iso[2], 10) - 1, parseInt(iso[3], 10));
+      if (!isNaN(dt.getTime())) return dt;
+    }
+    const long = parseLongFormDate(s);
+    if (long && !isNaN(long.getTime())) return long;
+    // Last resort for unusual but JS-parseable strings (e.g. full ISO timestamps).
+    const generic = new Date(s);
+    if (!isNaN(generic.getTime())) return generic;
+    return null;
+  };
+
+  return toYYMMDD(
+    tryParse(report?.inspectionDate) ?? tryParse(report?.createdAt) ?? new Date(),
+  );
+}
+
+// Address: remove spaces and commas, KEEP internal hyphens. No abbreviation.
+function formatAddressPart(v: unknown): string {
+  return String(v ?? "").replace(/[\s,]+/g, "");
+}
+
+// Project name: remove spaces (distinguishes two projects sharing an afcReference).
+function formatProjectNamePart(v: unknown): string {
+  return String(v ?? "").replace(/\s+/g, "");
+}
+
 // Parse the project's stored exportProfiles JSON, falling back to defaults.
 export function parseExportProfiles(raw: unknown): ExportProfiles {
   if (raw && typeof raw === "object") {
@@ -343,15 +416,34 @@ function buildGroups(
 // Build the Pass 2 report tree. `data` is the /report-data response.
 // ---------------------------------------------------------------------------
 
-export function buildReportTree(data: any, profile: ProfileKey): ReportTree {
+export function buildReportTree(
+  data: any,
+  profile: ProfileKey,
+  // Audience suffix for the download filename. The default unified "Report"
+  // export passes "" (no audience word appended); the audience-split exports
+  // pass "Contractor" / "Client". This affects ONLY the resolved filename — no
+  // audience filtering, treatments, photo trimming, or appendix behaviour.
+  audienceSuffix: string = "",
+): ReportTree {
   const profiles = parseExportProfiles(data?.project?.exportProfiles);
   const chosen = profiles[profile] || DEFAULT_PROFILES[profile];
   const filenameSuffix = (chosen?.filenameSuffix || (profile === "client" ? "Client" : "Contractor")).trim();
 
+  // New filename convention:
+  //   {YYMMDD}-{afcRef}-{address}-{projectName}-SVR-{inspectionNumber}[-{audience}]
+  // Address keeps internal hyphens (spaces/commas removed); projectName has
+  // spaces removed so two projects sharing an afcReference differ. The default
+  // unified export passes audienceSuffix "" (no audience word).
+  const datePart = resolveYYMMDD(data?.report);
   const afcRef = safeFilenamePart(data?.project?.afcReference);
-  const inspectionNumber = safeFilenamePart(data?.report?.inspectionNumber);
-  const suffixPart = safeFilenamePart(filenameSuffix);
-  const filenameBase = `${afcRef}_SVR${inspectionNumber}_${suffixPart}`;
+  const addressPart = formatAddressPart(data?.project?.address);
+  const projectNamePart = formatProjectNamePart(data?.project?.name);
+  const inspectionNumber = String(data?.report?.inspectionNumber ?? "").trim();
+  const suffix = String(audienceSuffix ?? "").trim();
+
+  let filenameBase = `${datePart}-${afcRef}-${addressPart}-${projectNamePart}-SVR-${inspectionNumber}`;
+  if (suffix) filenameBase += `-${suffix}`;
+  filenameBase = stripIllegalFilenameChars(filenameBase);
 
   const treatments = chosen?.categoryTreatments || [];
   const categoryOrder = treatments.map((t) => t.code);

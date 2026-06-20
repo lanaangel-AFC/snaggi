@@ -69,7 +69,7 @@ export default function ReportDetail() {
   const [afcGuardOpen, setAfcGuardOpen] = useState(false);
   const [afcGuardValue, setAfcGuardValue] = useState("");
   const [afcGuardSaving, setAfcGuardSaving] = useState(false);
-  const [pendingExport, setPendingExport] = useState<{ profile: ProfileKey; format: "word" | "pdf" } | null>(null);
+  const [pendingExport, setPendingExport] = useState<{ profile: ProfileKey; format: "word" | "pdf"; audienceSuffix: string } | null>(null);
 
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -229,20 +229,22 @@ export default function ReportDetail() {
   // Single entry point for the Export Report menu. Enforces the afcReference
   // guard (Pass 1): if the project has no afcReference, block and prompt; the
   // chosen export resumes after the reference is saved.
-  const runExport = (profile: ProfileKey, format: "word" | "pdf") => {
-    if (format === "word") handleGenerateWord(profile);
-    else handleGeneratePdf(profile);
+  const runExport = (profile: ProfileKey, format: "word" | "pdf", audienceSuffix: string) => {
+    if (format === "word") handleGenerateWord(profile, audienceSuffix);
+    else handleGeneratePdf(profile, audienceSuffix);
   };
 
-  const handleGenerate = (profile: ProfileKey, format: "word" | "pdf") => {
+  // `audienceSuffix` is the filename audience word: "" for the default unified
+  // Report, "Contractor"/"Client" for the split-by-audience exports.
+  const handleGenerate = (profile: ProfileKey, format: "word" | "pdf", audienceSuffix: string = "") => {
     const afcRef = ((project as any)?.afcReference || "").trim();
     if (!afcRef) {
-      setPendingExport({ profile, format });
+      setPendingExport({ profile, format, audienceSuffix });
       setAfcGuardValue("");
       setAfcGuardOpen(true);
       return;
     }
-    runExport(profile, format);
+    runExport(profile, format, audienceSuffix);
   };
 
   const saveAfcAndContinue = async () => {
@@ -258,7 +260,7 @@ export default function ReportDetail() {
       setAfcGuardOpen(false);
       const next = pendingExport;
       setPendingExport(null);
-      if (next) runExport(next.profile, next.format);
+      if (next) runExport(next.profile, next.format, next.audienceSuffix);
     } catch (e: any) {
       toast({ title: e?.message || "Save failed", variant: "destructive" });
     } finally {
@@ -272,12 +274,12 @@ export default function ReportDetail() {
   // category treatments, photo trimming, carried-forward and progress-summary
   // computation) then hand the tree to a renderer. The renderers walk the tree
   // in master section order and DO NOT re-filter. See render-docx.ts / render-pdf.ts.
-  const handleGeneratePdf = async (profile: ProfileKey = "contractor") => {
+  const handleGeneratePdf = async (profile: ProfileKey = "contractor", audienceSuffix: string = "") => {
     setGenerating("pdf");
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
-      const tree = buildReportTree(data, profile);
+      const tree = buildReportTree(data, profile, audienceSuffix);
       const blob = await renderPdf(tree, { profile });
       downloadBlob(blob, `${tree.filenameBase}.pdf`);
       toast({ title: "PDF report downloaded" });
@@ -289,12 +291,12 @@ export default function ReportDetail() {
     }
   };
 
-  const handleGenerateWord = async (profile: ProfileKey = "contractor") => {
+  const handleGenerateWord = async (profile: ProfileKey = "contractor", audienceSuffix: string = "") => {
     setGenerating("word");
     try {
       const res = await apiRequest("GET", `/api/reports/${reportId}/report-data`);
       const data = await res.json();
-      const tree = buildReportTree(data, profile);
+      const tree = buildReportTree(data, profile, audienceSuffix);
       const blob = await renderDocx(tree, { profile });
       downloadBlob(blob, `${tree.filenameBase}.docx`);
       toast({ title: "Word report downloaded" });
@@ -645,30 +647,40 @@ export default function ReportDetail() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
             <DropdownMenuLabel>Generate Report</DropdownMenuLabel>
+            {/* Primary unified report: full content (all photos + full appendix,
+                the contractor content path) with a neutral "Report" label and no
+                audience word in the filename. */}
+            <DropdownMenuItem onClick={() => handleGenerate("contractor", "word", "")}>
+              <FileText className="w-4 h-4 mr-2" />
+              Report — Word Document (.docx)
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleGenerate("contractor", "pdf", "")}>
+              <FileText className="w-4 h-4 mr-2" />
+              Report — PDF (.pdf)
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {/* Advanced: keep the original contractor/client audience split. These
+                paths are unchanged in content; the filename gains a -Contractor /
+                -Client audience suffix. */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <FileText className="w-4 h-4 mr-2" />
-                Contractor
+                <Settings className="w-4 h-4 mr-2" />
+                Export split by audience
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuItem onClick={() => handleGenerate("contractor", "word")}>
+                <DropdownMenuLabel>Contractor</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => handleGenerate("contractor", "word", "Contractor")}>
                   Word Document (.docx)
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleGenerate("contractor", "pdf")}>
+                <DropdownMenuItem onClick={() => handleGenerate("contractor", "pdf", "Contractor")}>
                   PDF (.pdf)
                 </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <FileText className="w-4 h-4 mr-2" />
-                Client
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onClick={() => handleGenerate("client", "word")}>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Client</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => handleGenerate("client", "word", "Client")}>
                   Word Document (.docx)
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleGenerate("client", "pdf")}>
+                <DropdownMenuItem onClick={() => handleGenerate("client", "pdf", "Client")}>
                   PDF (.pdf)
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
