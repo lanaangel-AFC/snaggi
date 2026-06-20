@@ -311,6 +311,12 @@ safeAddColumn("projects", "categories", "TEXT DEFAULT '[]'"); // follow-up actio
 safeAddColumn("projects", "export_profiles", `TEXT DEFAULT '{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'`);
 safeAddColumn("defects", "audience", "TEXT DEFAULT 'both'"); // "both" | "contractor" | "client"
 safeAddColumn("defects", "category_code", "TEXT"); // references project.categories[].code; nullable
+// §2.2 — AI-generated Action List summary. action_summary_input_hash MUST be a hash of the exact
+// same canonicalised inputs passed to the OpenAI prompt (observation + actionRequired + category +
+// workType). A mismatch against the live data is what marks a summary stale.
+safeAddColumn("defects", "action_summary", "TEXT");
+safeAddColumn("defects", "action_summary_source", "TEXT"); // "ai" | "fallback" | "manual"
+safeAddColumn("defects", "action_summary_input_hash", "TEXT"); // SHA-256 hex of normalised prompt input
 
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);

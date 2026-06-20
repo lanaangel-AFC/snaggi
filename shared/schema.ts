@@ -74,6 +74,15 @@ export const defects = sqliteTable("defects", {
   // Export-profiles (Pass 1): audience tag + follow-up category code.
   audience: text("audience").default("both"), // "both" | "contractor" | "client"
   categoryCode: text("category_code"), // references one of project.categories[].code; nullable -> "(uncategorised)"
+  // §2.2 — AI-generated Action List summary.
+  // actionSummary       — the cached one-sentence imperative used in the Action List table.
+  // actionSummarySource — "ai" | "fallback" | "manual" (set by the regenerate endpoint or by manual edit).
+  // actionSummaryInputHash — SHA-256 hex of the normalised prompt input (observation + actionRequired +
+  //                          category + workType). Hash inputs MUST stay identical to prompt inputs;
+  //                          a mismatch against the live data marks the summary stale.
+  actionSummary: text("action_summary"),
+  actionSummarySource: text("action_summary_source"),
+  actionSummaryInputHash: text("action_summary_input_hash"),
   // SVR reformat (Stage A) additions:
   legacyId: text("legacy_id"), // NULL until Stage 2 (apply) populates it — DO NOT backfill in Stage 1
   locationStructured: text("location_structured"), // JSON: {elevation,drop,level} etc. Source of truth for location string.
