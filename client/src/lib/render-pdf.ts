@@ -185,9 +185,10 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
         const pos = cell.getTextPos();
         const baseWidth = doc.getTextWidth(baseText);
         doc.setTextColor(...OVERDUE_RED);
-        // doc.autoTableText mirrors autoTable's internal text placement so the
-        // suffix lines up with the base status on the same baseline.
-        (doc as any).autoTableText(" - Overdue", pos.x + baseWidth, pos.y, { halign: "left", valign: "top" });
+        // jspdf-autotable v5 removed doc.autoTableText, so draw the suffix
+        // directly with jsPDF. The autoTable styles use valign: "top", so use
+        // baseline: "top" here to line up with the base status text.
+        doc.text(" - Overdue", pos.x + baseWidth, pos.y, { baseline: "top" });
         doc.setTextColor(0);
       },
       rowPageBreak: "auto",
