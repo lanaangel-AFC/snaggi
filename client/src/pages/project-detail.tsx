@@ -18,6 +18,7 @@ import type { Project, Report, Defect, Elevation } from "@shared/schema";
 import { useState, useMemo } from "react";
 import ProjectStatusSection from "@/components/ProjectStatusSection";
 import ProjectSetupEditors from "@/components/ProjectSetupEditors";
+import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor } from "@/components/ProjectSetupExtraEditors";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -87,6 +88,11 @@ export default function ProjectDetail() {
       elevations: (project as any).elevations || "[]",
       enabledUidParts: (project as any).enabledUidParts || '{"elevation":true,"drop":true,"level":true,"workType":true}',
       primaryWorkTypes: (project as any).primaryWorkTypes || "[]",
+      reportTitle: (project as any).reportTitle || "",
+      roles: (project as any).roles || "[]",
+      scopeOfWorks: (project as any).scopeOfWorks || "[]",
+      backgroundDocs: (project as any).backgroundDocs || "[]",
+      areaRefTemplate: (project as any).areaRefTemplate || "",
     });
     setEditHideLegacyAliases(Boolean((project as any).hideLegacyAliases));
     setCustomElevation("");
@@ -276,6 +282,15 @@ export default function ProjectDetail() {
                 <Input value={editForm.name || ""} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} required />
               </div>
               <div>
+                <Label>Report Title</Label>
+                <Input
+                  value={editForm.reportTitle || ""}
+                  onChange={(e) => setEditForm({ ...editForm, reportTitle: e.target.value })}
+                  placeholder="e.g. Remedial Works — East Elevation, Stage 2"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Used on the report title page (full text, no truncation).</p>
+              </div>
+              <div>
                 <Label>Site Address</Label>
                 <Input value={editForm.address || ""} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} required />
               </div>
@@ -394,6 +409,26 @@ export default function ProjectDetail() {
                   </div>
                 </div>
               )}
+
+              <AreaRefTemplateEditor
+                value={editForm.areaRefTemplate || ""}
+                onChange={(v) => setEditForm({ ...editForm, areaRefTemplate: v })}
+              />
+
+              <RolesEditor
+                value={editForm.roles || "[]"}
+                onChange={(v) => setEditForm({ ...editForm, roles: v })}
+              />
+
+              <ScopeOfWorksEditor
+                value={editForm.scopeOfWorks || "[]"}
+                onChange={(v) => setEditForm({ ...editForm, scopeOfWorks: v })}
+              />
+
+              <BackgroundDocsEditor
+                value={editForm.backgroundDocs || "[]"}
+                onChange={(v) => setEditForm({ ...editForm, backgroundDocs: v })}
+              />
 
               {/* SVR Stage 2 — legacy UID alias visibility */}
               <div>

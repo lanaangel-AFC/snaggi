@@ -11,6 +11,7 @@ import { Plus, X, Building2, MapPin, User, Calendar, ChevronRight, Trash2 } from
 import type { Project } from "@shared/schema";
 import { useState, useMemo } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor } from "@/components/ProjectSetupExtraEditors";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -24,6 +25,11 @@ export default function ProjectList() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     name: "", address: "", client: "", inspector: "", afcReference: "",
+    reportTitle: "",
+    roles: "[]",
+    scopeOfWorks: "[]",
+    backgroundDocs: "[]",
+    areaRefTemplate: "",
     elevations: "[]",
     enabledUidParts: '{"elevation":true,"drop":true,"level":true,"workType":true}',
     primaryWorkTypes: "[]",
@@ -55,6 +61,11 @@ export default function ProjectList() {
       const body: any = {
         name: data.name, address: data.address, client: data.client,
         inspector: data.inspector, afcReference: data.afcReference,
+        reportTitle: data.reportTitle,
+        roles: data.roles,
+        scopeOfWorks: data.scopeOfWorks,
+        backgroundDocs: data.backgroundDocs,
+        areaRefTemplate: data.areaRefTemplate,
         elevations: data.elevations,
         enabledUidParts: data.enabledUidParts,
         primaryWorkTypes: data.primaryWorkTypes,
@@ -70,6 +81,7 @@ export default function ProjectList() {
       setOpen(false);
       setForm({
         name: "", address: "", client: "", inspector: "", afcReference: "",
+        reportTitle: "", roles: "[]", scopeOfWorks: "[]", backgroundDocs: "[]", areaRefTemplate: "",
         elevations: "[]", enabledUidParts: '{"elevation":true,"drop":true,"level":true,"workType":true}',
         primaryWorkTypes: "[]", customDrops: "[]", customLevels: "[]",
       });
@@ -139,14 +151,19 @@ export default function ProjectList() {
             >
               <div>
                 <Label htmlFor="name">Project Name</Label>
-                <Input id="name" placeholder="e.g. 123 George St — Facade Repair" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required data-testid="input-project-name" />
+                <Input id="name" placeholder="e.g. 32-36 York Street — Facade Repair" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required data-testid="input-project-name" />
+              </div>
+              <div>
+                <Label htmlFor="reportTitle">Report Title</Label>
+                <Input id="reportTitle" placeholder="e.g. East Elevation Repairs" value={form.reportTitle} onChange={(e) => setForm({ ...form, reportTitle: e.target.value })} data-testid="input-report-title" />
+                <p className="text-xs text-muted-foreground mt-1">Renders on the cover page; not truncated.</p>
               </div>
               <div>
                 <Label htmlFor="address">Site Address</Label>
-                <Input id="address" placeholder="123 George St, Sydney NSW 2000" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} required data-testid="input-project-address" />
+                <Input id="address" placeholder="32-36 York Street, Sydney" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} required data-testid="input-project-address" />
               </div>
               <div>
-                <Label htmlFor="client">Client</Label>
+                <Label htmlFor="client">Client (Principal)</Label>
                 <Input id="client" placeholder="Client name" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} required data-testid="input-project-client" />
               </div>
               <div>
@@ -243,6 +260,30 @@ export default function ProjectList() {
                   </label>
                 </div>
               </div>
+
+              {/* Area Ref template (NEW projects only) */}
+              <AreaRefTemplateEditor
+                value={form.areaRefTemplate}
+                onChange={(v) => setForm({ ...form, areaRefTemplate: v })}
+              />
+
+              {/* §1.1 Roles */}
+              <RolesEditor
+                value={form.roles}
+                onChange={(v) => setForm({ ...form, roles: v })}
+              />
+
+              {/* §1.2 Scope of Works */}
+              <ScopeOfWorksEditor
+                value={form.scopeOfWorks}
+                onChange={(v) => setForm({ ...form, scopeOfWorks: v })}
+              />
+
+              {/* §1.4 Background documents */}
+              <BackgroundDocsEditor
+                value={form.backgroundDocs}
+                onChange={(v) => setForm({ ...form, backgroundDocs: v })}
+              />
 
               {/* Work Items */}
               {enabledParts.workType && globalSettings && (
