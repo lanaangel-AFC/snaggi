@@ -164,22 +164,74 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   }));
 
   // ===================== SECTION 1 — INTRODUCTION =====================
+  // Snapshot-resolved fields for §1.1 boilerplate substitution.
+  const projClient = resolveProjectField(snap, data.project, "client");
+
   const introChildren: any[] = [];
   introChildren.push(new Paragraph({
     children: [new TextRun({ text: "Introduction", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
     heading: HeadingLevel.HEADING_1, spacing: { after: 200 },
   }));
+
+  // §1.1 General — boilerplate per AFC template. Wording is fixed; only CLIENT
+  // and ADDRESS are substituted, sourced from the frozen snapshot when present.
   introChildren.push(new Paragraph({
     children: [new TextRun({ text: "General", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
     heading: HeadingLevel.HEADING_2, spacing: { after: 100 },
   }));
   introChildren.push(new Paragraph({
     children: [new TextRun({
-      text: `Angel Façade Consulting (AFC) was engaged by ${safeText(data.project.client)} to carry out a site visit inspection of the facade at ${safeText(data.project.address)}.`,
+      text: `Angel Façade Consulting (AFC) was engaged by ${safeText(projClient)} to carry out regular inspections of the remedial works underway at ${safeText(projAddress)}. Below is a summary of pertinent project information.`,
       size: 20, font: "Aptos",
     })],
     spacing: { after: 200 },
   }));
+
+  // §1.1 Roles table (Role / Entity / Contact Details). Sourced from the frozen
+  // snapshot's roles JSON; falls back to the live project row when snapshot is
+  // missing (legacy reports). Renders only when there is at least one role.
+  const rolesJson = resolveProjectField(snap, data.project, "roles") || "[]";
+  let roles: Array<{ role?: string; entity?: string; contactDetails?: string }> = [];
+  try { roles = JSON.parse(rolesJson) || []; } catch { roles = []; }
+  if (Array.isArray(roles) && roles.length > 0) {
+    const headerCell = (text: string, widthPct: number) => new TableCell({
+      width: { size: widthPct, type: WidthType.PERCENTAGE },
+      children: [new Paragraph({ children: [new TextRun({ text, bold: true, size: 20, font: "Aptos", color: DARK_TEXT })], spacing: { before: 60, after: 60 } })],
+      borders: { top: thinBorder, left: noBorder, right: noBorder, bottom: thinBorder },
+      shading: { fill: "F2F2F2" } as any,
+    });
+    const bodyCell = (text: string, widthPct: number) => new TableCell({
+      width: { size: widthPct, type: WidthType.PERCENTAGE },
+      children: safeText(text).split(/\n/).map((line) => new Paragraph({
+        children: [new TextRun({ text: line, size: 20, font: "Aptos" })],
+        spacing: { before: 40, after: 40 },
+      })),
+      borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder },
+    });
+    introChildren.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.FIXED,
+      rows: [
+        new TableRow({
+          children: [
+            headerCell("Role", 25),
+            headerCell("Entity", 30),
+            headerCell("Contact Details", 45),
+          ],
+          tableHeader: true,
+        }),
+        ...roles.map((r) => new TableRow({
+          children: [
+            bodyCell(safeText(r.role), 25),
+            bodyCell(safeText(r.entity), 30),
+            bodyCell(safeText(r.contactDetails), 45),
+          ],
+        })),
+      ],
+    }));
+    introChildren.push(new Paragraph({ spacing: { before: 200 } }));
+  }
+
   introChildren.push(new Paragraph({
     children: [new TextRun({ text: "Inspection", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
     heading: HeadingLevel.HEADING_2, spacing: { after: 100 },
@@ -189,9 +241,9 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   if (data.report.inspectionDate) inspectionData.push(["Date", formatReportDate(data.report.inspectionDate)]);
   else inspectionData.push(["Date", reportDate]);
   if (data.report.inspectionNumber) inspectionData.push(["Inspection Number", safeText(data.report.inspectionNumber)]);
-  inspectionData.push(["Inspector", safeText(data.project.inspector)]);
-  inspectionData.push(["Locations covered", safeText(data.report.locationsCovered) || safeText(data.project.address)]);
-  inspectionData.push(["Client", safeText(data.project.client)]);
+  inspectionData.push(["Inspector", safeText(projInspector)]);
+  inspectionData.push(["Locations covered", safeText(data.report.locationsCovered) || safeText(projAddress)]);
+  inspectionData.push(["Client", safeText(projClient)]);
   try {
     const attendees = JSON.parse(data.report.attendees || "[]");
     if (attendees.length > 0) {

@@ -143,19 +143,48 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   const newSection = () => { doc.addPage(); addHeader(); addFooter(); return 20; };
 
   // ===================== SECTION 1 — INTRODUCTION =====================
+  // Snapshot-resolved fields for §1.1 boilerplate substitution.
+  const projClient = resolveProjectField(snap, data.project, "client");
+
   let y = newSection();
   doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...DARK_TEXT);
   doc.text("1. Introduction", margin, y); y += 10;
+
+  // §1.1 General — boilerplate per AFC template. Wording is fixed; only CLIENT
+  // and ADDRESS are substituted, sourced from the frozen snapshot when present.
   doc.setFontSize(14);
   doc.text("1.1 General", margin, y); y += 8;
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(60);
-  const generalText = `Angel Façade Consulting (AFC) was engaged by ${data.project.client} to carry out a site visit inspection of the facade at ${data.project.address}.`;
+  const generalText = `Angel Façade Consulting (AFC) was engaged by ${projClient} to carry out regular inspections of the remedial works underway at ${projAddress}. Below is a summary of pertinent project information.`;
   const genLines = doc.splitTextToSize(generalText, contentWidth);
   doc.text(genLines, margin, y); y += genLines.length * 4.5 + 6;
+
+  // §1.1 Roles table (Role / Entity / Contact Details). From snapshot when present.
+  const rolesJsonPdf = resolveProjectField(snap, data.project, "roles") || "[]";
+  let rolesPdf: Array<{ role?: string; entity?: string; contactDetails?: string }> = [];
+  try { rolesPdf = JSON.parse(rolesJsonPdf) || []; } catch { rolesPdf = []; }
+  if (Array.isArray(rolesPdf) && rolesPdf.length > 0) {
+    autoTable(doc, {
+      startY: y,
+      head: [["Role", "Entity", "Contact Details"]],
+      body: rolesPdf.map((r) => [
+        String(r.role || ""),
+        String(r.entity || ""),
+        String(r.contactDetails || ""),
+      ]),
+      margin: { left: margin, right: margin },
+      styles: { fontSize: 9, cellPadding: 3, valign: "top", overflow: "linebreak" },
+      headStyles: { fillColor: [242, 242, 242], textColor: 50, fontStyle: "bold" },
+      columnStyles: { 0: { cellWidth: contentWidth * 0.25 }, 1: { cellWidth: contentWidth * 0.30 }, 2: { cellWidth: contentWidth * 0.45 } },
+      theme: "grid",
+    });
+    y = (doc as any).lastAutoTable.finalY + 8;
+  }
+
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...DARK_TEXT);
@@ -165,9 +194,9 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   if (data.report.inspectionDate) inspRows.push(["Date", formatReportDate(data.report.inspectionDate)]);
   else inspRows.push(["Date", formatReportDate(new Date().toISOString())]);
   if (data.report.inspectionNumber) inspRows.push(["Inspection Number", String(data.report.inspectionNumber)]);
-  inspRows.push(["Inspector", String(data.project.inspector || "")]);
-  inspRows.push(["Locations covered", String(data.report.locationsCovered || data.project.address || "")]);
-  inspRows.push(["Client", String(data.project.client || "")]);
+  inspRows.push(["Inspector", String(projInspector || "")]);
+  inspRows.push(["Locations covered", String(data.report.locationsCovered || projAddress || "")]);
+  inspRows.push(["Client", String(projClient || "")]);
   try {
     const attendees = JSON.parse(data.report.attendees || "[]");
     if (attendees.length > 0) inspRows.push(["Attendees", attendees.map((a: any) => `${a.name} (${a.company})`).join(", ")]);
