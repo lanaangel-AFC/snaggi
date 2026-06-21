@@ -185,10 +185,44 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     y = (doc as any).lastAutoTable.finalY + 8;
   }
 
+  // §1.2 Scope of works — Area Ref / Location / Work Item / Access Method.
+  // Sourced from the frozen snapshot when present.
+  const scopeJsonPdf = resolveProjectField(snap, data.project, "scopeOfWorks") || "[]";
+  let scopePdf: Array<{ areaRef?: string; location?: string; workItem?: string; accessMethod?: string }> = [];
+  try { scopePdf = JSON.parse(scopeJsonPdf) || []; } catch { scopePdf = []; }
+  if (Array.isArray(scopePdf) && scopePdf.length > 0) {
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...DARK_TEXT);
+    doc.text("1.2 Scope of works", margin, y); y += 8;
+    autoTable(doc, {
+      startY: y,
+      head: [["Area Ref", "Location", "Work item", "Access method"]],
+      body: scopePdf.map((s) => [
+        String(s.areaRef || ""),
+        String(s.location || ""),
+        String(s.workItem || ""),
+        String(s.accessMethod || ""),
+      ]),
+      margin: { left: margin, right: margin },
+      styles: { fontSize: 9, cellPadding: 3, valign: "top", overflow: "linebreak" },
+      headStyles: { fillColor: [242, 242, 242], textColor: 50, fontStyle: "bold" },
+      columnStyles: {
+        0: { cellWidth: contentWidth * 0.18 },
+        1: { cellWidth: contentWidth * 0.27 },
+        2: { cellWidth: contentWidth * 0.30 },
+        3: { cellWidth: contentWidth * 0.25 },
+      },
+      theme: "grid",
+    });
+    y = (doc as any).lastAutoTable.finalY + 10;
+  }
+
+  // §1.3 Inspection particulars (renumbered from previous §1.2 Inspection).
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...DARK_TEXT);
-  doc.text("1.2 Inspection", margin, y); y += 8;
+  doc.text("1.3 Inspection particulars", margin, y); y += 8;
 
   const inspRows: string[][] = [];
   if (data.report.inspectionDate) inspRows.push(["Date", formatReportDate(data.report.inspectionDate)]);

@@ -232,8 +232,60 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     introChildren.push(new Paragraph({ spacing: { before: 200 } }));
   }
 
+  // §1.2 Scope of works — table of locations covered by the engagement.
+  // Columns: Area Ref / Location (Elevation/Floor) / Work Item / Access Method.
+  // Sourced from the frozen snapshot's scopeOfWorks JSON.
+  const scopeJson = resolveProjectField(snap, data.project, "scopeOfWorks") || "[]";
+  let scope: Array<{ areaRef?: string; location?: string; workItem?: string; accessMethod?: string }> = [];
+  try { scope = JSON.parse(scopeJson) || []; } catch { scope = []; }
+  if (Array.isArray(scope) && scope.length > 0) {
+    introChildren.push(new Paragraph({
+      children: [new TextRun({ text: "Scope of works", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+      heading: HeadingLevel.HEADING_2, spacing: { after: 100 },
+    }));
+    const sHeader = (text: string, widthPct: number) => new TableCell({
+      width: { size: widthPct, type: WidthType.PERCENTAGE },
+      children: [new Paragraph({ children: [new TextRun({ text, bold: true, size: 20, font: "Aptos", color: DARK_TEXT })], spacing: { before: 60, after: 60 } })],
+      borders: { top: thinBorder, left: noBorder, right: noBorder, bottom: thinBorder },
+      shading: { fill: "F2F2F2" } as any,
+    });
+    const sBody = (text: string, widthPct: number) => new TableCell({
+      width: { size: widthPct, type: WidthType.PERCENTAGE },
+      children: safeText(text).split(/\n/).map((line) => new Paragraph({
+        children: [new TextRun({ text: line, size: 20, font: "Aptos" })],
+        spacing: { before: 40, after: 40 },
+      })),
+      borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder },
+    });
+    introChildren.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.FIXED,
+      rows: [
+        new TableRow({
+          children: [
+            sHeader("Area Ref", 18),
+            sHeader("Location", 27),
+            sHeader("Work item", 30),
+            sHeader("Access method", 25),
+          ],
+          tableHeader: true,
+        }),
+        ...scope.map((s) => new TableRow({
+          children: [
+            sBody(safeText(s.areaRef), 18),
+            sBody(safeText(s.location), 27),
+            sBody(safeText(s.workItem), 30),
+            sBody(safeText(s.accessMethod), 25),
+          ],
+        })),
+      ],
+    }));
+    introChildren.push(new Paragraph({ spacing: { before: 200 } }));
+  }
+
+  // §1.3 Inspection particulars (renumbered from previous §1.2 Inspection).
   introChildren.push(new Paragraph({
-    children: [new TextRun({ text: "Inspection", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+    children: [new TextRun({ text: "Inspection particulars", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
     heading: HeadingLevel.HEADING_2, spacing: { after: 100 },
   }));
 
