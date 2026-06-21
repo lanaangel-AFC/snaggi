@@ -22,6 +22,53 @@ const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 export const safeText = (v: unknown): string => (v == null ? "" : String(v));
 
 // ---------------------------------------------------------------------------
+// Project snapshot resolver (§2.3 spec)
+// ---------------------------------------------------------------------------
+
+// Reports created post-"snapshot" commit carry a frozen JSON copy of the
+// project setup at creation time (reports.projectSnapshot). Renderers MUST
+// prefer snapshot data so historical reports keep their original wording even
+// after the project row is later edited. Legacy reports (snapshot=null) fall
+// back to the live project row.
+//
+// Shape MUST stay in sync with server_storage.ts buildProjectSnapshot().
+export interface ProjectSnapshot {
+  name?: string;
+  address?: string;
+  reportTitle?: string;
+  client?: string;
+  inspector?: string;
+  afcReference?: string;
+  roles?: string;            // JSON string -> [{role, entity, contactDetails}]
+  scopeOfWorks?: string;     // JSON string -> [{areaRef, location, workItem, accessMethod}]
+  backgroundDocs?: string;   // JSON string -> [{type, originator, title, docNumbers?, revision?, date}]
+  areaRefTemplate?: string;
+}
+
+// Parse the report's projectSnapshot JSON safely (null/legacy => {}).
+export function parseProjectSnapshot(raw: unknown): ProjectSnapshot {
+  if (raw == null || raw === "") return {};
+  if (typeof raw === "object") return raw as ProjectSnapshot;
+  try { return JSON.parse(String(raw)) as ProjectSnapshot; } catch { return {}; }
+}
+
+// Resolve a project-setup value with snapshot precedence then live-project fallback.
+// Pass the report's projectSnapshot (raw or parsed) and the live project row.
+export function resolveProjectField<K extends keyof ProjectSnapshot>(
+  snapshot: ProjectSnapshot | unknown,
+  project: any,
+  key: K,
+): string {
+  const snap = (typeof snapshot === "object" && snapshot != null && !(snapshot as any)?.then)
+    ? (snapshot as ProjectSnapshot)
+    : parseProjectSnapshot(snapshot);
+  const v = snap[key];
+  if (v != null && v !== "") return String(v);
+  const live = project ? project[key] : undefined;
+  return live == null ? "" : String(live);
+}
+
+// ---------------------------------------------------------------------------
 // Action List (§2.2) — truncation + AI-summary fallback shared by DOCX + PDF
 // ---------------------------------------------------------------------------
 

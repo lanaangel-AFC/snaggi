@@ -15,6 +15,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel,
   truncateWordBoundary, resolveActionSummary,
+  parseProjectSnapshot, resolveProjectField,
 } from "./render-helpers";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -44,7 +45,22 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
 
   const reportDate = formatReportDate(new Date().toISOString());
   const rev = data.report.revision || "01";
-  const afcRef = data.project.afcReference || "AFC-24XXX";
+
+  // §2.3 — prefer frozen snapshot over live project row so historical reports
+  // keep their original wording even after the project is later edited.
+  const snap = parseProjectSnapshot((data.report as any).projectSnapshot);
+  const projAddress     = resolveProjectField(snap, data.project, "address");
+  const projName        = resolveProjectField(snap, data.project, "name");
+  const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
+  const projInspector   = resolveProjectField(snap, data.project, "inspector");
+  const afcRef          = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
+
+  // §1.7 inspection number, zero-padded to 2 digits for the title-page heading.
+  const inspNumRaw = safeText(data.report.inspectionNumber).trim();
+  const inspNumPadded = inspNumRaw
+    ? (/^\d+$/.test(inspNumRaw) ? inspNumRaw.padStart(2, "0") : inspNumRaw)
+    : "";
+  const siteVisitHeading = inspNumPadded ? `SITE VISIT REPORT ${inspNumPadded}` : "SITE VISIT REPORT";
 
   const headerTable = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
@@ -55,7 +71,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
           new TableCell({
             width: { size: 50, type: WidthType.PERCENTAGE },
             children: [new Paragraph({
-              children: [new TextRun({ text: safeText(data.project.name).toUpperCase(), size: 16, font: "Aptos", bold: true, color: DARK_TEXT })],
+              children: [new TextRun({ text: safeText(projName).toUpperCase(), size: 16, font: "Aptos", bold: true, color: DARK_TEXT })],
             })],
             borders: { top: noBorder, left: noBorder, right: noBorder, bottom: accentBottomBorder },
           }),
@@ -77,7 +93,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     children: [
       new Paragraph({
         children: [
-          new TextRun({ text: `${safeText(afcRef)} | ${safeText(data.project.address)}`, size: 16, font: "Aptos", color: DARK_TEXT }),
+          new TextRun({ text: `${safeText(afcRef)} | ${safeText(projAddress)}`, size: 16, font: "Aptos", color: DARK_TEXT }),
           new TextRun({ text: "\t" }),
           new TextRun({ text: "Page ", size: 16, font: "Aptos", color: DARK_TEXT }),
           new TextRun({ children: [PageNumber.CURRENT], size: 16, font: "Aptos", color: DARK_TEXT }),
@@ -102,13 +118,28 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   } else {
     coverChildren.push(new Paragraph({ spacing: { after: 600 } }));
   }
+  // §Title-page spec — vertical stack (top → bottom):
+  //   1) Address (large, dark blue)
+  //   2) Report Title (full, no truncation)
+  //   3) Site Visit Report NN (zero-padded inspection number)
+  //   4) Revision N
+  //   5) Date
+  //   6) Angel Façade Consulting
+  //   7) {Inspector} | 0407 759 590
+  //   8) AFC reference
   coverChildren.push(new Paragraph({ spacing: { before: 1200 } }));
   coverChildren.push(new Paragraph({
-    children: [new TextRun({ text: safeText(data.project.name).toUpperCase(), bold: true, size: 72, font: "Aptos", color: DARK_BLUE })],
-    spacing: { after: 100 },
+    children: [new TextRun({ text: safeText(projAddress).toUpperCase(), bold: true, size: 56, font: "Aptos", color: DARK_BLUE })],
+    spacing: { after: 120 },
   }));
+  if (projReportTitle) {
+    coverChildren.push(new Paragraph({
+      children: [new TextRun({ text: safeText(projReportTitle), size: 36, font: "Aptos", color: DARK_BLUE })],
+      spacing: { after: 120 },
+    }));
+  }
   coverChildren.push(new Paragraph({
-    children: [new TextRun({ text: "SITE VISIT REPORT", size: 52, font: "Aptos", color: DARK_BLUE, smallCaps: true })],
+    children: [new TextRun({ text: siteVisitHeading, size: 44, font: "Aptos", color: DARK_BLUE, smallCaps: true })],
     spacing: { after: 100 },
   }));
   coverChildren.push(new Paragraph({
@@ -124,7 +155,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     spacing: { after: 40 },
   }));
   coverChildren.push(new Paragraph({
-    children: [new TextRun({ text: `${safeText(data.project.inspector)} | 0407 759 590`, size: 22, font: "Aptos", color: DARK_TEXT })],
+    children: [new TextRun({ text: `${safeText(projInspector)} | 0407 759 590`, size: 22, font: "Aptos", color: DARK_TEXT })],
     spacing: { after: 40 },
   }));
   coverChildren.push(new Paragraph({

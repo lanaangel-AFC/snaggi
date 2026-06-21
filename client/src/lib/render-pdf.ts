@@ -15,6 +15,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel,
   truncateWordBoundary, resolveActionSummary,
+  parseProjectSnapshot, resolveProjectField,
 } from "./render-helpers";
 
 export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -39,41 +40,86 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   const CAPTION_BLUE = [14, 40, 65] as const;
   const OVERDUE_RED = [192, 0, 0] as const; // matches DOCX OVERDUE_RED (#C00000)
 
-  const afcRef = data.project.afcReference || "AFC-24XXX";
+  // §2.3 — prefer frozen snapshot over live project row so historical reports
+  // keep their original wording even after the project is later edited.
+  const snap = parseProjectSnapshot((data.report as any).projectSnapshot);
+  const projAddress     = resolveProjectField(snap, data.project, "address");
+  const projName        = resolveProjectField(snap, data.project, "name");
+  const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
+  const projInspector   = resolveProjectField(snap, data.project, "inspector");
+  const afcRef          = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
+
+  // §1.7 inspection number, zero-padded to 2 digits for the title-page heading.
+  const inspNumRawPdf = String(data.report.inspectionNumber || "").trim();
+  const inspNumPaddedPdf = inspNumRawPdf
+    ? (/^\d+$/.test(inspNumRawPdf) ? inspNumRawPdf.padStart(2, "0") : inspNumRawPdf)
+    : "";
+  const siteVisitHeadingPdf = inspNumPaddedPdf ? `SITE VISIT REPORT ${inspNumPaddedPdf}` : "SITE VISIT REPORT";
 
   // ===================== COVER PAGE =====================
+  // §Title-page spec — vertical stack (top → bottom):
+  //   1) Address (large, dark blue)
+  //   2) Report Title (full, no truncation)
+  //   3) Site Visit Report NN
+  //   4) Revision N
+  //   5) Date
+  //   6) Angel Façade Consulting
+  //   7) {Inspector} | 0407 759 590
+  //   8) AFC reference
   doc.setFillColor(...TEAL);
   doc.rect(0, 0, 25, pageHeight, "F");
   if (logo) doc.addImage(logo.dataUrl, "PNG", pageWidth - 60, 15, 45, 14.4);
 
   const titleX = 35;
-  let ty = pageHeight * 0.35;
-  doc.setFontSize(42);
+  let ty = pageHeight * 0.30;
+
+  // 1) Address (primary heading)
+  doc.setFontSize(32);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...DARK_BLUE);
-  const titleLines = doc.splitTextToSize(String(data.project.name || "").toUpperCase(), contentWidth - 25);
-  doc.text(titleLines, titleX, ty);
-  ty += titleLines.length * 16 + 4;
-  doc.setFontSize(26);
+  const addrLines = doc.splitTextToSize(String(projAddress || "").toUpperCase(), contentWidth - 25);
+  doc.text(addrLines, titleX, ty);
+  ty += addrLines.length * 12 + 4;
+
+  // 2) Report Title (full, no truncation — wraps as needed)
+  if (projReportTitle) {
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...DARK_BLUE);
+    const titleLines = doc.splitTextToSize(String(projReportTitle), contentWidth - 25);
+    doc.text(titleLines, titleX, ty);
+    ty += titleLines.length * 7 + 4;
+  }
+
+  // 3) Site Visit Report NN
+  doc.setFontSize(22);
   doc.setFont("helvetica", "normal");
-  doc.text("SITE VISIT REPORT", titleX, ty); ty += 14;
+  doc.setTextColor(...DARK_BLUE);
+  doc.text(siteVisitHeadingPdf, titleX, ty); ty += 12;
+
+  // 4) Revision N
   doc.setFontSize(14);
+  doc.setTextColor(...DARK_TEXT);
   const rev = data.report.revision || "01";
-  doc.text(`Revision ${rev}`, titleX, ty); ty += 20;
+  doc.text(`Revision ${rev}`, titleX, ty); ty += 18;
+
+  // 5) Date
   doc.setFontSize(12);
   doc.setTextColor(100);
-  doc.text(formatReportDate(new Date().toISOString()), titleX, ty); ty += 16;
+  doc.text(formatReportDate(new Date().toISOString()), titleX, ty); ty += 14;
+
+  // 6) Consultant + 7) Inspector | phone + 8) AFC ref
   doc.setFontSize(11);
   doc.setTextColor(...DARK_TEXT);
   doc.text("Angel Façade Consulting", titleX, ty); ty += 6;
-  doc.text(`${data.project.inspector} | 0407 759 590`, titleX, ty); ty += 6;
+  doc.text(`${projInspector} | 0407 759 590`, titleX, ty); ty += 6;
   doc.text(String(afcRef), titleX, ty);
 
   const addHeader = () => {
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...DARK_TEXT);
-    doc.text(String(data.project.name || "").toUpperCase(), margin, 10);
+    doc.text(String(projName || "").toUpperCase(), margin, 10);
     doc.setFont("helvetica", "normal");
     doc.text("ANGEL FAÇADE CONSULTING", pageWidth - margin, 10, { align: "right" });
     doc.setDrawColor(...ACCENT_BLUE);
@@ -90,7 +136,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(...DARK_TEXT);
-    doc.text(`${afcRef} | ${data.project.address || ""}`, margin, pageHeight - 8);
+    doc.text(`${afcRef} | ${projAddress || ""}`, margin, pageHeight - 8);
     doc.text(`Page ${pn}`, pageWidth - margin, pageHeight - 8, { align: "right" });
   };
 
