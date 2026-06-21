@@ -289,17 +289,25 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     heading: HeadingLevel.HEADING_2, spacing: { after: 100 },
   }));
 
-  const inspectionData: string[][] = [];
-  if (data.report.inspectionDate) inspectionData.push(["Date", formatReportDate(data.report.inspectionDate)]);
-  else inspectionData.push(["Date", reportDate]);
-  if (data.report.inspectionNumber) inspectionData.push(["Inspection Number", safeText(data.report.inspectionNumber)]);
+  // §1.3 Inspection particulars — ONLY inspection-specific fields. Client and
+  // address are already in the §1.1 boilerplate, so they're omitted here to
+  // avoid duplication. Attendees are collapsed into a single multi-line row so
+  // the table stays compact when several people attend.
+  const inspectionData: Array<[string, string]> = [];
+  inspectionData.push(["Date", data.report.inspectionDate ? formatReportDate(data.report.inspectionDate) : reportDate]);
+  if (data.report.inspectionNumber) inspectionData.push(["Inspection number", safeText(inspNumPadded || data.report.inspectionNumber)]);
+  if (data.report.revision) inspectionData.push(["Revision", safeText(data.report.revision)]);
   inspectionData.push(["Inspector", safeText(projInspector)]);
   inspectionData.push(["Locations covered", safeText(data.report.locationsCovered) || safeText(projAddress)]);
-  inspectionData.push(["Client", safeText(projClient)]);
   try {
     const attendees = JSON.parse(data.report.attendees || "[]");
-    if (attendees.length > 0) {
-      attendees.forEach((a: any) => { inspectionData.push([safeText(a.company) || safeText(a.name), safeText(a.name)]); });
+    if (Array.isArray(attendees) && attendees.length > 0) {
+      const lines = attendees.map((a: any) => {
+        const name = safeText(a.name);
+        const company = safeText(a.company);
+        return company ? `${name} (${company})` : name;
+      }).filter((s: string) => s.trim() !== "");
+      if (lines.length > 0) inspectionData.push(["Attendees", lines.join("\n")]);
     }
   } catch {}
 
@@ -316,7 +324,12 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
           }),
           new TableCell({
             width: { size: 75, type: WidthType.PERCENTAGE },
-            children: [new Paragraph({ children: [new TextRun({ text: safeText(value), size: 20, font: "Aptos" })], spacing: { before: 60, after: 60 } })],
+            // Split on newlines so multi-line values (e.g. Attendees) render as
+            // separate paragraphs within a single cell.
+            children: safeText(value).split(/\n/).map((line) => new Paragraph({
+              children: [new TextRun({ text: line, size: 20, font: "Aptos" })],
+              spacing: { before: 40, after: 40 },
+            })),
             borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder },
           }),
         ],

@@ -224,20 +224,33 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   doc.setTextColor(...DARK_TEXT);
   doc.text("1.3 Inspection particulars", margin, y); y += 8;
 
+  // §1.3 Inspection particulars — ONLY inspection-specific fields. Client and
+  // address are already in the §1.1 boilerplate, so they're omitted here. Each
+  // attendee gets its own line so multi-person inspections stay legible.
   const inspRows: string[][] = [];
-  if (data.report.inspectionDate) inspRows.push(["Date", formatReportDate(data.report.inspectionDate)]);
-  else inspRows.push(["Date", formatReportDate(new Date().toISOString())]);
-  if (data.report.inspectionNumber) inspRows.push(["Inspection Number", String(data.report.inspectionNumber)]);
+  inspRows.push(["Date", data.report.inspectionDate ? formatReportDate(data.report.inspectionDate) : formatReportDate(new Date().toISOString())]);
+  if (data.report.inspectionNumber) inspRows.push(["Inspection number", String(inspNumPaddedPdf || data.report.inspectionNumber)]);
+  if (data.report.revision) inspRows.push(["Revision", String(data.report.revision)]);
   inspRows.push(["Inspector", String(projInspector || "")]);
   inspRows.push(["Locations covered", String(data.report.locationsCovered || projAddress || "")]);
-  inspRows.push(["Client", String(projClient || "")]);
   try {
     const attendees = JSON.parse(data.report.attendees || "[]");
-    if (attendees.length > 0) inspRows.push(["Attendees", attendees.map((a: any) => `${a.name} (${a.company})`).join(", ")]);
+    if (Array.isArray(attendees) && attendees.length > 0) {
+      const lines = attendees
+        .map((a: any) => {
+          const name = String(a.name || "");
+          const company = String(a.company || "");
+          return company ? `${name} (${company})` : name;
+        })
+        .filter((s: string) => s.trim() !== "");
+      if (lines.length > 0) inspRows.push(["Attendees", lines.join("\n")]);
+    }
   } catch {}
   autoTable(doc, {
     startY: y, body: inspRows, margin: { left: margin, right: margin },
-    styles: { fontSize: 9, cellPadding: 3 },
+    // overflow:linebreak makes \n inside a cell render as a hard line break,
+    // which is what we want for the multi-line Attendees row.
+    styles: { fontSize: 9, cellPadding: 3, valign: "top", overflow: "linebreak" },
     columnStyles: { 0: { fontStyle: "bold", cellWidth: 35 }, 1: { cellWidth: contentWidth - 35 } },
     theme: "plain",
   });
