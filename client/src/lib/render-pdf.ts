@@ -256,6 +256,109 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   });
   y = (doc as any).lastAutoTable.finalY + 10;
 
+  // §1.4 Background information — flat Harvard reference list. Mirrors the DOCX
+  // §1.4 block: each entry in backgroundDocs JSON renders as one bibliographic
+  // line of the form: Originator (Year). Title. [Type], Doc no. XYZ, Rev. A.
+  // Empty parts are silently omitted so partial entries still render cleanly.
+  // jsPDF cannot mix bold + italic + roman in a single text() call, so each
+  // entry is drawn as head (bold) + title (italic) + tail (roman) using width
+  // measurements to position the segments side-by-side on the same baseline.
+  const bgJsonPdf = resolveProjectField(snap, data.project, "backgroundDocs") || "[]";
+  let bgDocsPdf: Array<{ type?: string; originator?: string; title?: string; docNumbers?: string; revision?: string; date?: string }> = [];
+  try { bgDocsPdf = JSON.parse(bgJsonPdf) || []; } catch { bgDocsPdf = []; }
+  if (Array.isArray(bgDocsPdf) && bgDocsPdf.length > 0) {
+    // Heading style mirrors the §1.3 heading immediately above.
+    if (y + 20 > pageHeight - 20) y = newSection();
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...DARK_TEXT);
+    doc.text("1.4 Background information", margin, y); y += 8;
+    // Intro line — same wording as the DOCX renderer.
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...DARK_TEXT);
+    const bgIntro = "The following documents have been reviewed and form the basis of this inspection.";
+    const bgIntroLines = doc.splitTextToSize(bgIntro, contentWidth);
+    bgIntroLines.forEach((ln: string) => { doc.text(ln, margin, y); y += 5; });
+    y += 2;
+    // 4-digit year regex helper, matches the DOCX yearOf().
+    const yearOfPdf = (d?: string): string => {
+      if (!d) return "";
+      const m = String(d).match(/\b(19|20)\d{2}\b/);
+      return m ? m[0] : String(d);
+    };
+    const sText = (v: any): string => (v == null ? "" : String(v));
+    const hangIndent = 6; // mm — hanging indent for wrapped reference lines.
+    bgDocsPdf.forEach((b) => {
+      const originator = sText(b.originator).trim();
+      const year = yearOfPdf(b.date).trim();
+      const title = sText(b.title).trim();
+      const docNo = sText(b.docNumbers).trim();
+      const rev = sText(b.revision).trim();
+      const type = sText(b.type).trim();
+      const tailParts: string[] = [];
+      if (type) tailParts.push(`[${type}]`);
+      if (docNo) tailParts.push(`Doc no. ${docNo}`);
+      if (rev) tailParts.push(`Rev. ${rev}`);
+      const head = originator ? (year ? `${originator} (${year}). ` : `${originator}. `) : (year ? `(${year}). ` : "");
+      const titleText = title ? `${title}.` : "";
+      const tail = tailParts.length > 0 ? ` ${tailParts.join(", ")}.` : "";
+      const fullPlain = `${head}${titleText}${tail}`;
+      if (!fullPlain.trim()) return;
+      // Wrap the full plain-text version for page-break + multi-line layout.
+      const wrapWidth = contentWidth - hangIndent;
+      const wrapped = doc.splitTextToSize(fullPlain, wrapWidth);
+      const entryHeight = wrapped.length * 5 + 2;
+      if (y + entryHeight > pageHeight - 20) y = newSection();
+      doc.setFontSize(10);
+      doc.setTextColor(...DARK_TEXT);
+      if (wrapped.length === 1) {
+        // Single line: draw the three styled segments side-by-side.
+        let x = margin;
+        if (head) {
+          doc.setFont("helvetica", "bold");
+          doc.text(head, x, y);
+          x += doc.getTextWidth(head);
+        }
+        if (titleText) {
+          doc.setFont("helvetica", "italic");
+          doc.text(titleText, x, y);
+          x += doc.getTextWidth(titleText);
+        }
+        if (tail) {
+          doc.setFont("helvetica", "normal");
+          doc.text(tail, x, y);
+        }
+        y += 5;
+      } else {
+        // Multi-line: try to keep head bold on line 1, then render the rest as
+        // plain roman with hanging indent. Best-effort styling for long titles.
+        const firstLine = wrapped[0];
+        if (head && firstLine.startsWith(head)) {
+          doc.setFont("helvetica", "bold");
+          doc.text(head, margin, y);
+          const headW = doc.getTextWidth(head);
+          doc.setFont("helvetica", "normal");
+          doc.text(firstLine.slice(head.length), margin + headW, y);
+        } else {
+          doc.setFont("helvetica", "normal");
+          doc.text(firstLine, margin, y);
+        }
+        y += 5;
+        doc.setFont("helvetica", "normal");
+        for (let i = 1; i < wrapped.length; i++) {
+          if (y + 5 > pageHeight - 20) y = newSection();
+          doc.text(wrapped[i], margin + hangIndent, y);
+          y += 5;
+        }
+      }
+      y += 2;
+    });
+    y += 4;
+    // Restore default font state so downstream renderers aren't affected.
+    doc.setFont("helvetica", "normal");
+  }
+
   // ===================== SHARED RENDER HELPERS =====================
   const summaryHead = [["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"]];
   // Action List adds a "Category" column immediately after "Responsible".

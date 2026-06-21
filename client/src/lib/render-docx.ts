@@ -338,6 +338,62 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   }));
   introChildren.push(new Paragraph({ spacing: { before: 200 } }));
 
+  // §1.4 Background information — flat Harvard reference list. Each row in the
+  // project's backgroundDocs JSON becomes one bibliographic entry in the form:
+  //   Originator (Year). Title. [Type], Doc no. XYZ, Rev. A.
+  // Empty / missing parts are silently omitted so partial entries still render.
+  const bgJson = resolveProjectField(snap, data.project, "backgroundDocs") || "[]";
+  let bgDocs: Array<{ type?: string; originator?: string; title?: string; docNumbers?: string; revision?: string; date?: string }> = [];
+  try { bgDocs = JSON.parse(bgJson) || []; } catch { bgDocs = []; }
+  if (Array.isArray(bgDocs) && bgDocs.length > 0) {
+    introChildren.push(new Paragraph({
+      children: [new TextRun({ text: "Background information", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+      heading: HeadingLevel.HEADING_2, spacing: { after: 100 },
+    }));
+    introChildren.push(new Paragraph({
+      children: [new TextRun({
+        text: "The following documents have been reviewed and form the basis of this inspection.",
+        size: 20, font: "Aptos",
+      })],
+      spacing: { after: 160 },
+    }));
+    // Render each reference as a hanging-indent paragraph: originator + year in
+    // bold (the standard Harvard author-date head), then the rest as plain text.
+    const yearOf = (d?: string): string => {
+      if (!d) return "";
+      const m = String(d).match(/\b(19|20)\d{2}\b/);
+      return m ? m[0] : String(d);
+    };
+    bgDocs.forEach((b) => {
+      const originator = safeText(b.originator);
+      const year = yearOf(b.date);
+      const title = safeText(b.title);
+      const docNo = safeText(b.docNumbers);
+      const rev = safeText(b.revision);
+      const type = safeText(b.type);
+      // Tail parts (after Originator + Year + Title): type/docNo/rev as a comma list.
+      const tailParts: string[] = [];
+      if (type) tailParts.push(`[${type}]`);
+      if (docNo) tailParts.push(`Doc no. ${docNo}`);
+      if (rev) tailParts.push(`Rev. ${rev}`);
+      const head = originator ? (year ? `${originator} (${year}). ` : `${originator}. `) : (year ? `(${year}). ` : "");
+      const titleText = title ? `${title}.` : "";
+      const tail = tailParts.length > 0 ? ` ${tailParts.join(", ")}.` : "";
+      introChildren.push(new Paragraph({
+        children: [
+          // Harvard convention: author-date head in bold, title italicised, tail roman.
+          ...(head ? [new TextRun({ text: head, bold: true, size: 20, font: "Aptos", color: DARK_TEXT })] : []),
+          ...(titleText ? [new TextRun({ text: titleText, italics: true, size: 20, font: "Aptos", color: DARK_TEXT })] : []),
+          ...(tail ? [new TextRun({ text: tail, size: 20, font: "Aptos", color: DARK_TEXT })] : []),
+        ],
+        // Hanging indent: subsequent lines indent ~360 twips (~6mm) past the first.
+        indent: { left: 360, hanging: 360 },
+        spacing: { before: 40, after: 80 },
+      }));
+    });
+    introChildren.push(new Paragraph({ spacing: { before: 200 } }));
+  }
+
   // ===================== HELPERS: photos + defect page =====================
   const buildWordPhotos = async (photoList: any[], photosAddedIds?: Set<number>): Promise<any[]> => {
     const photoElements: any[] = [];
