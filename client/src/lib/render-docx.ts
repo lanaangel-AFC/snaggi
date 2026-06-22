@@ -15,7 +15,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel,
   truncateWordBoundary, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField,
+  parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -637,19 +637,21 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   };
 
   // ===================== SECTION 2 — ACTION LIST =====================
+  // §2.2 Action List header. Previously emitted as an HEADING_1 stand-alone
+  // section; now demoted to HEADING_2 because the merged §2 Project Status
+  // section owns the HEADING_1 (§2.1 Progress Summary then §2.2 Action List).
   const actionChildren: any[] = [];
   actionChildren.push(new Paragraph({
-    children: [new TextRun({ text: "Action List — This Inspection", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
-    heading: HeadingLevel.HEADING_1, spacing: { after: 100 },
+    children: [new TextRun({ text: "2.2 Action List", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+    heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 100 },
   }));
   actionChildren.push(new Paragraph({
     children: [new TextRun({ text: "Based on our observations, we recommend the following actions.", size: 20, font: "Aptos" })],
     spacing: { after: 200 },
   }));
 
-  // The Action List uses a dedicated 8-column AI layout (§2.2):
-  //   UID | Location | Work item | Observation (truncated) | Action (AI) |
-  //   Responsible | Due Date | Status
+  // Action List (§2.2) now uses a dedicated 6-column layout per the new SVR
+  // template: UID | Area ref | Work item | Observation | Action Required | Status.
   // Carried-forward keeps the original Category-aware layout below.
   const summaryHeaderLabels = ["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"];
   const summaryHeaderWidths = [950, 600, 1300, 2300, 1850, 1300, 1400];
@@ -657,10 +659,17 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   // shrink Work Type (the description column) to keep the total width constant.
   const summaryHeaderLabelsCat = ["ID", "Type", "Location", "Work Type", "Responsible", "Category", "By Date", "Status"];
   const summaryHeaderWidthsCat = [950, 600, 1300, 900, 1850, 1400, 1300, 1400];
-  // Action List AI layout. Widths sum to 9700 DXA (same total as the other modes).
+  // Legacy 8-column Action List (UID|Location|Work item|Obs|Action|Resp|Due|Status).
+  // Retained for any non-Action-List callers that still pass showAction:true.
   const summaryHeaderLabelsAct = ["UID", "Location", "Work item", "Observation", "Action", "Responsible", "Due Date", "Status"];
   const summaryHeaderWidthsAct = [900, 1100, 900, 1900, 2100, 1200, 800, 800];
-  type SummaryMode = { showCategory?: boolean; showAction?: boolean };
+  // §2.2 6-column Action List: UID | Area ref | Work item | Observation |
+  // Action Required (AI) | Status. Widths sum to 9700 DXA.
+  const summaryHeaderLabelsAct6 = ["UID", "Area ref", "Work item", "Observation", "Action Required", "Status"];
+  const summaryHeaderWidthsAct6 = [1100, 1300, 1100, 2400, 2900, 900];
+  // Snapshot-resolved area-ref template used to render the "Area ref" column.
+  const areaRefTemplateForActions: string = String(resolveProjectField(snap, data.project, "areaRefTemplate") || "");
+  type SummaryMode = { showCategory?: boolean; showAction?: boolean; showAct6?: boolean };
   const buildSummaryHeaderRow = (mode: SummaryMode = {}) => {
     const labels = mode.showAction
       ? summaryHeaderLabelsAct
@@ -686,6 +695,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   const buildSummaryRow = (rowUid: string, defect: any, mode: SummaryMode = {}) => {
     const showCategory = !!mode.showCategory;
     const showAction = !!mode.showAction;
+    const showAct6 = !!mode.showAct6;
     const statusText = defect.status === "complete" ? "Complete" : "Open";
     // Overdue := dueDate exists AND dueDate < today AND the item is NOT closed.
     // Closed/Complete (and Archived) items are NEVER flagged overdue even if
@@ -694,31 +704,39 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     const typeText = defect.recordType === "observation" ? "Obs" : "Defect";
     const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
     const locationText = rowUid === defect.uid ? formatDefectLocation(defect, wordDims) : deriveLocation(safeText(rowUid));
-    const widths = showAction
-      ? summaryHeaderWidthsAct
-      : showCategory
-        ? summaryHeaderWidthsCat
-        : summaryHeaderWidths;
+    const widths = showAct6
+      ? summaryHeaderWidthsAct6
+      : showAction
+        ? summaryHeaderWidthsAct
+        : showCategory
+          ? summaryHeaderWidthsCat
+          : summaryHeaderWidths;
     const categoryText = safeText(defect.categoryLabel) || "(uncategorised)";
     // Action List rows: only emit the cached AI summary / fallback for parent
     // rows (rowUid === defect.uid). Sub-location rows leave Observation/Action
     // blank to avoid duplication — the parent row already conveys the work for
     // that defect.
     const isParentRow = rowUid === defect.uid;
-    const observationCell = showAction
+    const observationCell = (showAction || showAct6)
       ? (isParentRow ? truncateWordBoundary(defect.comment, { maxWords: 12, maxChars: 80 }) : "")
       : "";
-    const actionCell = showAction
+    const actionCell = (showAction || showAct6)
       ? (isParentRow ? resolveActionSummary(defect) : "")
       : "";
-    const cellTexts = showAction
+    // §2.2 Area Ref column: substitute the project's areaRefTemplate with this
+    // defect's elevation/drop/level codes; legacy projects (empty template) fall
+    // back to parsing the area-ref portion from the UID.
+    const areaRefCell = showAct6 ? (deriveAreaRef(defect, areaRefTemplateForActions) || "") : "";
+    const cellTexts = showAct6
+      ? [safeText(rowUid), safeText(areaRefCell), getWorkTypeLabel(safeText(defect.uid)), observationCell, actionCell, statusText]
+      : showAction
       ? [safeText(rowUid), locationText, getWorkTypeLabel(safeText(defect.uid)), observationCell, actionCell, safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText]
       : showCategory
         ? [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", categoryText, safeText(defect.dueDate) || "\u2014", statusText]
         : [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
-    const statusIdx = showAction ? 7 : showCategory ? 7 : 6;
-    // Type column index: index 1 in non-action modes, absent (-1) in action mode.
-    const typeColIdx = showAction ? -1 : 1;
+    const statusIdx = showAct6 ? 5 : showAction ? 7 : showCategory ? 7 : 6;
+    // Type column index: index 1 in non-action modes, absent (-1) in act6/action modes.
+    const typeColIdx = (showAction || showAct6) ? -1 : 1;
     const statusColor = statusText === "Complete" ? "228B22" : "C89600";
     // The Status cell shows the base status, and for overdue items appends a
     // red " - Overdue" suffix as a second TextRun (e.g. "Open - Overdue").
@@ -758,10 +776,12 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       children: [new TextRun({ text: safeText(g.label), bold: true, size: 24, font: "Aptos", color: CAPTION_BLUE })],
       spacing: { before: 160, after: 60 },
     }));
-    const rows: any[] = [buildSummaryHeaderRow({ showAction: true })];
+    // §2.2 emits the new 6-column layout via showAct6. The legacy 8-column
+    // showAction layout is retained in the helpers but no longer wired here.
+    const rows: any[] = [buildSummaryHeaderRow({ showAct6: true })];
     for (const d of g.defects) {
-      rows.push(buildSummaryRow(d.uid, d, { showAction: true }));
-      if (d.locations && d.locations.length > 0) for (const loc of d.locations) rows.push(buildSummaryRow(loc.uid || "", d, { showAction: true }));
+      rows.push(buildSummaryRow(d.uid, d, { showAct6: true }));
+      if (d.locations && d.locations.length > 0) for (const loc of d.locations) rows.push(buildSummaryRow(loc.uid || "", d, { showAct6: true }));
     }
     actionChildren.push(new Table({ width: { size: 9700, type: WidthType.DXA }, layout: TableLayoutType.FIXED, rows }));
   }
@@ -769,12 +789,45 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     actionChildren.push(new Paragraph({ children: [new TextRun({ text: "Nothing for this report.", size: 20, font: "Aptos", color: "999999", italics: true })] }));
   }
 
-  // ===================== SECTION 3 — PROJECT STATUS =====================
+  // ===================== SECTION 2 — PROJECT STATUS =====================
+  // Restructured per the AFC SVR template: §2 Project Status owns the
+  // HEADING_1, with §2.1 Progress Summary first and §2.2 Action List second.
+  // The actionChildren content (built above) is appended after the Progress
+  // Summary block so the Action List sits as the second sub-section of §2.
+  // Existing narratives / program / stage map blocks render after §2.2 as
+  // additional sub-sections of §2 without explicit numbering.
   const statusChildren: any[] = [];
   statusChildren.push(new Paragraph({
-    children: [new TextRun({ text: "Project Status", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
+    children: [new TextRun({ text: "2. Project Status", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })],
     heading: HeadingLevel.HEADING_1, spacing: { after: 120 },
   }));
+  // §2.1 Progress Summary — always rendered; tree.progressSummary is now
+  // computed for every profile (commit 10 lifted the client-only gate).
+  if (tree.progressSummary) {
+    const ps = tree.progressSummary;
+    statusChildren.push(new Paragraph({
+      children: [new TextRun({ text: "2.1 Progress Summary", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+      heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 80 },
+    }));
+    // Row order matches the SVR template TOC: Total / Open / Closed / Overdue.
+    const psRows: string[][] = [
+      ["Total", String(ps.total)],
+      ["Open", String(ps.open)],
+      ["Closed this period", String(ps.closedThisPeriod)],
+      ["Overdue", String(ps.overdue)],
+    ];
+    statusChildren.push(new Table({
+      width: { size: 60, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED,
+      rows: psRows.map(([l, v]) => new TableRow({ children: [
+        new TableCell({ width: { size: 60, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: safeText(l), bold: true, size: 18, font: "Aptos" })], spacing: { before: 40, after: 40 } })], borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder } }),
+        new TableCell({ width: { size: 40, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: safeText(v), size: 18, font: "Aptos", color: CAPTION_BLUE })], spacing: { before: 40, after: 40 } })], borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder } }),
+      ] })),
+    }));
+  }
+  // §2.2 Action List — inline the actionChildren array built above.
+  for (const child of actionChildren) statusChildren.push(child);
+  // After §2.2, fall through to existing narratives / program / stage map
+  // (additional Project Status detail, no explicit sub-numbering).
   if (tree.projectStatus.empty) {
     statusChildren.push(new Paragraph({ children: [new TextRun({ text: "Nothing for this report.", size: 20, font: "Aptos", color: "999999", italics: true })] }));
   } else {
@@ -837,29 +890,10 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     }
   }
 
-  // ===================== CLIENT-ONLY — PROGRESS SUMMARY =====================
-  if (tree.progressSummary) {
-    const ps = tree.progressSummary;
-    statusChildren.push(new Paragraph({
-      children: [new TextRun({ text: "Progress Summary", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
-      heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 80 },
-    }));
-    const psRows: string[][] = [
-      ["Open", String(ps.open)],
-      ["Closed this period", String(ps.closedThisPeriod)],
-      ["Overdue", String(ps.overdue)],
-      ["Total", String(ps.total)],
-    ];
-    statusChildren.push(new Table({
-      width: { size: 60, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED,
-      rows: psRows.map(([l, v]) => new TableRow({ children: [
-        new TableCell({ width: { size: 60, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: safeText(l), bold: true, size: 18, font: "Aptos" })], spacing: { before: 40, after: 40 } })], borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder } }),
-        new TableCell({ width: { size: 40, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: safeText(v), size: 18, font: "Aptos", color: CAPTION_BLUE })], spacing: { before: 40, after: 40 } })], borders: { top: noBorder, left: noBorder, right: noBorder, bottom: thinBorder } }),
-      ] })),
-    }));
-  }
+  // §2.1 Progress Summary was previously emitted here under a CLIENT-ONLY gate.
+  // The block has moved up to the top of §2 Project Status (commit 10).
 
-  // ===================== SECTION 4 — THIS INSPECTION =====================
+  // ===================== SECTION 3 — THIS INSPECTION =====================
   // Walk new/amended/completed; within each, walk category groups in profile order.
   const buildBucketSection = async (title: string, subtitle: string, groups: CategoryGroup[], showChangeSummary: boolean): Promise<any[]> => {
     const children: any[] = [];
@@ -882,9 +916,9 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     return children;
   };
 
-  // ===================== SECTION 5 — CARRIED-FORWARD REGISTER =====================
+  // ===================== SECTION 4 — CARRIED-FORWARD REGISTER =====================
   const carriedChildren: any[] = [];
-  carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "Carried-forward Register", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }));
+  carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "4. Carried-forward Register", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }));
   carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "Open items not covered in this inspection's locations.", size: 18, color: "666666", italics: true, font: "Aptos" })], spacing: { after: 160 } }));
   if (tree.carriedForward.empty) {
     carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "Nothing for this report.", size: 20, font: "Aptos", color: "999999", italics: true })] }));
@@ -902,9 +936,9 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     }
   }
 
-  // ===================== SECTION 6 — APPENDICES =====================
+  // ===================== SECTION 5 — APPENDICES =====================
   const appendixChildren: any[] = [];
-  appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "Appendices", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 120 } }));
+  appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "5. Appendices", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 120 } }));
   if (tree.appendixMode === "reference") {
     appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "Technical Method Statements", size: 28, font: "Aptos", bold: true, color: CAPTION_BLUE })], spacing: { after: 60 } }));
     appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "Refer to the contractor report for full technical method statements.", size: 20, font: "Aptos" })], spacing: { after: 160 } }));
@@ -925,10 +959,15 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     footers: { default: defaultFooter },
   };
 
+  // Section emission order after the §2.2 restructure (commit 10):
+  //   cover → §1 intro → §2 status (contains §2.1 Progress Summary + §2.2
+  //   Action List + narratives/program/stageMap) → §3 This Inspection → §4
+  //   Carried-forward → §5 Appendices.
+  // actionChildren is no longer emitted as its own section — its content is
+  // merged into statusChildren above so the Action List sits under §2.
   const docSections: any[] = [
     { properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 851, right: 1440, bottom: 1440, left: 1440 } } }, children: coverChildren },
     { properties: sectionProps, children: introChildren },
-    { properties: sectionProps, children: actionChildren },
     { properties: sectionProps, children: statusChildren },
   ];
 
@@ -944,7 +983,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   }
   if (tree.thisInspection.empty) {
     docSections.push({ properties: sectionProps, children: [
-      new Paragraph({ children: [new TextRun({ text: "This Inspection", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }),
+      new Paragraph({ children: [new TextRun({ text: "3. This Inspection", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }),
       new Paragraph({ children: [new TextRun({ text: "Nothing for this report.", size: 20, font: "Aptos", color: "999999", italics: true })] }),
     ] });
   }

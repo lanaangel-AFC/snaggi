@@ -16,6 +16,7 @@ import {
   comparePhotoSlots, photoSlotLabel,
   truncateWordBoundary, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField,
+  deriveAreaRef,
 } from "./render-helpers";
 
 export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
@@ -48,6 +49,8 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
   const projInspector   = resolveProjectField(snap, data.project, "inspector");
   const afcRef          = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
+  // §2.2 area-ref template (used by the 6-col Action List to derive Area ref per defect).
+  const areaRefTemplateForPdf: string = String(resolveProjectField(snap, data.project, "areaRefTemplate") || "");
 
   // §1.7 inspection number, zero-padded to 2 digits for the title-page heading.
   const inspNumRawPdf = String(data.report.inspectionNumber || "").trim();
@@ -422,18 +425,22 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   // Observation/Action cells blank since the parent row carries the cached
   // AI summary for that defect.
   const summaryHeadAct = [["UID", "Location", "Work item", "Observation", "Action", "Responsible", "Due Date", "Status"]];
-  type SummaryMode = { showCategory?: boolean; showAction?: boolean };
+  // §2.2 6-column Action List (per new template):
+  //   UID / Area ref / Work item / Observation / Action Required / Status
+  const summaryHeadAct6 = [["UID", "Area ref", "Work item", "Observation", "Action Required", "Status"]];
+  type SummaryMode = { showCategory?: boolean; showAction?: boolean; showAct6?: boolean };
   // showAction is true only for the Action List; showCategory is kept for
   // older Carried-forward callers. Default {} → original 7-column layout.
   const renderSummaryTable = (defects: any[], startY: number, mode: SummaryMode = {}) => {
     const showCategory = !!mode.showCategory;
     const showAction = !!mode.showAction;
+    const showAct6 = !!mode.showAct6;
     const body: string[][] = [];
     // Per-body-row overdue flag (parallel to `body`). A defect's sub-location
     // rows inherit the parent's overdue state since they share the same status.
     const overdueByRow: boolean[] = [];
-    // Status column index: 7 for both action and category modes, 6 otherwise.
-    const statusColIdx = showAction ? 7 : showCategory ? 7 : 6;
+    // Status column index: 5 for act6, 7 for action/category modes, 6 otherwise.
+    const statusColIdx = showAct6 ? 5 : showAction ? 7 : showCategory ? 7 : 6;
     for (const d of defects) {
       const cat = d.categoryLabel || "(uncategorised)";
       // Overdue := dueDate < today AND not closed/archived (shared helper).
@@ -441,6 +448,33 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
       // intact; the red " - Overdue" suffix is drawn in didDrawCell below.
       const overdue = isDefectOverdue(d);
       const statusText = d.status === "complete" ? "Complete" : "Open";
+      if (showAct6) {
+        // §2.2 6-col layout: UID / Area ref / Work item / Observation / Action Required / Status.
+        const areaRefCell = deriveAreaRef(d, areaRefTemplateForPdf) || "";
+        body.push([
+          d.uid,
+          areaRefCell,
+          getWorkTypeLabel(d.uid),
+          truncateWordBoundary(d.comment, { maxWords: 12, maxChars: 80 }),
+          resolveActionSummary(d),
+          statusText,
+        ]);
+        overdueByRow.push(overdue);
+        if (d.locations && d.locations.length > 0) for (const loc of d.locations) {
+          const locUid = loc.uid || "";
+          // Sub-location rows: blank Observation + Action Required (parent carries them).
+          body.push([
+            locUid,
+            areaRefCell,
+            getWorkTypeLabel(d.uid),
+            "",
+            "",
+            statusText,
+          ]);
+          overdueByRow.push(overdue);
+        }
+        continue;
+      }
       if (showAction) {
         // Parent row: full Observation (truncated) + AI/fallback Action.
         body.push([
@@ -487,13 +521,16 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     // shrink Work Type (description) to keep the table within the same span.
     // Action mode widths also sum to 166 (14+22+14+36+38+22+10+10) so the
     // table spans the same content width as the other two modes.
-    const columnStyles: Record<number, { cellWidth: number }> = showAction
-      ? { 0: { cellWidth: 14 }, 1: { cellWidth: 22 }, 2: { cellWidth: 14 }, 3: { cellWidth: 36 }, 4: { cellWidth: 38 }, 5: { cellWidth: 22 }, 6: { cellWidth: 10 }, 7: { cellWidth: 10 } }
-      : showCategory
-        ? { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 14 }, 4: { cellWidth: 30 }, 5: { cellWidth: 20 }, 6: { cellWidth: 26 }, 7: { cellWidth: 20 } }
-        : { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 34 }, 4: { cellWidth: 30 }, 5: { cellWidth: 26 }, 6: { cellWidth: 20 } };
+    // act6 widths sum to 166 (16+22+18+44+52+14) — same content span as the other modes.
+    const columnStyles: Record<number, { cellWidth: number }> = showAct6
+      ? { 0: { cellWidth: 16 }, 1: { cellWidth: 22 }, 2: { cellWidth: 18 }, 3: { cellWidth: 44 }, 4: { cellWidth: 52 }, 5: { cellWidth: 14 } }
+      : showAction
+        ? { 0: { cellWidth: 14 }, 1: { cellWidth: 22 }, 2: { cellWidth: 14 }, 3: { cellWidth: 36 }, 4: { cellWidth: 38 }, 5: { cellWidth: 22 }, 6: { cellWidth: 10 }, 7: { cellWidth: 10 } }
+        : showCategory
+          ? { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 14 }, 4: { cellWidth: 30 }, 5: { cellWidth: 20 }, 6: { cellWidth: 26 }, 7: { cellWidth: 20 } }
+          : { 0: { cellWidth: 20 }, 1: { cellWidth: 12 }, 2: { cellWidth: 24 }, 3: { cellWidth: 34 }, 4: { cellWidth: 30 }, 5: { cellWidth: 26 }, 6: { cellWidth: 20 } };
     autoTable(doc, {
-      startY, head: showAction ? summaryHeadAct : showCategory ? summaryHeadCat : summaryHead, body, margin: { left: margin, right: margin },
+      startY, head: showAct6 ? summaryHeadAct6 : showAction ? summaryHeadAct : showCategory ? summaryHeadCat : summaryHead, body, margin: { left: margin, right: margin },
       styles: { fontSize: 6.5, cellPadding: 1.5, overflow: "linebreak", valign: "top" },
       headStyles: { fillColor: [255, 255, 255], textColor: [...CAPTION_BLUE], fontStyle: "bold", lineWidth: { bottom: 0.5 }, lineColor: [...DARK_TEXT] },
       columnStyles,
@@ -696,24 +733,51 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     return yy;
   };
 
-  // ===================== SECTION 2 — ACTION LIST =====================
+  // ===================== SECTION 2 — PROJECT STATUS =====================
+  // New template structure: §2 Project Status contains §2.1 Progress Summary first,
+  // then §2.2 Action List, then narratives/program/stageMap fall through.
   y = newSection();
-  y = sectionHeading("2. Action List — This Inspection", "Based on our observations, we recommend the following actions.", y);
+  y = sectionHeading("2. Project Status", "", y);
+
+  // §2.1 Progress Summary — auto-computed for all profiles. Row order from template:
+  //   Total / Open / Closed this period / Overdue
+  if (tree.progressSummary) {
+    const ps = tree.progressSummary;
+    if (y + 30 > pageHeight - 20) y = newSection();
+    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT);
+    doc.text("2.1 Progress Summary", margin, y); y += 6;
+    autoTable(doc, {
+      startY: y,
+      body: [
+        ["Total", String(ps.total)],
+        ["Open", String(ps.open)],
+        ["Closed this period", String(ps.closedThisPeriod)],
+        ["Overdue", String(ps.overdue)],
+      ],
+      margin: { left: margin, right: margin }, styles: { fontSize: 9, cellPadding: 2.5 },
+      columnStyles: { 0: { fontStyle: "bold", cellWidth: 60 }, 1: { cellWidth: 30 } }, theme: "grid",
+      didDrawPage: () => { addHeader(); addFooter(); },
+    });
+    y = (doc as any).lastAutoTable.finalY + 6;
+  }
+
+  // §2.2 Action List — 6-column AI layout per new template.
+  if (y + 16 > pageHeight - 20) y = newSection();
+  doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT);
+  doc.text("2.2 Action List", margin, y); y += 7;
+  doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(100);
+  doc.text("Based on our observations, we recommend the following actions.", margin, y); y += 6;
   let actionHasContent = false;
   for (const g of tree.actionList.groups) {
     actionHasContent = true;
     if (g.kind === "summary") { y = summaryNoteLine(g, y); continue; }
     y = groupSubheading(g.label, y);
-    y = renderSummaryTable(g.defects, y, { showAction: true });
+    y = renderSummaryTable(g.defects, y, { showAct6: true });
   }
-  if (!actionHasContent) { doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y); }
+  if (!actionHasContent) { doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y); y += 6; }
 
-  // ===================== SECTION 3 — PROJECT STATUS =====================
-  y = newSection();
-  y = sectionHeading("3. Project Status", "", y);
-  if (tree.projectStatus.empty) {
-    doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y); y += 6;
-  } else {
+  // Narratives / program / stage map fall through under §2 Project Status.
+  if (!tree.projectStatus.empty) {
     for (const n of tree.projectStatus.narratives) {
       if (y + 16 > pageHeight - 20) y = newSection();
       doc.setFontSize(12); doc.setFont("helvetica", "bold"); doc.setTextColor(...CAPTION_BLUE);
@@ -755,21 +819,10 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     }
   }
 
-  // ===================== CLIENT-ONLY — PROGRESS SUMMARY =====================
-  if (tree.progressSummary) {
-    const ps = tree.progressSummary;
-    if (y + 30 > pageHeight - 20) y = newSection();
-    doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT); doc.text("Progress Summary", margin, y); y += 6;
-    autoTable(doc, {
-      startY: y, body: [["Open", String(ps.open)], ["Closed this period", String(ps.closedThisPeriod)], ["Overdue", String(ps.overdue)], ["Total", String(ps.total)]],
-      margin: { left: margin, right: margin }, styles: { fontSize: 9, cellPadding: 2.5 },
-      columnStyles: { 0: { fontStyle: "bold", cellWidth: 60 }, 1: { cellWidth: 30 } }, theme: "grid",
-      didDrawPage: () => { addHeader(); addFooter(); },
-    });
-    y = (doc as any).lastAutoTable.finalY + 6;
-  }
+  // (§2.1 Progress Summary now lives inside §2 Project Status above — client-only
+  //  trailing block removed as part of the §2.1/§2.2 restructure.)
 
-  // ===================== SECTION 4 — THIS INSPECTION =====================
+  // ===================== SECTION 3 — THIS INSPECTION =====================
   const renderBucket = async (title: string, subtitle: string, groups: CategoryGroup[], showChangeSummary: boolean) => {
     if (groups.length === 0) return;
     let yy = newSection();
@@ -782,7 +835,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   };
   if (tree.thisInspection.empty) {
     y = newSection();
-    y = sectionHeading("4. This Inspection", "", y);
+    y = sectionHeading("3. This Inspection", "", y);
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y);
   } else {
     await renderBucket("NEW THIS INSPECTION", "Items added during this inspection.", tree.thisInspection.new, false);
@@ -790,9 +843,9 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     await renderBucket("COMPLETED THIS INSPECTION", "Items marked complete during this inspection.", tree.thisInspection.completed, true);
   }
 
-  // ===================== SECTION 5 — CARRIED-FORWARD REGISTER =====================
+  // ===================== SECTION 4 — CARRIED-FORWARD REGISTER =====================
   y = newSection();
-  y = sectionHeading("5. Carried-forward Register", "Open items not covered in this inspection's locations.", y);
+  y = sectionHeading("4. Carried-forward Register", "Open items not covered in this inspection's locations.", y);
   if (tree.carriedForward.empty) {
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y);
   } else {
@@ -803,9 +856,9 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     }
   }
 
-  // ===================== SECTION 6 — APPENDICES =====================
+  // ===================== SECTION 5 — APPENDICES =====================
   y = newSection();
-  y = sectionHeading("6. Appendices", "", y);
+  y = sectionHeading("5. Appendices", "", y);
   if (tree.appendixMode === "reference") {
     doc.setFontSize(12); doc.setFont("helvetica", "bold"); doc.setTextColor(...CAPTION_BLUE); doc.text("Technical Method Statements", margin, y); y += 6;
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(60);

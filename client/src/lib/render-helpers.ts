@@ -305,6 +305,41 @@ export function deriveLocation(uid: string): string {
   return segments.join(", ");
 }
 
+// Derive the project-specific "Area Ref" string for a defect. Two modes:
+//   1. Template mode (new projects): substitute the project's areaRefTemplate
+//      placeholders {elevation} {drop} {level} with this defect's codes.
+//      Example: template "{elevation}{drop}-{level}", defect codes E/4/7 → "E4-7".
+//      Empty / missing codes substitute as the empty string, which may leave
+//      stray separators; we collapse runs of "-" to a single dash and trim.
+//   2. Legacy mode (empty template): re-assemble the area-ref portion of the
+//      defect's UID by joining elevation/drop/level codes with "-", matching
+//      the visible left-hand side of the legacy 5-part UID. Example:
+//      defect UID "E-04-10-PD-01" → area ref "E-04-10".
+export function deriveAreaRef(defect: any, areaRefTemplate: string): string {
+  const elev = defect?.elevationCode || "";
+  const drp = defect?.dropCode || "";
+  const lvl = defect?.levelCode || "";
+  if (areaRefTemplate && areaRefTemplate.trim()) {
+    let out = areaRefTemplate
+      .replace(/\{elevation\}/g, String(elev))
+      .replace(/\{drop\}/g, String(drp))
+      .replace(/\{level\}/g, String(lvl));
+    // Collapse stray separator runs left by empty substitutions, e.g.
+    // "E--7" → "E-7", and trim leading/trailing dashes/underscores/dots.
+    out = out.replace(/-{2,}/g, "-").replace(/^[-_.\s]+|[-_.\s]+$/g, "");
+    return out;
+  }
+  // Legacy fallback: parse the area-ref portion from the UID. The UID is
+  // split by "-"; the work-type code is the first 2-3 letter alphabetic
+  // group, and everything before it forms the Area Ref.
+  const uid: string = String(defect?.uid || "");
+  if (!uid) return "";
+  const parts = uid.split("-");
+  const wtIdx = parts.findIndex((p) => /^[A-Z]{2,3}$/i.test(p));
+  if (wtIdx <= 0) return "";
+  return parts.slice(0, wtIdx).join("-");
+}
+
 // SINGLE source of truth for a defect's location string in BOTH the register and
 // the card. Prefers the structured location object (location_structured) via the
 // shared formatLocation() helper; falls back to UID parsing for legacy rows.

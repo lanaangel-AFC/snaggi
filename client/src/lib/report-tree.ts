@@ -571,8 +571,13 @@ export function buildReportTree(
     return false;
   };
 
+  // §2.1 Progress Summary — computed for every report regardless of profile so
+  // both client and contractor exports show the same four metrics under §2.1.
+  // Previously gated to profile === "client"; that gate was removed in commit
+  // 10 (§2.1 restructure) because the AFC SVR template places the summary in
+  // §2 Project Status for all audiences.
   let progressSummary: ProgressSummary | null = null;
-  if (profile === "client") {
+  {
     const today = new Date();
     let open = 0, closedThisPeriod = 0, overdue = 0;
     for (const d of includedDefects) {
