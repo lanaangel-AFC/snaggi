@@ -359,6 +359,61 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     doc.setFont("helvetica", "normal");
   }
 
+  // §1.5 Defect/observation UID nomenclature — fixed boilerplate from the AFC
+  // SVR template. Renders unconditionally (every report includes this section).
+  // §1.5.1 "Unique identifier" follows as a bolded subsection heading.
+  if (y + 24 > pageHeight - 20) y = newSection();
+  doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT);
+  doc.text("1.5 Defect/observation UID nomenclature", margin, y); y += 8;
+  doc.setFontSize(12); doc.setFont("helvetica", "bold");
+  doc.text("1.5.1 Unique identifier", margin, y); y += 6;
+  doc.setFontSize(10); doc.setFont("helvetica", "normal");
+  const uidParas: string[] = [
+    "Throughout the document, observations and defects are referred to by their unique identifier (UID).",
+    "The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.",
+  ];
+  uidParas.forEach((para) => {
+    const lines = doc.splitTextToSize(para, contentWidth);
+    const h = lines.length * 5 + 2;
+    if (y + h > pageHeight - 20) y = newSection();
+    lines.forEach((ln: string) => { doc.text(ln, margin, y); y += 5; });
+    y += 2;
+  });
+  y += 4;
+
+  // §1.6 Limitations — fixed 9-bullet list, verbatim from the template. Each
+  // bullet is rendered with a leading "\u2022" glyph and a hanging indent so
+  // wrapped lines align with the bullet text, matching the DOCX layout.
+  if (y + 20 > pageHeight - 20) y = newSection();
+  doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT);
+  doc.text("1.6 Limitations", margin, y); y += 8;
+  doc.setFontSize(10); doc.setFont("helvetica", "normal");
+  const limitationsBulletsPdf: string[] = [
+    "The extent of our inspection is limited to the external surfaces of the building where works are underway unless otherwise noted within this report.",
+    "Only those works nominated above form part of AFC\u2019s scope for inspection.",
+    "The Contractor remains wholly responsible for construction documentation, workmanship, testing, installation, certification and guarantees.",
+    "Visual inspection of the facade was undertaken at safely accessible areas only. Harnesses, fall arrest and fall restraint systems and equipment were utilised where necessary.",
+    "Our assessments are based on a limited visual inspection of the areas identified only and do not include dimensional and engineering checks. AFC does not accept liability for items that have not been inspected and not identified in the photographs.",
+    "No materials sampling or testing, destructive investigations, water testing or structural analysis of the existing facade systems has been carried out by AFC.",
+    "By virtue of the scope and scale of this work, AFC can\u2019t make comment on any possible structural inadequacies of the facade design, fabrication or installation.",
+    "Our inspection will not allow assessment of other aspects of fa\u00e7ade performance such as acoustics, building sealing, damp and weatherproofing or solar/thermal performance.",
+    "This report has been prepared for the exclusive use of the nominated Client and shall therefore not be relied upon by any third party without their express written consent.",
+  ];
+  const bulletIndent = 5; // mm — hanging indent for wrapped bullet lines.
+  limitationsBulletsPdf.forEach((bullet) => {
+    const wrapped = doc.splitTextToSize(bullet, contentWidth - bulletIndent);
+    const h = wrapped.length * 5 + 2;
+    if (y + h > pageHeight - 20) y = newSection();
+    // Bullet glyph on the first line; subsequent wrapped lines indent to align.
+    doc.text("\u2022", margin, y);
+    wrapped.forEach((ln: string) => {
+      doc.text(ln, margin + bulletIndent, y);
+      y += 5;
+    });
+    y += 1;
+  });
+  y += 4;
+
   // ===================== SHARED RENDER HELPERS =====================
   const summaryHead = [["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"]];
   // Action List adds a "Category" column immediately after "Responsible".

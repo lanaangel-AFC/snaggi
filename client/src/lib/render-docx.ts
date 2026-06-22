@@ -394,6 +394,61 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     introChildren.push(new Paragraph({ spacing: { before: 200 } }));
   }
 
+  // §1.5 Defect/observation UID nomenclature — fixed boilerplate from the AFC
+  // SVR template. The section explains the UID structure and is identical for
+  // every report, so the text is hard-coded here (no project-level override).
+  // §1.5.1 "Unique identifier" is rendered as a HEADING_3 subsection.
+  introChildren.push(new Paragraph({
+    children: [new TextRun({ text: "Defect/observation UID nomenclature", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+    heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 100 },
+  }));
+  introChildren.push(new Paragraph({
+    children: [new TextRun({ text: "Unique identifier", size: 28, font: "Aptos", bold: true, color: DARK_TEXT })],
+    heading: HeadingLevel.HEADING_3, spacing: { before: 80, after: 80 },
+  }));
+  introChildren.push(new Paragraph({
+    children: [new TextRun({
+      text: "Throughout the document, observations and defects are referred to by their unique identifier (UID).",
+      size: 22, font: "Aptos", color: DARK_TEXT,
+    })],
+    spacing: { after: 80 },
+  }));
+  introChildren.push(new Paragraph({
+    children: [new TextRun({
+      text: "The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.",
+      size: 22, font: "Aptos", color: DARK_TEXT,
+    })],
+    spacing: { after: 160 },
+  }));
+
+  // §1.6 Limitations — fixed 9-bullet list, verbatim from the template. Rendered
+  // as manual-bulleted paragraphs ("\u2022 " prefix + hanging indent) rather
+  // than a Word numbering definition, to avoid adding a numbering.xml config
+  // for a single use site. Indentation matches the §1.4 reference list.
+  const limitationsBullets: string[] = [
+    "The extent of our inspection is limited to the external surfaces of the building where works are underway unless otherwise noted within this report.",
+    "Only those works nominated above form part of AFC\u2019s scope for inspection.",
+    "The Contractor remains wholly responsible for construction documentation, workmanship, testing, installation, certification and guarantees.",
+    "Visual inspection of the facade was undertaken at safely accessible areas only. Harnesses, fall arrest and fall restraint systems and equipment were utilised where necessary.",
+    "Our assessments are based on a limited visual inspection of the areas identified only and do not include dimensional and engineering checks. AFC does not accept liability for items that have not been inspected and not identified in the photographs.",
+    "No materials sampling or testing, destructive investigations, water testing or structural analysis of the existing facade systems has been carried out by AFC.",
+    "By virtue of the scope and scale of this work, AFC can\u2019t make comment on any possible structural inadequacies of the facade design, fabrication or installation.",
+    "Our inspection will not allow assessment of other aspects of fa\u00e7ade performance such as acoustics, building sealing, damp and weatherproofing or solar/thermal performance.",
+    "This report has been prepared for the exclusive use of the nominated Client and shall therefore not be relied upon by any third party without their express written consent.",
+  ];
+  introChildren.push(new Paragraph({
+    children: [new TextRun({ text: "Limitations", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+    heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 100 },
+  }));
+  limitationsBullets.forEach((bullet) => {
+    introChildren.push(new Paragraph({
+      children: [new TextRun({ text: `\u2022\t${bullet}`, size: 22, font: "Aptos", color: DARK_TEXT })],
+      indent: { left: 360, hanging: 220 },
+      spacing: { before: 40, after: 60 },
+    }));
+  });
+  introChildren.push(new Paragraph({ spacing: { before: 200 } }));
+
   // ===================== HELPERS: photos + defect page =====================
   const buildWordPhotos = async (photoList: any[], photosAddedIds?: Set<number>): Promise<any[]> => {
     const photoElements: any[] = [];
