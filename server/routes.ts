@@ -1495,6 +1495,135 @@ export async function registerRoutes(
     res.json({ ok: true, ...result });
   });
 
+  // One-off legacy photo dedup cleanup for project 5. Removes spurious null-origin
+  // "twin" photo rows that duplicate a real carried row sharing the same
+  // (defect_id, slot) but with a non-null origin_report_id. A null-origin row is
+  // ONLY deletable when such a sibling exists — a sole photo for its slot is never
+  // touched. Scope is hardcoded to project 5; dryRun defaults to true (fail-safe).
+  app.post("/api/admin/photo-dedup-cleanup", async (req, res) => {
+    const PROJECT_ID = 5;
+    try {
+      // Fail-safe: only an explicit dryRun:false performs deletes.
+      const dryRun = req.body?.dryRun !== false;
+
+      // Candidates: null-origin photos under project 5, with defect uid for reporting.
+      const candidates = sqlite.prepare(
+        `SELECT p.id, p.defect_id, p.slot, p.filename, d.uid AS defect_uid
+         FROM photos p
+         JOIN defects d ON d.id = p.defect_id
+         WHERE d.project_id = ? AND p.origin_report_id IS NULL
+         ORDER BY p.defect_id, p.slot, p.id`
+      ).all(PROJECT_ID) as {
+        id: number; defect_id: number; slot: string; filename: string; defect_uid: string;
+      }[];
+
+      const findSibling = sqlite.prepare(
+        `SELECT id FROM photos
+         WHERE defect_id = ? AND slot = ? AND origin_report_id IS NOT NULL
+         ORDER BY id ASC LIMIT 1`
+      );
+
+      const toDelete: {
+        id: number; defect_id: number; defect_uid: string; slot: string;
+        filename: string; sibling_id: number;
+      }[] = [];
+      const skipped: {
+        id: number; defect_id: number; defect_uid: string; slot: string; filename: string;
+      }[] = [];
+
+      for (const c of candidates) {
+        const sibling = findSibling.get(c.defect_id, c.slot) as { id: number } | undefined;
+        if (sibling) {
+          toDelete.push({
+            id: c.id, defect_id: c.defect_id, defect_uid: c.defect_uid,
+            slot: c.slot, filename: c.filename, sibling_id: sibling.id,
+          });
+        } else {
+          skipped.push({
+            id: c.id, defect_id: c.defect_id, defect_uid: c.defect_uid,
+            slot: c.slot, filename: c.filename,
+          });
+        }
+      }
+
+      console.log(`[photo-dedup-cleanup] dryRun=${dryRun}, candidatesFound=${candidates.length}`);
+
+      if (dryRun) {
+        const summary = {
+          dryRun: true,
+          dryRunCount: toDelete.length,
+          candidates: toDelete,
+          skipped,
+        };
+        console.log("[photo-dedup-cleanup]", JSON.stringify(summary));
+        return res.json(summary);
+      }
+
+      // Live run — all DB deletes in a single transaction. Per-row we RE-CHECK the
+      // sibling inside the transaction (don't trust the pre-select) so a concurrent
+      // write can never let us delete the sole photo for a (defect_id, slot).
+      const fileErrors: { id: number; filename: string; error: string }[] = [];
+      let deletedRows = 0;
+      let deletedFiles = 0;
+
+      const delRow = sqlite.prepare(`DELETE FROM photos WHERE id = ?`);
+
+      const runDeletes = sqlite.transaction(() => {
+        for (const row of toDelete) {
+          const sibling = findSibling.get(row.defect_id, row.slot) as { id: number } | undefined;
+          if (!sibling) {
+            // Safety net: sibling vanished since pre-select — never delete a sole photo.
+            console.warn(
+              `[photo-dedup-cleanup] skip id=${row.id} defect=${row.defect_uid} slot=${row.slot}: no non-null sibling at delete time`
+            );
+            skipped.push({
+              id: row.id, defect_id: row.defect_id, defect_uid: row.defect_uid,
+              slot: row.slot, filename: row.filename,
+            });
+            continue;
+          }
+
+          delRow.run(row.id);
+          deletedRows++;
+
+          // Best-effort file unlink — must NEVER throw out of the transaction.
+          let unlinkResult: string;
+          try {
+            fs.unlinkSync(path.join(uploadDir, row.filename));
+            deletedFiles++;
+            unlinkResult = "deleted";
+          } catch (err: any) {
+            if (err?.code === "ENOENT") {
+              unlinkResult = "missing (ENOENT)";
+            } else {
+              unlinkResult = `error: ${err?.message || String(err)}`;
+              fileErrors.push({ id: row.id, filename: row.filename, error: err?.message || String(err) });
+            }
+          }
+
+          console.log(
+            `[photo-dedup-cleanup] deleted row id=${row.id} defect=${row.defect_uid} slot=${row.slot} file=${row.filename} unlink=${unlinkResult}`
+          );
+        }
+      });
+      runDeletes();
+
+      const summary = {
+        dryRun: false,
+        dryRunCount: toDelete.length,
+        deletedRows,
+        deletedFiles,
+        skipped,
+        fileErrors,
+      };
+      console.log("[photo-dedup-cleanup]", JSON.stringify(summary));
+      res.json(summary);
+    } catch (err: any) {
+      console.error("Error in photo-dedup-cleanup:", err);
+      res.status(500).json({ message: err.message || "Failed to run photo dedup cleanup" });
+    }
+  });
+
   // ==================== UID MIGRATION PREVIEW (Stage 1 — READ ONLY) ====================
   // PREVIEW ONLY. This endpoint writes NOTHING. It computes what the UID migration
   // WOULD produce. Stage 2 (apply) is gated on explicit user approval and is NOT
