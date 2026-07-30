@@ -49,7 +49,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
   const projInspector   = resolveProjectField(snap, data.project, "inspector");
   const afcRef          = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
-  // §2.2 area-ref template (used by the 6-col Action List to derive Area ref per defect).
+  // §2.2 area-ref template (used by the Action List to derive the Location column per defect).
   const areaRefTemplateForPdf: string = String(resolveProjectField(snap, data.project, "areaRefTemplate") || "");
 
   // §1.7 inspection number, zero-padded to 2 digits for the title-page heading.
@@ -425,9 +425,9 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   // Observation/Action cells blank since the parent row carries the cached
   // AI summary for that defect.
   const summaryHeadAct = [["UID", "Location", "Work item", "Observation", "Action", "Responsible", "Due Date", "Status"]];
-  // §2.2 6-column Action List (per new template):
-  //   UID / Area ref / Work item / Observation / Action Required / Status
-  const summaryHeadAct6 = [["UID", "Area ref", "Work item", "Observation", "Action Required", "Status"]];
+  // §2.2 7-column Action List (per new template):
+  //   ID / Location (area ref) / Work Type / Action / Responsible / By Date / Status
+  const summaryHeadAct6 = [["ID", "Location", "Work Type", "Action", "Responsible", "By Date", "Status"]];
   type SummaryMode = { showCategory?: boolean; showAction?: boolean; showAct6?: boolean };
   // showAction is true only for the Action List; showCategory is kept for
   // older Carried-forward callers. Default {} → original 7-column layout.
@@ -439,8 +439,8 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     // Per-body-row overdue flag (parallel to `body`). A defect's sub-location
     // rows inherit the parent's overdue state since they share the same status.
     const overdueByRow: boolean[] = [];
-    // Status column index: 5 for act6, 7 for action/category modes, 6 otherwise.
-    const statusColIdx = showAct6 ? 5 : showAction ? 7 : showCategory ? 7 : 6;
+    // Status column index: 6 for act6, 7 for action/category modes, 6 otherwise.
+    const statusColIdx = showAct6 ? 6 : showAction ? 7 : showCategory ? 7 : 6;
     for (const d of defects) {
       const cat = d.categoryLabel || "(uncategorised)";
       // Overdue := dueDate < today AND not closed/archived (shared helper).
@@ -449,26 +449,28 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
       const overdue = isDefectOverdue(d);
       const statusText = d.status === "complete" ? "Complete" : "Open";
       if (showAct6) {
-        // §2.2 6-col layout: UID / Area ref / Work item / Observation / Action Required / Status.
+        // §2.2 7-col layout: ID / Location / Work Type / Action / Responsible / By Date / Status.
         const areaRefCell = deriveAreaRef(d, areaRefTemplateForPdf) || "";
         body.push([
           d.uid,
           areaRefCell,
           getWorkTypeLabel(d.uid),
-          truncateWordBoundary(d.comment, { maxWords: 12, maxChars: 80 }),
           resolveActionSummary(d),
+          d.assignedTo || "\u2014",
+          d.dueDate || "\u2014",
           statusText,
         ]);
         overdueByRow.push(overdue);
         if (d.locations && d.locations.length > 0) for (const loc of d.locations) {
           const locUid = loc.uid || "";
-          // Sub-location rows: blank Observation + Action Required (parent carries them).
+          // Sub-location rows: blank Action (the parent row carries it).
           body.push([
             locUid,
             areaRefCell,
             getWorkTypeLabel(d.uid),
             "",
-            "",
+            d.assignedTo || "\u2014",
+            d.dueDate || "\u2014",
             statusText,
           ]);
           overdueByRow.push(overdue);
@@ -521,9 +523,9 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     // shrink Work Type (description) to keep the table within the same span.
     // Action mode widths also sum to 166 (14+22+14+36+38+22+10+10) so the
     // table spans the same content width as the other two modes.
-    // act6 widths sum to 166 (16+22+18+44+52+14) — same content span as the other modes.
+    // act6 widths sum to 166 (20+20+18+44+24+18+22) — same content span as the other modes.
     const columnStyles: Record<number, { cellWidth: number }> = showAct6
-      ? { 0: { cellWidth: 16 }, 1: { cellWidth: 22 }, 2: { cellWidth: 18 }, 3: { cellWidth: 44 }, 4: { cellWidth: 52 }, 5: { cellWidth: 14 } }
+      ? { 0: { cellWidth: 20 }, 1: { cellWidth: 20 }, 2: { cellWidth: 18 }, 3: { cellWidth: 44 }, 4: { cellWidth: 24 }, 5: { cellWidth: 18 }, 6: { cellWidth: 22 } }
       : showAction
         ? { 0: { cellWidth: 14 }, 1: { cellWidth: 22 }, 2: { cellWidth: 14 }, 3: { cellWidth: 36 }, 4: { cellWidth: 38 }, 5: { cellWidth: 22 }, 6: { cellWidth: 10 }, 7: { cellWidth: 10 } }
         : showCategory
@@ -761,7 +763,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     y = (doc as any).lastAutoTable.finalY + 6;
   }
 
-  // §2.2 Action List — 6-column AI layout per new template.
+  // §2.2 Action List — 7-column AI layout per new template.
   if (y + 16 > pageHeight - 20) y = newSection();
   doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT);
   doc.text("2.2 Action List", margin, y); y += 7;

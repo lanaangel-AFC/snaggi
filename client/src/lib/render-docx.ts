@@ -650,8 +650,8 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     spacing: { after: 200 },
   }));
 
-  // Action List (§2.2) now uses a dedicated 6-column layout per the new SVR
-  // template: UID | Area ref | Work item | Observation | Action Required | Status.
+  // Action List (§2.2) now uses a dedicated 7-column layout per the new SVR
+  // template: ID | Location | Work Type | Action | Responsible | By Date | Status.
   // Carried-forward keeps the original Category-aware layout below.
   const summaryHeaderLabels = ["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"];
   const summaryHeaderWidths = [950, 600, 1300, 2300, 1850, 1300, 1400];
@@ -663,24 +663,28 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   // Retained for any non-Action-List callers that still pass showAction:true.
   const summaryHeaderLabelsAct = ["UID", "Location", "Work item", "Observation", "Action", "Responsible", "Due Date", "Status"];
   const summaryHeaderWidthsAct = [900, 1100, 900, 1900, 2100, 1200, 800, 800];
-  // §2.2 6-column Action List: UID | Area ref | Work item | Observation |
-  // Action Required (AI) | Status. Widths sum to 9700 DXA.
-  const summaryHeaderLabelsAct6 = ["UID", "Area ref", "Work item", "Observation", "Action Required", "Status"];
-  const summaryHeaderWidthsAct6 = [1100, 1300, 1100, 2400, 2900, 900];
-  // Snapshot-resolved area-ref template used to render the "Area ref" column.
+  // §2.2 7-column Action List: ID | Location (area ref) | Work Type |
+  // Action (AI) | Responsible | By Date | Status. Widths sum to 9700 DXA.
+  const summaryHeaderLabelsAct6 = ["ID", "Location", "Work Type", "Action", "Responsible", "By Date", "Status"];
+  const summaryHeaderWidthsAct6 = [1100, 1300, 1300, 2400, 1500, 1200, 900];
+  // Snapshot-resolved area-ref template used to render the "Location" column.
   const areaRefTemplateForActions: string = String(resolveProjectField(snap, data.project, "areaRefTemplate") || "");
   type SummaryMode = { showCategory?: boolean; showAction?: boolean; showAct6?: boolean };
   const buildSummaryHeaderRow = (mode: SummaryMode = {}) => {
-    const labels = mode.showAction
-      ? summaryHeaderLabelsAct
-      : mode.showCategory
-        ? summaryHeaderLabelsCat
-        : summaryHeaderLabels;
-    const widths = mode.showAction
-      ? summaryHeaderWidthsAct
-      : mode.showCategory
-        ? summaryHeaderWidthsCat
-        : summaryHeaderWidths;
+    const labels = mode.showAct6
+      ? summaryHeaderLabelsAct6
+      : mode.showAction
+        ? summaryHeaderLabelsAct
+        : mode.showCategory
+          ? summaryHeaderLabelsCat
+          : summaryHeaderLabels;
+    const widths = mode.showAct6
+      ? summaryHeaderWidthsAct6
+      : mode.showAction
+        ? summaryHeaderWidthsAct
+        : mode.showCategory
+          ? summaryHeaderWidthsCat
+          : summaryHeaderWidths;
     return new TableRow({
       tableHeader: true,
       children: labels.map((label, i) =>
@@ -717,24 +721,24 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     // blank to avoid duplication — the parent row already conveys the work for
     // that defect.
     const isParentRow = rowUid === defect.uid;
-    const observationCell = (showAction || showAct6)
+    const observationCell = showAction
       ? (isParentRow ? truncateWordBoundary(defect.comment, { maxWords: 12, maxChars: 80 }) : "")
       : "";
     const actionCell = (showAction || showAct6)
       ? (isParentRow ? resolveActionSummary(defect) : "")
       : "";
-    // §2.2 Area Ref column: substitute the project's areaRefTemplate with this
+    // §2.2 Location column: substitute the project's areaRefTemplate with this
     // defect's elevation/drop/level codes; legacy projects (empty template) fall
     // back to parsing the area-ref portion from the UID.
     const areaRefCell = showAct6 ? (deriveAreaRef(defect, areaRefTemplateForActions) || "") : "";
     const cellTexts = showAct6
-      ? [safeText(rowUid), safeText(areaRefCell), getWorkTypeLabel(safeText(defect.uid)), observationCell, actionCell, statusText]
+      ? [safeText(rowUid), safeText(areaRefCell), getWorkTypeLabel(safeText(defect.uid)), actionCell, safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText]
       : showAction
       ? [safeText(rowUid), locationText, getWorkTypeLabel(safeText(defect.uid)), observationCell, actionCell, safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText]
       : showCategory
         ? [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", categoryText, safeText(defect.dueDate) || "\u2014", statusText]
         : [safeText(rowUid), typeText, locationText, getWorkTypeLabel(safeText(defect.uid)), safeText(defect.assignedTo) || "\u2014", safeText(defect.dueDate) || "\u2014", statusText];
-    const statusIdx = showAct6 ? 5 : showAction ? 7 : showCategory ? 7 : 6;
+    const statusIdx = showAct6 ? 6 : showAction ? 7 : showCategory ? 7 : 6;
     // Type column index: index 1 in non-action modes, absent (-1) in act6/action modes.
     const typeColIdx = (showAction || showAct6) ? -1 : 1;
     const statusColor = statusText === "Complete" ? "228B22" : "C89600";
@@ -776,7 +780,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
       children: [new TextRun({ text: safeText(g.label), bold: true, size: 24, font: "Aptos", color: CAPTION_BLUE })],
       spacing: { before: 160, after: 60 },
     }));
-    // §2.2 emits the new 6-column layout via showAct6. The legacy 8-column
+    // §2.2 emits the new 7-column layout via showAct6. The legacy 8-column
     // showAction layout is retained in the helpers but no longer wired here.
     const rows: any[] = [buildSummaryHeaderRow({ showAct6: true })];
     for (const d of g.defects) {
