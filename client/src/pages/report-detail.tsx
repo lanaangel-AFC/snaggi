@@ -362,22 +362,6 @@ export default function ReportDetail() {
   };
 
 
-  if (reportLoading) {
-    return (
-      <div className="max-w-3xl mx-auto px-4 py-8">
-        <div className="h-8 w-48 bg-muted animate-pulse rounded mb-4" />
-        <div className="h-4 w-64 bg-muted animate-pulse rounded mb-8" />
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-20 rounded-lg bg-muted animate-pulse" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (!report || !project) return null;
-
   // Drawings attached to this project, offered as an alternative entry point into the
   // inspection. The canvas link carries the report id so the drawing resolves its pins
   // against this inspection rather than whichever one happens to be newest.
@@ -393,6 +377,22 @@ export default function ReportDetail() {
     setDrawingPickerOpen(false);
     navigate(`/projects/${projectId}/reports/${reportId}/elevations/${elevationId}`);
   };
+
+  if (reportLoading) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <div className="h-8 w-48 bg-muted animate-pulse rounded mb-4" />
+        <div className="h-4 w-64 bg-muted animate-pulse rounded mb-8" />
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-20 rounded-lg bg-muted animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!report || !project) return null;
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
