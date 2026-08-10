@@ -1653,6 +1653,13 @@ export async function registerRoutes(
       const dryRun = req.body?.dryRun !== false;
       const projectId = req.body?.projectId != null ? Number(req.body.projectId) : null;
       const elevationId = req.body?.elevationId != null ? Number(req.body.elevationId) : null;
+      // A record that is absent from the current inspection tells us nothing about what
+      // is true on the wall today. Its last known row may be months old: on project 4,
+      // 19 pins resolve to inspection 04 (30 April) with the current inspection being 10
+      // (5 August). Rewriting a pin from that is a guess dressed up as a correction, so
+      // by default we leave those alone and report them. Pass currentInspectionOnly:false
+      // to accept last-known state regardless of age.
+      const currentInspectionOnly = req.body?.currentInspectionOnly !== false;
 
       const markerRows = sqlite.prepare(`
         SELECT m.id, m.elevation_id, m.defect_id, m.defect_uid, m.status, e.project_id
@@ -1692,6 +1699,14 @@ export async function registerRoutes(
           { id: number; uid: string; status: string; report_id: number } | undefined;
       };
 
+      // Latest report per project, used as the staleness reference.
+      const latestReportByProject = new Map<number, number>();
+      for (const row of sqlite.prepare(
+        `SELECT project_id, MAX(id) AS latest FROM reports GROUP BY project_id`
+      ).all() as Array<{ project_id: number; latest: number }>) {
+        latestReportByProject.set(row.project_id, row.latest);
+      }
+
       const planned: Array<{
         markerId: number; uid: string; projectId: number; elevationId: number;
         resolvedVia?: string;
@@ -1699,6 +1714,10 @@ export async function registerRoutes(
         relink?: { from: number | null; to: number };
       }> = [];
       const orphans: Array<{ markerId: number; uid: string; projectId: number }> = [];
+      const stale: Array<{
+        markerId: number; uid: string; projectId: number;
+        lastSeenReport: number; currentReport: number; markerStatus: string; lastKnownStatus: string;
+      }> = [];
       let alreadyCorrect = 0;
 
       for (const m of markerRows) {
@@ -1707,6 +1726,17 @@ export async function registerRoutes(
           orphans.push({ markerId: m.id, uid: m.defect_uid, projectId: m.project_id });
           continue;
         }
+        const currentReport = latestReportByProject.get(m.project_id);
+        const isStale = currentReport != null && live.report_id !== currentReport;
+        if (isStale && currentInspectionOnly) {
+          stale.push({
+            markerId: m.id, uid: m.defect_uid, projectId: m.project_id,
+            lastSeenReport: live.report_id, currentReport,
+            markerStatus: m.status, lastKnownStatus: live.status,
+          });
+          continue;
+        }
+
         const statusChanged = live.status !== m.status;
         const relinkNeeded = live.id !== m.defect_id;
         if (!statusChanged && !relinkNeeded) { alreadyCorrect++; continue; }
@@ -1731,7 +1761,8 @@ export async function registerRoutes(
       console.log(
         `[marker-status-resync] dryRun=${dryRun}, projectId=${projectId ?? "ALL"}, ` +
         `elevationId=${elevationId ?? "ALL"}, markers=${markerRows.length}, ` +
-        `planned=${planned.length}, orphans=${orphans.length}, alreadyCorrect=${alreadyCorrect}`
+        `planned=${planned.length}, stale=${stale.length}, orphans=${orphans.length}, ` +
+        `alreadyCorrect=${alreadyCorrect}`
       );
 
       if (dryRun) {
@@ -1746,6 +1777,9 @@ export async function registerRoutes(
           relinksOnly: planned.filter((p) => !p.statusChange && p.relink).length,
           resolvedThroughRename: planned.filter((p) => p.resolvedVia).length,
           byTransition,
+          currentInspectionOnly,
+          staleCount: stale.length,
+          staleSample: stale.slice(0, 25),
           orphanCount: orphans.length,
           orphanSample: orphans.slice(0, 25),
           sample: planned.slice(0, 25),
@@ -1790,6 +1824,8 @@ export async function registerRoutes(
         statusUpdated,
         relinked,
         skippedCount: skipped.length,
+        currentInspectionOnly,
+        staleCount: stale.length,
         orphanCount: orphans.length,
         byTransition,
       });
