@@ -554,12 +554,13 @@ export async function registerRoutes(
     const defect = await storage.updateDefect(defectId, req.body);
     if (!defect) return res.status(404).json({ message: "Defect not found" });
 
-    // Sync markers when uid or status changes
+    // Sync markers when uid or status changes. existing.uid is the pre-update value and
+    // is what the markers still hold, so it has to be the match key on a rename.
     const markerUpdates: Record<string, string> = {};
     if (req.body.uid) markerUpdates.defectUid = req.body.uid;
     if (req.body.status) markerUpdates.status = req.body.status;
     if (Object.keys(markerUpdates).length > 0) {
-      await storage.updateMarkersByDefectId(defect.id, markerUpdates);
+      await storage.updateMarkersByDefectId(defect.id, markerUpdates, existing.uid);
     }
 
     res.json(defect);
@@ -1632,6 +1633,150 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[category-lineage-backfill] failed:", err);
       return res.status(500).json({ message: err.message || "Backfill failed" });
+    }
+  });
+
+  // Marker status resync. Markers are pinned to the wall and outlive any single
+  // inspection, but historically they were matched to records by defect_id. Because
+  // Start Next Inspection clones each record into a NEW row with a NEW id, every pin
+  // placed before the most recent roll-over still points at an old inspection's row,
+  // so status changes made on the live row never reached the drawing.
+  //
+  // This walks every marker, resolves the LIVE row for its UID within the same project
+  // (highest report_id, tie-broken on highest id), and rewrites the marker's status and
+  // defect_id to match. Markers whose UID has no matching record are reported as
+  // orphans and left untouched — those are the free-text pins, and we do not guess.
+  // dryRun defaults to true; pass {"dryRun": false} to apply. Optional {"projectId": N}
+  // narrows the scope, and {"elevationId": N} narrows it further to one drawing.
+  app.post("/api/admin/marker-status-resync", async (req, res) => {
+    try {
+      const dryRun = req.body?.dryRun !== false;
+      const projectId = req.body?.projectId != null ? Number(req.body.projectId) : null;
+      const elevationId = req.body?.elevationId != null ? Number(req.body.elevationId) : null;
+
+      const markerRows = sqlite.prepare(`
+        SELECT m.id, m.elevation_id, m.defect_id, m.defect_uid, m.status, e.project_id
+        FROM markers m
+        JOIN elevations e ON e.id = m.elevation_id
+        WHERE (? IS NULL OR e.project_id = ?)
+          AND (? IS NULL OR m.elevation_id = ?)
+        ORDER BY e.project_id, m.elevation_id, m.id
+      `).all(projectId, projectId, elevationId, elevationId) as Array<{
+        id: number; elevation_id: number; defect_id: number | null;
+        defect_uid: string; status: string; project_id: number;
+      }>;
+
+      // Live row for a UID: the one in the newest report of that lineage.
+      const findLive = sqlite.prepare(`
+        SELECT id, status, report_id
+        FROM defects
+        WHERE project_id = ? AND uid = ?
+        ORDER BY report_id DESC, id DESC
+        LIMIT 1
+      `);
+
+      const planned: Array<{
+        markerId: number; uid: string; projectId: number; elevationId: number;
+        statusChange?: { from: string; to: string };
+        relink?: { from: number | null; to: number };
+      }> = [];
+      const orphans: Array<{ markerId: number; uid: string; projectId: number }> = [];
+      let alreadyCorrect = 0;
+
+      for (const m of markerRows) {
+        const live = findLive.get(m.project_id, m.defect_uid) as
+          { id: number; status: string; report_id: number } | undefined;
+        if (!live) {
+          orphans.push({ markerId: m.id, uid: m.defect_uid, projectId: m.project_id });
+          continue;
+        }
+        const statusChanged = live.status !== m.status;
+        const relinkNeeded = live.id !== m.defect_id;
+        if (!statusChanged && !relinkNeeded) { alreadyCorrect++; continue; }
+        planned.push({
+          markerId: m.id,
+          uid: m.defect_uid,
+          projectId: m.project_id,
+          elevationId: m.elevation_id,
+          ...(statusChanged ? { statusChange: { from: m.status, to: live.status } } : {}),
+          ...(relinkNeeded ? { relink: { from: m.defect_id, to: live.id } } : {}),
+        });
+      }
+
+      const byTransition: Record<string, number> = {};
+      for (const p of planned) {
+        if (!p.statusChange) continue;
+        const key = `${p.statusChange.from} -> ${p.statusChange.to}`;
+        byTransition[key] = (byTransition[key] || 0) + 1;
+      }
+
+      console.log(
+        `[marker-status-resync] dryRun=${dryRun}, projectId=${projectId ?? "ALL"}, ` +
+        `elevationId=${elevationId ?? "ALL"}, markers=${markerRows.length}, ` +
+        `planned=${planned.length}, orphans=${orphans.length}, alreadyCorrect=${alreadyCorrect}`
+      );
+
+      if (dryRun) {
+        return res.json({
+          dryRun: true,
+          projectId: projectId ?? "ALL",
+          elevationId: elevationId ?? "ALL",
+          markersExamined: markerRows.length,
+          alreadyCorrect,
+          plannedUpdates: planned.length,
+          statusChanges: planned.filter((p) => p.statusChange).length,
+          relinksOnly: planned.filter((p) => !p.statusChange && p.relink).length,
+          byTransition,
+          orphanCount: orphans.length,
+          orphanSample: orphans.slice(0, 25),
+          sample: planned.slice(0, 25),
+        });
+      }
+
+      // Re-read each marker inside the transaction so a pin edited between the plan and
+      // the apply is not clobbered by a stale value.
+      const recheck = sqlite.prepare(`SELECT status, defect_id FROM markers WHERE id = ?`);
+      const applyStatus = sqlite.prepare(`UPDATE markers SET status = ?, defect_id = ? WHERE id = ?`);
+      const applyRelink = sqlite.prepare(`UPDATE markers SET defect_id = ? WHERE id = ?`);
+      const skipped: number[] = [];
+      let statusUpdated = 0;
+      let relinked = 0;
+
+      const run = sqlite.transaction(() => {
+        for (const p of planned) {
+          const live = recheck.get(p.markerId) as { status: string; defect_id: number | null } | undefined;
+          if (!live) { skipped.push(p.markerId); continue; }
+          if (p.statusChange) {
+            if (live.status !== p.statusChange.from) { skipped.push(p.markerId); continue; }
+            applyStatus.run(p.statusChange.to, p.relink ? p.relink.to : live.defect_id, p.markerId);
+            statusUpdated++;
+            if (p.relink) relinked++;
+          } else if (p.relink) {
+            applyRelink.run(p.relink.to, p.markerId);
+            relinked++;
+          }
+        }
+      });
+      run();
+
+      console.log(
+        `[marker-status-resync] APPLIED statusUpdated=${statusUpdated}, relinked=${relinked}, skipped=${skipped.length}`
+      );
+
+      return res.json({
+        dryRun: false,
+        projectId: projectId ?? "ALL",
+        elevationId: elevationId ?? "ALL",
+        markersExamined: markerRows.length,
+        statusUpdated,
+        relinked,
+        skippedCount: skipped.length,
+        orphanCount: orphans.length,
+        byTransition,
+      });
+    } catch (err: any) {
+      console.error("[marker-status-resync] failed:", err);
+      return res.status(500).json({ message: err.message || "Resync failed" });
     }
   });
 
