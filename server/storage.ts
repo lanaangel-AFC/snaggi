@@ -1163,6 +1163,12 @@ export class DatabaseStorage implements IStorage {
         legacyId: d.legacyId,
         locationStructured: d.locationStructured,
         inspectionOpened: d.inspectionOpened, // preserved — where the record FIRST appeared
+        // Export-profile classification is part of the record's identity, not of a single
+        // inspection. Omitting these made every clone fall back to the column default,
+        // so a categorised item reappeared as "(uncategorised)" in the next inspection
+        // and in its exports. Both MUST be carried forward.
+        audience: d.audience,
+        categoryCode: d.categoryCode,
         createdAt: now,
       }).returning().get();
 
