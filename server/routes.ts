@@ -1495,6 +1495,146 @@ export async function registerRoutes(
     res.json({ ok: true, ...result });
   });
 
+  // Recovers categoryCode / audience lost by clones created before the
+  // startNextInspection carry-forward fix. For every defect row whose
+  // category_code is NULL, walks its clone lineage (same project_id + uid) and
+  // inherits the category from the most recent EARLIER row that has one.
+  // Audience is inherited the same way, but only when the target row still holds
+  // the column default ('both') so deliberate contractor/client tags are never
+  // overwritten. Nothing is invented: a lineage with no categorised ancestor is
+  // left untouched. dryRun defaults to true (fail-safe); pass {"dryRun": false}
+  // to apply. Optional {"projectId": N} narrows the scope to one project.
+  app.post("/api/admin/category-lineage-backfill", async (req, res) => {
+    try {
+      const dryRun = req.body?.dryRun !== false;
+      const projectId = req.body?.projectId != null ? Number(req.body.projectId) : null;
+
+      // Candidate rows: missing a category. Ordered so output is stable/reviewable.
+      const candidates = sqlite.prepare(
+        `SELECT id, project_id, report_id, uid, audience
+           FROM defects
+          WHERE (category_code IS NULL OR TRIM(category_code) = '')
+            ${projectId != null ? "AND project_id = ?" : ""}
+          ORDER BY project_id, uid, report_id`
+      ).all(...(projectId != null ? [projectId] : [])) as {
+        id: number; project_id: number; report_id: number | null;
+        uid: string; audience: string | null;
+      }[];
+
+      // Nearest categorised ancestor in the same lineage. report_id ordering is the
+      // clone order (Start Next Inspection always inserts a higher report_id), so
+      // "most recent earlier row" == highest report_id below this one.
+      const findAncestor = sqlite.prepare(
+        `SELECT category_code, audience, report_id
+           FROM defects
+          WHERE project_id = ? AND uid = ?
+            AND category_code IS NOT NULL AND TRIM(category_code) <> ''
+            AND report_id IS NOT NULL AND report_id < ?
+          ORDER BY report_id DESC
+          LIMIT 1`
+      );
+
+      const planned: {
+        id: number; projectId: number; reportId: number | null; uid: string;
+        categoryCode: string; fromReportId: number; audienceChange?: string;
+      }[] = [];
+      const noAncestor: { id: number; projectId: number; uid: string }[] = [];
+
+      for (const c of candidates) {
+        if (c.report_id == null) { noAncestor.push({ id: c.id, projectId: c.project_id, uid: c.uid }); continue; }
+        const anc = findAncestor.get(c.project_id, c.uid, c.report_id) as
+          { category_code: string; audience: string | null; report_id: number } | undefined;
+        if (!anc) { noAncestor.push({ id: c.id, projectId: c.project_id, uid: c.uid }); continue; }
+
+        // Only restore audience when the row is still at the default. A row that was
+        // deliberately tagged contractor/client keeps its own value.
+        const restoreAudience =
+          anc.audience && anc.audience !== "both" && (c.audience == null || c.audience === "both")
+            ? anc.audience
+            : undefined;
+
+        planned.push({
+          id: c.id, projectId: c.project_id, reportId: c.report_id, uid: c.uid,
+          categoryCode: anc.category_code, fromReportId: anc.report_id,
+          ...(restoreAudience ? { audienceChange: restoreAudience } : {}),
+        });
+      }
+
+      const byCategory: Record<string, number> = {};
+      for (const p of planned) byCategory[p.categoryCode] = (byCategory[p.categoryCode] || 0) + 1;
+
+      console.log(
+        `[category-lineage-backfill] dryRun=${dryRun}, projectId=${projectId ?? "ALL"}, ` +
+        `candidates=${candidates.length}, planned=${planned.length}, noAncestor=${noAncestor.length}`
+      );
+
+      if (dryRun) {
+        return res.json({
+          dryRun: true,
+          projectId: projectId ?? "ALL",
+          candidatesFound: candidates.length,
+          plannedUpdates: planned.length,
+          byCategory,
+          noAncestorCount: noAncestor.length,
+          sample: planned.slice(0, 25),
+        });
+      }
+
+      // Live run — single transaction. Each row is re-checked inside the transaction
+      // so a concurrent edit that set a category is never overwritten.
+      const recheck = sqlite.prepare(
+        `SELECT category_code FROM defects WHERE id = ?`
+      );
+      const applyCategory = sqlite.prepare(
+        `UPDATE defects SET category_code = ? WHERE id = ?`
+      );
+      const applyAudience = sqlite.prepare(
+        `UPDATE defects SET audience = ? WHERE id = ?`
+      );
+
+      let updated = 0;
+      let audienceUpdated = 0;
+      const skipped: number[] = [];
+
+      const run = sqlite.transaction(() => {
+        for (const p of planned) {
+          const live = recheck.get(p.id) as { category_code: string | null } | undefined;
+          if (!live) { skipped.push(p.id); continue; }
+          if (live.category_code && live.category_code.trim()) {
+            // Someone categorised it since the plan was built — leave it alone.
+            skipped.push(p.id);
+            continue;
+          }
+          applyCategory.run(p.categoryCode, p.id);
+          updated++;
+          if (p.audienceChange) {
+            applyAudience.run(p.audienceChange, p.id);
+            audienceUpdated++;
+          }
+        }
+      });
+      run();
+
+      console.log(
+        `[category-lineage-backfill] APPLIED updated=${updated}, audienceUpdated=${audienceUpdated}, skipped=${skipped.length}`
+      );
+
+      return res.json({
+        dryRun: false,
+        projectId: projectId ?? "ALL",
+        candidatesFound: candidates.length,
+        updated,
+        audienceUpdated,
+        byCategory,
+        skippedCount: skipped.length,
+        noAncestorCount: noAncestor.length,
+      });
+    } catch (err: any) {
+      console.error("[category-lineage-backfill] failed:", err);
+      return res.status(500).json({ message: err.message || "Backfill failed" });
+    }
+  });
+
   // One-off legacy photo dedup cleanup for project 5. Removes spurious null-origin
   // "twin" photo rows that duplicate a real carried row sharing the same
   // (defect_id, slot) but with a non-null origin_report_id. A null-origin row is
