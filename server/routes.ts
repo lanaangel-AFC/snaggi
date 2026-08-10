@@ -1666,17 +1666,35 @@ export async function registerRoutes(
         defect_uid: string; status: string; project_id: number;
       }>;
 
-      // Live row for a UID: the one in the newest report of that lineage.
-      const findLive = sqlite.prepare(`
-        SELECT id, status, report_id
-        FROM defects
-        WHERE project_id = ? AND uid = ?
-        ORDER BY report_id DESC, id DESC
-        LIMIT 1
-      `);
+      // Live row for a UID: the newest report in that lineage, following any UID renames
+      // recorded in legacy_id. Pins placed before the Stage 2 migration carry a name no
+      // surviving row holds, so a plain uid match makes their lineage look like it ended.
+      const aliasCache = new Map<string, string[]>();
+      const aliasesFor = (projectId: number, uid: string): string[] => {
+        const key = `${projectId}::${uid}`;
+        let v = aliasCache.get(key);
+        if (!v) {
+          v = storage.resolveUidAliases(projectId, uid);
+          aliasCache.set(key, v);
+        }
+        return v;
+      };
+      const findLive = (projectId: number, uid: string) => {
+        const uids = aliasesFor(projectId, uid);
+        const placeholders = uids.map(() => "?").join(", ");
+        return sqlite.prepare(`
+          SELECT id, uid, status, report_id
+          FROM defects
+          WHERE project_id = ? AND uid IN (${placeholders})
+          ORDER BY report_id DESC, id DESC
+          LIMIT 1
+        `).get(projectId, ...uids) as
+          { id: number; uid: string; status: string; report_id: number } | undefined;
+      };
 
       const planned: Array<{
         markerId: number; uid: string; projectId: number; elevationId: number;
+        resolvedVia?: string;
         statusChange?: { from: string; to: string };
         relink?: { from: number | null; to: number };
       }> = [];
@@ -1684,8 +1702,7 @@ export async function registerRoutes(
       let alreadyCorrect = 0;
 
       for (const m of markerRows) {
-        const live = findLive.get(m.project_id, m.defect_uid) as
-          { id: number; status: string; report_id: number } | undefined;
+        const live = findLive(m.project_id, m.defect_uid);
         if (!live) {
           orphans.push({ markerId: m.id, uid: m.defect_uid, projectId: m.project_id });
           continue;
@@ -1696,6 +1713,7 @@ export async function registerRoutes(
         planned.push({
           markerId: m.id,
           uid: m.defect_uid,
+          ...(live.uid !== m.defect_uid ? { resolvedVia: `rename -> ${live.uid}` } : {}),
           projectId: m.project_id,
           elevationId: m.elevation_id,
           ...(statusChanged ? { statusChange: { from: m.status, to: live.status } } : {}),
@@ -1726,6 +1744,7 @@ export async function registerRoutes(
           plannedUpdates: planned.length,
           statusChanges: planned.filter((p) => p.statusChange).length,
           relinksOnly: planned.filter((p) => !p.statusChange && p.relink).length,
+          resolvedThroughRename: planned.filter((p) => p.resolvedVia).length,
           byTransition,
           orphanCount: orphans.length,
           orphanSample: orphans.slice(0, 25),

@@ -949,6 +949,7 @@ export interface IStorage {
   createMarker(marker: InsertMarker): Promise<Marker>;
   updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined>;
   deleteMarker(id: number): Promise<void>;
+  resolveUidAliases(projectId: number, uid: string): string[];
   updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>, previousUid?: string): Promise<number>;
   // Observation/Action History
   getObservationHistory(defectId: number): Promise<ObservationHistory[]>;
@@ -1392,6 +1393,50 @@ export class DatabaseStorage implements IStorage {
   async deleteMarker(id: number): Promise<void> {
     db.delete(markers).where(eq(markers.id, id)).run();
   }
+  // Every name a record has been known by within one project.
+  //
+  // The Stage 2 UID migration rewrote UIDs in place and recorded the old value in
+  // legacy_id. Matching on uid alone therefore breaks at the migration boundary: a pin
+  // placed before it holds a name no surviving row carries, so its lineage looks like it
+  // simply ended. Walking the legacy_id links in both directions recovers the identity.
+  //
+  // legacy_id is not guaranteed unique, so a pathological chain could rope in unrelated
+  // records. The set is capped, and on overflow we fall back to the exact UID rather than
+  // risk syncing the wrong item.
+  resolveUidAliases(projectId: number, uid: string): string[] {
+    const MAX_ALIASES = 12;
+    const rows = db
+      .select({ uid: defects.uid, legacyId: defects.legacyId })
+      .from(defects)
+      .where(eq(defects.projectId, projectId))
+      .all();
+
+    const links = new Map<string, Set<string>>();
+    const link = (a: string, b: string) => {
+      if (!links.has(a)) links.set(a, new Set());
+      links.get(a)!.add(b);
+    };
+    for (const r of rows) {
+      if (!r.legacyId || r.legacyId === r.uid) continue;
+      link(r.uid, r.legacyId);
+      link(r.legacyId, r.uid);
+    }
+
+    const seen = new Set<string>([uid]);
+    const queue = [uid];
+    while (queue.length > 0) {
+      const next = links.get(queue.shift()!);
+      if (!next) continue;
+      next.forEach((n) => {
+        if (seen.has(n)) return;
+        seen.add(n);
+        queue.push(n);
+      });
+      if (seen.size > MAX_ALIASES) return [uid];
+    }
+    return Array.from(seen);
+  }
+
   // A marker is pinned to the wall, not to a single inspection. Start Next Inspection
   // clones each record into a NEW row with a NEW id, so matching markers on defect_id
   // alone silently stops working after the first roll-over: the pins still hold the ids
@@ -1414,6 +1459,9 @@ export class DatabaseStorage implements IStorage {
     }
 
     const matchUid = previousUid ?? d.uid;
+    // Include every name this record has carried, so pins placed before the UID
+    // migration still resolve to it.
+    const matchUids = Array.from(new Set(this.resolveUidAliases(d.projectId, matchUid).concat(matchUid)));
     const elevationIds = db
       .select({ id: elevations.id })
       .from(elevations)
@@ -1426,7 +1474,7 @@ export class DatabaseStorage implements IStorage {
     const lineageIds = db
       .select({ id: defects.id })
       .from(defects)
-      .where(and(eq(defects.projectId, d.projectId), eq(defects.uid, matchUid)))
+      .where(and(eq(defects.projectId, d.projectId), inArray(defects.uid, matchUids)))
       .all()
       .map((x) => x.id);
 
@@ -1437,7 +1485,7 @@ export class DatabaseStorage implements IStorage {
         and(
           inArray(markers.elevationId, elevationIds),
           or(
-            eq(markers.defectUid, matchUid),
+            inArray(markers.defectUid, matchUids),
             lineageIds.length > 0 ? inArray(markers.defectId, lineageIds) : sql`0`,
           ),
         ),
