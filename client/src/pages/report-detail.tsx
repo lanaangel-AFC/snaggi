@@ -20,7 +20,7 @@ import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
   ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link as LinkIcon,
-  Sparkles, AlertCircle, Loader2
+  Sparkles, AlertCircle, Loader2, Map as MapIcon
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -378,6 +378,22 @@ export default function ReportDetail() {
 
   if (!report || !project) return null;
 
+  // Drawings attached to this project, offered as an alternative entry point into the
+  // inspection. The canvas link carries the report id so the drawing resolves its pins
+  // against this inspection rather than whichever one happens to be newest.
+  const { data: projectElevations = [] } = useQuery<Array<{ id: number; name: string }>>({
+    queryKey: [`/api/projects/${projectId}/elevations`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/projects/${projectId}/elevations`);
+      return res.json();
+    },
+  });
+  const [drawingPickerOpen, setDrawingPickerOpen] = useState(false);
+  const openDrawing = (elevationId: number) => {
+    setDrawingPickerOpen(false);
+    navigate(`/projects/${projectId}/reports/${reportId}/elevations/${elevationId}`);
+  };
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       {/* Header */}
@@ -411,9 +427,45 @@ export default function ReportDetail() {
               </p>
             )}
           </div>
-          <Button variant="ghost" size="icon" onClick={openEditDialog}>
-            <Settings className="w-4 h-4" />
-          </Button>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {projectElevations.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => {
+                  if (projectElevations.length === 1) openDrawing(projectElevations[0].id);
+                  else setDrawingPickerOpen(true);
+                }}
+              >
+                <MapIcon className="w-4 h-4" />
+                Drawing
+              </Button>
+            )}
+            <Button variant="ghost" size="icon" onClick={openEditDialog}>
+              <Settings className="w-4 h-4" />
+            </Button>
+          </div>
+
+        <Dialog open={drawingPickerOpen} onOpenChange={setDrawingPickerOpen}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Open a drawing</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2">
+              {projectElevations.map((el) => (
+                <Button
+                  key={el.id}
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => openDrawing(el.id)}
+                >
+                  {el.name}
+                </Button>
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
         </div>
 
         {/* Edit Report Dialog */}

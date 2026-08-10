@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,9 +29,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, ZoomIn, ZoomOut, RotateCcw, Crosshair, Eye, Download } from "lucide-react";
+import { ArrowLeft, ZoomIn, ZoomOut, RotateCcw, Crosshair, Eye, Download, Pencil, X, Plus, Link2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import type { Elevation, Marker, Defect } from "@shared/schema";
+import type { Elevation, Marker, Defect, Report } from "@shared/schema";
 
 // Marker status now mirrors the record's status, which includes 'archived'. Without an
 // entry here an archived pin would silently fall back to the red 'open' colour.
@@ -42,8 +42,42 @@ const STATUS_COLORS: Record<string, string> = {
   archived: "#9CA3AF",
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  open: "Open",
+  in_progress: "In Progress",
+  complete: "Complete",
+  archived: "Archived",
+};
+
+// What the pin resolves to in the inspection currently being viewed. Supplied by
+// /markers/resolved, which walks row id -> uid -> legacy_id rename chain server-side.
+type ResolvedRecord = {
+  defectId: number;
+  uid: string;
+  status: string;
+  recordType: string;
+  categoryCode: string | null;
+  categoryName: string | null;
+  reportId: number;
+  inReport: boolean;
+  resolvedVia: string | null;
+  lastPhoto: { filename: string; caption: string | null; slot: string } | null;
+};
+
+type ResolvedMarker = Marker & { resolved: ResolvedRecord | null };
+
+type PinFilter = "all" | "open" | "closed" | "defects";
+
+const FILTERS: Array<{ key: PinFilter; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "open", label: "Open" },
+  { key: "closed", label: "Closed" },
+  { key: "defects", label: "Defects" },
+];
+
 export default function AnnotationCanvas() {
-  const { projectId, elevationId } = useParams<{ projectId: string; elevationId: string }>();
+  const { projectId, elevationId, reportId: reportIdParam } =
+    useParams<{ projectId: string; elevationId: string; reportId?: string }>();
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
@@ -64,6 +98,10 @@ export default function AnnotationCanvas() {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [placingMode, setPlacingMode] = useState(false);
+  const [filter, setFilter] = useState<PinFilter>("all");
+  const [expandedPinId, setExpandedPinId] = useState<number | null>(null);
+  // Where the user tapped in placing mode, held while they choose what to put there.
+  const [pendingPin, setPendingPin] = useState<{ x: number; y: number } | null>(null);
   const [markerDialog, setMarkerDialog] = useState<{
     open: boolean;
     x: number;
@@ -90,14 +128,39 @@ export default function AnnotationCanvas() {
     },
   });
 
-  const { data: markerList = [] } = useQuery<Marker[]>({
-    queryKey: ["/api/elevations", elevationId, "markers"],
+  // The canvas is always scoped to one inspection. Arriving without a report in the URL
+  // (older links, the project page) falls back to the newest one rather than showing an
+  // undated mix of every inspection the project has ever had.
+  const { data: reports = [], isSuccess: reportsLoaded } = useQuery<Report[]>({
+    queryKey: [`/api/projects/${projectId}/reports`],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/elevations/${elevationId}/markers`);
+      const res = await apiRequest("GET", `/api/projects/${projectId}/reports`);
       return res.json();
     },
   });
 
+  const activeReportId = useMemo(() => {
+    if (reportIdParam) return Number(reportIdParam);
+    if (reports.length === 0) return null;
+    return reports.reduce((a, b) => (b.id > a.id ? b : a)).id;
+  }, [reportIdParam, reports]);
+
+  const activeReport = useMemo(
+    () => reports.find((r) => r.id === activeReportId) ?? null,
+    [reports, activeReportId]
+  );
+
+  const { data: markerList = [] } = useQuery<ResolvedMarker[]>({
+    queryKey: ["/api/elevations", elevationId, "markers", "resolved", activeReportId],
+    queryFn: async () => {
+      const qs = activeReportId != null ? `?reportId=${activeReportId}` : "";
+      const res = await apiRequest("GET", `/api/elevations/${elevationId}/markers/resolved${qs}`);
+      return res.json();
+    },
+    enabled: !!elevationId && (!!reportIdParam || reportsLoaded),
+  });
+
+  // Full project register, used only to populate the "link an existing record" dropdown.
   const { data: defects = [] } = useQuery<Defect[]>({
     queryKey: [`/api/projects/${projectId}/defects`],
     queryFn: async () => {
@@ -105,6 +168,41 @@ export default function AnnotationCanvas() {
       return res.json();
     },
   });
+
+  // Records belonging to the inspection on screen come first in the dropdown; anything
+  // older is still reachable but clearly separated.
+  const { inReportDefects, otherDefects } = useMemo(() => {
+    const inR: Defect[] = [];
+    const other: Defect[] = [];
+    for (const d of defects) {
+      if (activeReportId != null && d.reportId === activeReportId) inR.push(d);
+      else other.push(d);
+    }
+    return { inReportDefects: inR, otherDefects: other };
+  }, [defects, activeReportId]);
+
+  const invalidateMarkers = () =>
+    queryClient.invalidateQueries({ queryKey: ["/api/elevations", elevationId, "markers"] });
+
+  // A pin's live state is the record's, falling back to the pin's own stored status when
+  // lineage found nothing (free-text pins).
+  const effectiveStatus = (m: ResolvedMarker) => m.resolved?.status ?? m.status;
+
+  const visibleMarkers = useMemo(() => {
+    return markerList.filter((m) => {
+      const status = effectiveStatus(m);
+      switch (filter) {
+        case "open":
+          return status === "open" || status === "in_progress";
+        case "closed":
+          return status === "complete" || status === "archived";
+        case "defects":
+          return (m.resolved?.recordType ?? "defect") === "defect";
+        default:
+          return true;
+      }
+    });
+  }, [markerList, filter]);
 
   // Auto-enter placing mode when arriving with ?defect= param
   const [defectParamHandled, setDefectParamHandled] = useState(false);
@@ -176,7 +274,7 @@ export default function AnnotationCanvas() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elevations", elevationId, "markers"] });
+      invalidateMarkers();
       closeDialog();
     },
   });
@@ -187,7 +285,7 @@ export default function AnnotationCanvas() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elevations", elevationId, "markers"] });
+      invalidateMarkers();
       closeDialog();
     },
   });
@@ -197,7 +295,7 @@ export default function AnnotationCanvas() {
       await apiRequest("DELETE", `/api/markers/${id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elevations", elevationId, "markers"] });
+      invalidateMarkers();
       setDeleteConfirm(null);
     },
   });
@@ -219,25 +317,59 @@ export default function AnnotationCanvas() {
       const x = ((e.clientX - rect.left) / rect.width) * 100;
       const y = ((e.clientY - rect.top) / rect.height) * 100;
       if (x < 0 || x > 100 || y < 0 || y > 100) return;
-      setMarkerDialog({ open: true, x, y });
       setPlacingMode(false);
+      // Arriving with ?defect= means the record already exists and only needs a location,
+      // so skip the "what goes here?" step and go straight to the link form.
+      if (defectParam) {
+        setMarkerDialog({ open: true, x, y });
+      } else {
+        setPendingPin({ x, y });
+      }
     },
-    [placingMode]
+    [placingMode, defectParam]
   );
 
-  // Handle existing marker click
-  const handleMarkerClick = (e: React.MouseEvent, marker: Marker) => {
+  // Tapping a pin expands it in place rather than opening the marker editor, so the
+  // common case (what is this?) costs one tap and no dialog.
+  const handleMarkerClick = (e: React.MouseEvent, marker: ResolvedMarker) => {
     e.stopPropagation();
-    // Find matching defect for the dropdown
+    setExpandedPinId((cur) => (cur === marker.id ? null : marker.id));
+  };
+
+  const openMarkerEditor = (marker: ResolvedMarker) => {
+    setExpandedPinId(null);
     if (marker.defectId) {
       setFormDefectId(String(marker.defectId));
     } else {
       setFormDefectId("custom");
     }
     setFormUid(marker.defectUid);
-    setFormStatus(marker.status);
+    setFormStatus(effectiveStatus(marker));
     setFormNote(marker.note || "");
     setMarkerDialog({ open: true, x: marker.xPercent, y: marker.yPercent, editing: marker });
+  };
+
+  // Open the record a pin represents, in the report it actually lives in.
+  const openRecord = (marker: ResolvedMarker) => {
+    const r = marker.resolved;
+    if (!r) return;
+    setExpandedPinId(null);
+    navigate(`/projects/${projectId}/reports/${r.reportId}/defects/${r.defectId}`);
+  };
+
+  // Create a new record at the pending pin. The defect form owns UID assembly, duplicate
+  // checking and validation, so we hand off to it and let it place the pin on save
+  // rather than duplicating any of that here.
+  const createRecordAtPin = (type: "defect" | "observation") => {
+    if (!pendingPin || activeReportId == null) return;
+    const params = new URLSearchParams({
+      pinElevationId: String(elevationId),
+      pinX: pendingPin.x.toFixed(4),
+      pinY: pendingPin.y.toFixed(4),
+    });
+    const target = type === "defect" ? "new-defect" : "new-observation";
+    setPendingPin(null);
+    navigate(`/projects/${projectId}/reports/${activeReportId}/defects/${target}?${params.toString()}`);
   };
 
   // Zoom controls
@@ -324,14 +456,6 @@ export default function AnnotationCanvas() {
     }
   };
 
-  // Find defect info for a marker (for "View Defect" button)
-  const findDefectForMarker = (marker: Marker): Defect | undefined => {
-    if (marker.defectId) {
-      return defects.find((d) => d.id === marker.defectId);
-    }
-    return defects.find((d) => d.uid === marker.defectUid);
-  };
-
   // Track locationId for marker placement (from URL param or editing existing marker)
   const [formLocationId, setFormLocationId] = useState<number | null>(null);
 
@@ -363,7 +487,8 @@ export default function AnnotationCanvas() {
 
   const [exporting, setExporting] = useState(false);
 
-  // Export elevation with markers as PNG — draw directly on canvas for reliability
+  // Export elevation with markers as PNG — draw directly on canvas for reliability.
+  // Exports what is on screen, so a filtered view exports the filtered pins.
   const handleExportElevation = async () => {
     if (!imageRef.current) return;
     setExporting(true);
@@ -383,11 +508,11 @@ export default function AnnotationCanvas() {
       const imgW = img.naturalWidth;
       const imgH = img.naturalHeight;
 
-      for (const marker of markerList) {
+      for (const marker of visibleMarkers) {
         const mx = (marker.xPercent / 100) * imgW;
         const my = (marker.yPercent / 100) * imgH;
-        const color = STATUS_COLORS[marker.status] || "#EF4444";
-        const label = marker.defectUid || "";
+        const color = STATUS_COLORS[effectiveStatus(marker)] || "#EF4444";
+        const label = marker.resolved?.uid || marker.defectUid || "";
 
         // Pin drop shape
         ctx.save();
@@ -452,18 +577,28 @@ export default function AnnotationCanvas() {
     }
   };
 
-  // Counts
-  const counts = {
-    open: markerList.filter((m) => m.status === "open").length,
-    in_progress: markerList.filter((m) => m.status === "in_progress").length,
-    complete: markerList.filter((m) => m.status === "complete").length,
-  };
+  // Counts reflect the record's current state, not the pin's stored copy.
+  const counts = useMemo(
+    () => ({
+      open: markerList.filter((m) => effectiveStatus(m) === "open").length,
+      in_progress: markerList.filter((m) => effectiveStatus(m) === "in_progress").length,
+      complete: markerList.filter((m) => effectiveStatus(m) === "complete").length,
+      archived: markerList.filter((m) => effectiveStatus(m) === "archived").length,
+    }),
+    [markerList]
+  );
+
+  const backHref = activeReportId != null
+    ? `/projects/${projectId}/reports/${activeReportId}`
+    : `/projects/${projectId}`;
+
+  const expandedMarker = visibleMarkers.find((m) => m.id === expandedPinId) ?? null;
 
   return (
     <div className="flex flex-col h-screen">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b bg-background/95 backdrop-blur z-20 flex-shrink-0">
-        <Link href={`/projects/${projectId}`}>
+        <Link href={backHref}>
           <Button variant="ghost" size="icon" className="h-8 w-8">
             <ArrowLeft className="w-4 h-4" />
           </Button>
@@ -472,6 +607,12 @@ export default function AnnotationCanvas() {
           <p className="text-sm font-medium truncate">
             {elevation?.name || "Loading..."}
           </p>
+          {activeReport && (
+            <p className="text-[11px] text-muted-foreground truncate">
+              Inspection {activeReport.inspectionNumber}
+              {activeReport.inspectionDate ? ` · ${activeReport.inspectionDate}` : ""}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={zoomOut}>
@@ -497,31 +638,60 @@ export default function AnnotationCanvas() {
         </div>
       </div>
 
-      {/* Status bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-muted/50 flex-shrink-0">
-        <div className="flex items-center gap-3 text-xs">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-[#EF4444]" />
-            Open: {counts.open}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-            In Progress: {counts.in_progress}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
-            Complete: {counts.complete}
+      {/* Filter + status bar */}
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b bg-muted/50 flex-shrink-0">
+        <div className="flex items-center gap-1">
+          {FILTERS.map((f) => (
+            <Button
+              key={f.key}
+              size="sm"
+              variant={filter === f.key ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => {
+                setFilter(f.key);
+                setExpandedPinId(null);
+              }}
+            >
+              {f.label}
+            </Button>
+          ))}
+          <span className="text-xs text-muted-foreground ml-1">
+            {visibleMarkers.length}/{markerList.length}
           </span>
         </div>
         <Button
           size="sm"
           variant={placingMode ? "default" : "outline"}
-          className="h-7 text-xs gap-1"
-          onClick={() => setPlacingMode(!placingMode)}
+          className="h-7 text-xs gap-1 flex-shrink-0"
+          onClick={() => {
+            setPlacingMode(!placingMode);
+            setExpandedPinId(null);
+          }}
         >
           <Crosshair className="w-3 h-3" />
-          {placingMode ? "Tap to place" : "Add Marker"}
+          {placingMode ? "Tap to place" : "Add"}
         </Button>
+      </div>
+
+      <div className="flex items-center gap-3 px-3 py-1 border-b text-xs text-muted-foreground flex-shrink-0 overflow-x-auto">
+        <span className="flex items-center gap-1 whitespace-nowrap">
+          <span className="w-2 h-2 rounded-full bg-[#EF4444]" />
+          Open {counts.open}
+        </span>
+        <span className="flex items-center gap-1 whitespace-nowrap">
+          <span className="w-2 h-2 rounded-full bg-[#F59E0B]" />
+          In Progress {counts.in_progress}
+        </span>
+        <span className="flex items-center gap-1 whitespace-nowrap">
+          <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
+          Complete {counts.complete}
+        </span>
+        {counts.archived > 0 && (
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <span className="w-2 h-2 rounded-full bg-[#9CA3AF]" />
+            Archived {counts.archived}
+          </span>
+        )}
       </div>
 
       {/* Canvas area */}
@@ -555,51 +725,170 @@ export default function AnnotationCanvas() {
               draggable={false}
               onLoad={() => setImageLoaded(true)}
             />
-            {/* Markers overlay */}
+            {/* Markers overlay — pin only; detail lives in the expansion card below */}
             {imageLoaded &&
-              markerList.map((marker) => (
-                <div
-                  key={marker.id}
-                  className="absolute flex flex-col items-center pointer-events-auto"
-                  style={{
-                    left: `${marker.xPercent}%`,
-                    top: `${marker.yPercent}%`,
-                    transform: `translate(-50%, -100%) scale(${1 / scale})`,
-                    transformOrigin: "bottom center",
-                    zIndex: 10,
-                  }}
-                  onClick={(e) => handleMarkerClick(e, marker)}
-                >
-                  {/* Pin */}
-                  <div className="flex flex-col items-center cursor-pointer group">
-                    <span
-                      className="text-xs font-mono font-bold px-1.5 py-0.5 rounded whitespace-nowrap mb-0.5 shadow-sm border border-white/30"
-                      style={{
-                        backgroundColor: STATUS_COLORS[marker.status] || "#EF4444",
-                        color: "#fff",
-                        fontSize: "13px",
-                        letterSpacing: "0.02em",
-                      }}
-                    >
-                      {marker.defectUid}
-                    </span>
-                    <svg width="18" height="24" viewBox="0 0 16 22" fill="none">
-                      <path
-                        d="M8 0C3.6 0 0 3.6 0 8c0 5.4 7.05 13.09 7.35 13.43a.87.87 0 001.3 0C8.95 21.09 16 13.4 16 8c0-4.4-3.6-8-8-8z"
-                        fill={STATUS_COLORS[marker.status] || "#EF4444"}
-                      />
-                      <circle cx="8" cy="8" r="3" fill="white" />
-                    </svg>
+              visibleMarkers.map((marker) => {
+                const color = STATUS_COLORS[effectiveStatus(marker)] || "#EF4444";
+                const isExpanded = expandedPinId === marker.id;
+                return (
+                  <div
+                    key={marker.id}
+                    className="absolute flex flex-col items-center pointer-events-auto"
+                    style={{
+                      left: `${marker.xPercent}%`,
+                      top: `${marker.yPercent}%`,
+                      transform: `translate(-50%, -100%) scale(${1 / scale})`,
+                      transformOrigin: "bottom center",
+                      zIndex: isExpanded ? 20 : 10,
+                    }}
+                    onClick={(e) => handleMarkerClick(e, marker)}
+                  >
+                    <div className="cursor-pointer">
+                      <svg
+                        width={isExpanded ? 26 : 20}
+                        height={isExpanded ? 35 : 27}
+                        viewBox="0 0 16 22"
+                        fill="none"
+                        style={{ filter: isExpanded ? "drop-shadow(0 2px 4px rgba(0,0,0,0.45))" : undefined }}
+                      >
+                        <path
+                          d="M8 0C3.6 0 0 3.6 0 8c0 5.4 7.05 13.09 7.35 13.43a.87.87 0 001.3 0C8.95 21.09 16 13.4 16 8c0-4.4-3.6-8-8-8z"
+                          fill={color}
+                          stroke="#fff"
+                          strokeWidth="1"
+                        />
+                        <circle cx="8" cy="8" r="3" fill="white" />
+                      </svg>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
           </div>
         ) : (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground text-sm">Loading drawing...</p>
           </div>
         )}
+
+        {/* Expansion card — anchored to the viewport so it stays readable at any zoom */}
+        {expandedMarker && (
+          <div className="absolute bottom-3 left-3 right-3 z-30">
+            <div className="rounded-lg border bg-background shadow-lg p-3 flex gap-3 items-start">
+              {expandedMarker.resolved?.lastPhoto ? (
+                <img
+                  src={`/api/uploads/${expandedMarker.resolved.lastPhoto.filename}`}
+                  alt={expandedMarker.resolved.lastPhoto.caption || "Latest photo"}
+                  className="w-20 h-20 object-cover rounded-md flex-shrink-0 border"
+                />
+              ) : (
+                <div className="w-20 h-20 rounded-md flex-shrink-0 border bg-muted flex items-center justify-center">
+                  <span className="text-[10px] text-muted-foreground text-center px-1">No photo</span>
+                </div>
+              )}
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm font-semibold truncate">
+                    {expandedMarker.resolved?.uid || expandedMarker.defectUid}
+                  </span>
+                  <span
+                    className="text-[10px] font-medium px-1.5 py-0.5 rounded text-white flex-shrink-0"
+                    style={{ backgroundColor: STATUS_COLORS[effectiveStatus(expandedMarker)] || "#EF4444" }}
+                  >
+                    {STATUS_LABELS[effectiveStatus(expandedMarker)] || effectiveStatus(expandedMarker)}
+                  </span>
+                </div>
+
+                <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                  {expandedMarker.resolved
+                    ? expandedMarker.resolved.categoryName ?? "Uncategorised"
+                    : "Not linked to a record"}
+                  {expandedMarker.resolved && expandedMarker.resolved.recordType === "observation"
+                    ? " · Observation"
+                    : ""}
+                </p>
+
+                {expandedMarker.resolved && !expandedMarker.resolved.inReport && (
+                  <p className="text-[11px] text-amber-600 mt-0.5">
+                    Not in this inspection — last seen in an earlier one
+                  </p>
+                )}
+
+                {expandedMarker.note && (
+                  <p className="text-xs mt-1 line-clamp-2">{expandedMarker.note}</p>
+                )}
+
+                <div className="flex gap-2 mt-2">
+                  {expandedMarker.resolved && (
+                    <Button size="sm" className="h-7 text-xs gap-1" onClick={() => openRecord(expandedMarker)}>
+                      <Eye className="w-3 h-3" />
+                      Open
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1"
+                    onClick={() => openMarkerEditor(expandedMarker)}
+                  >
+                    <Pencil className="w-3 h-3" />
+                    Edit pin
+                  </Button>
+                </div>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 flex-shrink-0"
+                onClick={() => setExpandedPinId(null)}
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* What goes at the pin the user just dropped */}
+      <Dialog open={!!pendingPin} onOpenChange={(v) => !v && setPendingPin(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add at this location</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Button
+              className="w-full justify-start gap-2"
+              disabled={activeReportId == null}
+              onClick={() => createRecordAtPin("defect")}
+            >
+              <Plus className="w-4 h-4" />
+              New defect
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full justify-start gap-2"
+              disabled={activeReportId == null}
+              onClick={() => createRecordAtPin("observation")}
+            >
+              <Plus className="w-4 h-4" />
+              New observation
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full justify-start gap-2"
+              onClick={() => {
+                const p = pendingPin!;
+                setPendingPin(null);
+                setMarkerDialog({ open: true, x: p.x, y: p.y });
+              }}
+            >
+              <Link2 className="w-4 h-4" />
+              Link an existing record
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Marker create/edit dialog */}
       <Dialog open={markerDialog.open} onOpenChange={(v) => !v && closeDialog()}>
@@ -616,7 +905,20 @@ export default function AnnotationCanvas() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="custom">Custom UID (not in register)</SelectItem>
-                  {defects.map((d) => (
+                  {inReportDefects.map((d) => (
+                    <SelectItem key={d.id} value={String(d.id)}>
+                      <span className="font-mono">{d.uid}</span>
+                      <span className="text-muted-foreground ml-2 text-xs">
+                        {d.comment ? d.comment.substring(0, 40) + (d.comment.length > 40 ? "..." : "") : ""}
+                      </span>
+                    </SelectItem>
+                  ))}
+                  {otherDefects.length > 0 && (
+                    <div className="px-2 py-1.5 text-[11px] text-muted-foreground border-t mt-1">
+                      Earlier inspections
+                    </div>
+                  )}
+                  {otherDefects.map((d) => (
                     <SelectItem key={d.id} value={String(d.id)}>
                       <span className="font-mono">{d.uid}</span>
                       <span className="text-muted-foreground ml-2 text-xs">
@@ -688,25 +990,6 @@ export default function AnnotationCanvas() {
                 rows={2}
               />
             </div>
-            {/* View Defect button — navigate within the app */}
-            {markerDialog.editing && (() => {
-              const defect = findDefectForMarker(markerDialog.editing!);
-              if (!defect || !defect.reportId) return null;
-              return (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full gap-2"
-                  onClick={() => {
-                    closeDialog();
-                    navigate(`/projects/${projectId}/reports/${defect.reportId}/defects/${defect.id}`);
-                  }}
-                >
-                  <Eye className="w-4 h-4" />
-                  View Defect
-                </Button>
-              );
-            })()}
             <div className="flex gap-2">
               <Button
                 type="submit"
