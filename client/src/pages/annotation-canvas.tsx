@@ -33,10 +33,13 @@ import { ArrowLeft, ZoomIn, ZoomOut, RotateCcw, Crosshair, Eye, Download } from 
 import { useToast } from "@/hooks/use-toast";
 import type { Elevation, Marker, Defect } from "@shared/schema";
 
+// Marker status now mirrors the record's status, which includes 'archived'. Without an
+// entry here an archived pin would silently fall back to the red 'open' colour.
 const STATUS_COLORS: Record<string, string> = {
   open: "#EF4444",
   in_progress: "#F59E0B",
   complete: "#22C55E",
+  archived: "#9CA3AF",
 };
 
 export default function AnnotationCanvas() {
@@ -664,6 +667,12 @@ export default function AnnotationCanvas() {
                     <span className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
                       Complete
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="archived">
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-[#9CA3AF]" />
+                      Archived
                     </span>
                   </SelectItem>
                 </SelectContent>

@@ -18,7 +18,7 @@ import {
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, or, desc, inArray, sql } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 
@@ -949,7 +949,7 @@ export interface IStorage {
   createMarker(marker: InsertMarker): Promise<Marker>;
   updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined>;
   deleteMarker(id: number): Promise<void>;
-  updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>): Promise<void>;
+  updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>, previousUid?: string): Promise<number>;
   // Observation/Action History
   getObservationHistory(defectId: number): Promise<ObservationHistory[]>;
   getActionHistory(defectId: number): Promise<ActionHistory[]>;
@@ -1392,8 +1392,57 @@ export class DatabaseStorage implements IStorage {
   async deleteMarker(id: number): Promise<void> {
     db.delete(markers).where(eq(markers.id, id)).run();
   }
-  async updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>): Promise<void> {
-    db.update(markers).set(updates).where(eq(markers.defectId, defectId)).run();
+  // A marker is pinned to the wall, not to a single inspection. Start Next Inspection
+  // clones each record into a NEW row with a NEW id, so matching markers on defect_id
+  // alone silently stops working after the first roll-over: the pins still hold the ids
+  // from the inspection they were placed in, and status edits made on the current row
+  // match nothing. Resolve the lineage instead (same project + same UID, whichever row
+  // holds it now) and re-point the marker at the live row as we go, so the links
+  // self-heal on first touch.
+  //
+  // previousUid must be supplied when the caller is renaming a UID, because by then the
+  // defect row already carries the new value and the markers still carry the old one.
+  async updateMarkersByDefectId(
+    defectId: number,
+    updates: Partial<InsertMarker>,
+    previousUid?: string,
+  ): Promise<number> {
+    const d = db.select().from(defects).where(eq(defects.id, defectId)).get();
+    if (!d) {
+      // Defect is gone; fall back to the exact-id behaviour rather than guessing.
+      return db.update(markers).set(updates).where(eq(markers.defectId, defectId)).run().changes;
+    }
+
+    const matchUid = previousUid ?? d.uid;
+    const elevationIds = db
+      .select({ id: elevations.id })
+      .from(elevations)
+      .where(eq(elevations.projectId, d.projectId))
+      .all()
+      .map((e) => e.id);
+    if (elevationIds.length === 0) return 0;
+
+    // Rows that are or ever were this record, so pins holding a stale id are caught too.
+    const lineageIds = db
+      .select({ id: defects.id })
+      .from(defects)
+      .where(and(eq(defects.projectId, d.projectId), eq(defects.uid, matchUid)))
+      .all()
+      .map((x) => x.id);
+
+    return db
+      .update(markers)
+      .set({ ...updates, defectId })
+      .where(
+        and(
+          inArray(markers.elevationId, elevationIds),
+          or(
+            eq(markers.defectUid, matchUid),
+            lineageIds.length > 0 ? inArray(markers.defectId, lineageIds) : sql`0`,
+          ),
+        ),
+      )
+      .run().changes;
   }
 
   // Observation/Action History
