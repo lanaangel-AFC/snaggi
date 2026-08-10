@@ -1259,9 +1259,144 @@ export async function registerRoutes(
   });
 
   // === MARKERS ===
+  type DefectRow = {
+    id: number; uid: string; status: string; report_id: number;
+    record_type: string | null; category_code: string | null;
+  };
+
   app.get("/api/elevations/:elevationId/markers", async (req, res) => {
     const markerList = await storage.getMarkersByElevation(Number(req.params.elevationId));
     res.json(markerList);
+  });
+
+  // Resolve every pin on an elevation against a specific inspection.
+  // The canvas needs to know, for each pin, which record it represents *in the report the
+  // user is looking at* — not merely the row id the pin was created against, because Start
+  // Next Inspection clones each record into a fresh row and the Stage 2 migration renamed
+  // UIDs in place. Resolution therefore walks the lineage: row id, then UID, then any
+  // legacy_id rename chain. Pins whose record is absent from this report are returned with
+  // inReport:false and their last known state so the drawing can show them without
+  // pretending they are live.
+  app.get("/api/elevations/:elevationId/markers/resolved", async (req, res) => {
+    try {
+      const elevationId = Number(req.params.elevationId);
+      const elevation = await storage.getElevation(elevationId);
+      if (!elevation) return res.status(404).json({ message: "Elevation not found" });
+      const projectId = elevation.projectId;
+
+      const reportId = req.query.reportId != null ? Number(req.query.reportId) : null;
+      if (reportId != null && Number.isNaN(reportId)) {
+        return res.status(400).json({ message: "reportId must be a number" });
+      }
+
+      const markerList = await storage.getMarkersByElevation(elevationId);
+
+      const project = await storage.getProject(projectId);
+      const categoryNames = new Map<string, string>();
+      const rawCategories = (project as any)?.categories;
+      if (rawCategories) {
+        try {
+          const parsed = typeof rawCategories === "string" ? JSON.parse(rawCategories) : rawCategories;
+          if (Array.isArray(parsed)) {
+            for (const c of parsed) {
+              if (c && c.code) categoryNames.set(String(c.code), String(c.name ?? c.code));
+            }
+          }
+        } catch {
+          // A malformed categories blob must not take the drawing down; codes still render.
+        }
+      }
+
+      const aliasCache = new Map<string, string[]>();
+      const aliasesFor = (uid: string): string[] => {
+        let v = aliasCache.get(uid);
+        if (!v) {
+          v = storage.resolveUidAliases(projectId, uid);
+          aliasCache.set(uid, v);
+        }
+        return v;
+      };
+
+      const findInReport = (uids: string[], targetReport: number) => {
+        const placeholders = uids.map(() => "?").join(", ");
+        return sqlite.prepare(`
+          SELECT id, uid, status, report_id, record_type, category_code
+          FROM defects
+          WHERE project_id = ? AND report_id = ? AND uid IN (${placeholders})
+          ORDER BY id DESC
+          LIMIT 1
+        `).get(projectId, targetReport, ...uids) as DefectRow | undefined;
+      };
+
+      const findLatest = (uids: string[]) => {
+        const placeholders = uids.map(() => "?").join(", ");
+        return sqlite.prepare(`
+          SELECT id, uid, status, report_id, record_type, category_code
+          FROM defects
+          WHERE project_id = ? AND uid IN (${placeholders})
+          ORDER BY report_id DESC, id DESC
+          LIMIT 1
+        `).get(projectId, ...uids) as DefectRow | undefined;
+      };
+
+      const lastPhotoFor = (defectId: number) =>
+        sqlite.prepare(`
+          SELECT filename, caption, slot
+          FROM photos
+          WHERE defect_id = ?
+          ORDER BY id DESC
+          LIMIT 1
+        `).get(defectId) as { filename: string; caption: string | null; slot: string } | undefined;
+
+      const out = markerList.map((marker) => {
+        const uids = Array.from(new Set(aliasesFor(marker.defectUid).concat(marker.defectUid)));
+
+        let row: DefectRow | undefined;
+        let via: string | null = null;
+
+        if (reportId != null) {
+          row = findInReport(uids, reportId);
+          if (row) via = row.uid === marker.defectUid ? "uid" : "rename";
+        }
+        if (!row) {
+          row = findLatest(uids);
+          if (row) via = row.uid === marker.defectUid ? "uid-latest" : "rename-latest";
+        }
+        // Fall back to the stored row id only if lineage found nothing at all, so a pin
+        // pointing at a superseded row still resolves to something rather than an orphan.
+        if (!row && marker.defectId) {
+          row = sqlite.prepare(`
+            SELECT id, uid, status, report_id, record_type, category_code
+            FROM defects WHERE id = ?
+          `).get(marker.defectId) as DefectRow | undefined;
+          if (row) via = "id";
+        }
+
+        if (!row) return { ...marker, resolved: null };
+
+        const photo = lastPhotoFor(row.id);
+        return {
+          ...marker,
+          resolved: {
+            defectId: row.id,
+            uid: row.uid,
+            status: row.status,
+            recordType: row.record_type ?? "defect",
+            categoryCode: row.category_code ?? null,
+            categoryName: row.category_code ? categoryNames.get(row.category_code) ?? row.category_code : null,
+            reportId: row.report_id,
+            inReport: reportId != null ? row.report_id === reportId : true,
+            resolvedVia: via,
+            lastPhoto: photo ? { filename: photo.filename, caption: photo.caption, slot: photo.slot } : null,
+          },
+        };
+      });
+
+      res.json(out);
+    } catch (err) {
+      console.error("[markers/resolved] failed:", err);
+      res.status(500).json({ message: "Failed to resolve markers" });
+    }
   });
 
   app.post("/api/elevations/:elevationId/markers", async (req, res) => {

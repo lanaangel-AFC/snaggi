@@ -23,6 +23,9 @@ function AppRouter() {
       <Route path="/projects/:projectId/reports/:reportId/defects/new-defect" component={DefectForm} />
       <Route path="/projects/:projectId/reports/:reportId/defects/new-observation" component={DefectForm} />
       <Route path="/projects/:projectId/reports/:reportId/defects/:defectId" component={DefectForm} />
+      {/* Report-scoped canvas: the drawing-first entry point. The unscoped route below is
+          kept for older links and falls back to the project's newest inspection. */}
+      <Route path="/projects/:projectId/reports/:reportId/elevations/:elevationId" component={AnnotationCanvas} />
       <Route path="/projects/:projectId/elevations/:elevationId" component={AnnotationCanvas} />
       <Route path="/admin/migration-preview/:projectId" component={MigrationPreview} />
       <Route path="/admin/migration-preview" component={MigrationPreview} />

@@ -119,6 +119,24 @@ export default function DefectForm() {
   const isEdit = !!defectId && defectId !== "new-defect" && defectId !== "new-observation";
   const isNewObservation = defectId === "new-observation" || (typeof window !== "undefined" && window.location.hash.includes("/new-observation"));
 
+  // Arrived from the drawing: the user dropped a pin first and the record is being created
+  // to sit under it. We carry the coordinates through rather than creating the marker up
+  // front, so abandoning the form leaves no orphan pin on the elevation.
+  const pendingPin = (() => {
+    if (typeof window === "undefined") return null;
+    const hash = window.location.hash;
+    const qIndex = hash.indexOf("?");
+    if (qIndex === -1) return null;
+    const params = new URLSearchParams(hash.substring(qIndex));
+    const elevationId = params.get("pinElevationId");
+    const x = params.get("pinX");
+    const y = params.get("pinY");
+    if (!elevationId || x == null || y == null) return null;
+    const parsed = { elevationId: Number(elevationId), x: Number(x), y: Number(y) };
+    if (Number.isNaN(parsed.elevationId) || Number.isNaN(parsed.x) || Number.isNaN(parsed.y)) return null;
+    return parsed;
+  })();
+
   // Two-step flow: Step 1 = pick work type, Step 2 = full form
   const [formStep, setFormStep] = useState<"workType" | "form">(isEdit ? "form" : "workType");
   const [showOtherWorkTypes, setShowOtherWorkTypes] = useState(false);
@@ -780,6 +798,27 @@ export default function DefectForm() {
       }
       const typeLabel = recordType === "observation" ? "Observation" : "Defect";
       toast({ title: isEdit ? `${typeLabel} updated` : `${typeLabel} created` });
+      if (!isEdit && pendingPin) {
+        // Place the pin the user dropped, then hand them back to the drawing they came
+        // from. A failed marker write must not look like a failed save: the record is
+        // already committed, so we report the pin separately and still navigate back.
+        apiRequest("POST", `/api/elevations/${pendingPin.elevationId}/markers`, {
+          defectId: data.id,
+          defectUid: data.uid,
+          status: data.status || "open",
+          note: "",
+          xPercent: pendingPin.x,
+          yPercent: pendingPin.y,
+        })
+          .catch(() => {
+            toast({ title: "Record saved, but the pin could not be placed", variant: "destructive" });
+          })
+          .finally(() => {
+            queryClient.invalidateQueries({ queryKey: ["/api/elevations", String(pendingPin.elevationId), "markers"] });
+            navigate(`/projects/${projectId}/reports/${reportId}/elevations/${pendingPin.elevationId}`, { replace: true });
+          });
+        return;
+      }
       if (!isEdit) {
         navigate(`/projects/${projectId}/reports/${reportId}/defects/${data.id}`, { replace: true });
       }
