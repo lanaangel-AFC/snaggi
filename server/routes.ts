@@ -516,14 +516,40 @@ export async function registerRoutes(
   });
 
   app.patch("/api/defects/:id", async (req, res) => {
-    const defectId = Number(req.params.id);
+    const requestedId = Number(req.params.id);
+
+    // contextReportId is the inspection the user is working in, which is not always the
+    // inspection the row belongs to: the elevation drawing keeps pins for items that were
+    // closed several inspections ago. Amending such a record from the current inspection
+    // must make it live there rather than silently rewriting an issued report, so the row
+    // is carried forward first and the amendment is applied to the carried-forward copy.
+    // Absent or older contextReportId means the user is deliberately in that older
+    // inspection, and the row is edited in place as before.
+    const { contextReportId, ...updates } = req.body ?? {};
+
+    let defectId = requestedId;
+    let carriedForward = false;
+    let carriedForwardFrom: number | null = null;
+
+    const requested = await storage.getDefect(requestedId);
+    if (!requested) return res.status(404).json({ message: "Defect not found" });
+
+    const ctxReportId = Number(contextReportId);
+    if (Number.isFinite(ctxReportId) && requested.reportId !== ctxReportId) {
+      const cf = await storage.carryForwardDefect(requestedId, ctxReportId);
+      if (cf && cf.defect.id !== requestedId) {
+        defectId = cf.defect.id;
+        carriedForward = cf.created;
+        carriedForwardFrom = requested.reportId ?? null;
+      }
+    }
 
     // Capture history BEFORE applying the update
     const existing = await storage.getDefect(defectId);
     if (!existing) return res.status(404).json({ message: "Defect not found" });
 
     const now = new Date().toISOString();
-    if (req.body.comment !== undefined && req.body.comment !== existing.comment && existing.comment?.trim()) {
+    if (updates.comment !== undefined && updates.comment !== existing.comment && existing.comment?.trim()) {
       await storage.createObservationHistory({
         defectId,
         reportId: existing.reportId!,
@@ -531,7 +557,7 @@ export async function registerRoutes(
         createdAt: now,
       });
     }
-    if (req.body.actionRequired !== undefined && req.body.actionRequired !== existing.actionRequired && existing.actionRequired?.trim()) {
+    if (updates.actionRequired !== undefined && updates.actionRequired !== existing.actionRequired && existing.actionRequired?.trim()) {
       await storage.createActionHistory({
         defectId,
         reportId: existing.reportId!,
@@ -541,29 +567,31 @@ export async function registerRoutes(
     }
 
     // Track status changes
-    if (req.body.status !== undefined && req.body.status !== existing.status) {
+    if (updates.status !== undefined && updates.status !== existing.status) {
       await storage.createStatusHistory({
         defectId,
         oldStatus: existing.status,
-        newStatus: req.body.status,
+        newStatus: updates.status,
         reportId: existing.reportId,
         createdAt: now,
       });
     }
 
-    const defect = await storage.updateDefect(defectId, req.body);
+    const defect = await storage.updateDefect(defectId, updates);
     if (!defect) return res.status(404).json({ message: "Defect not found" });
 
     // Sync markers when uid or status changes. existing.uid is the pre-update value and
     // is what the markers still hold, so it has to be the match key on a rename.
     const markerUpdates: Record<string, string> = {};
-    if (req.body.uid) markerUpdates.defectUid = req.body.uid;
-    if (req.body.status) markerUpdates.status = req.body.status;
+    if (updates.uid) markerUpdates.defectUid = updates.uid;
+    if (updates.status) markerUpdates.status = updates.status;
     if (Object.keys(markerUpdates).length > 0) {
       await storage.updateMarkersByDefectId(defect.id, markerUpdates, existing.uid);
     }
 
-    res.json(defect);
+    // carriedForward tells the client the amendment landed on a different row, so it can
+    // redirect to it instead of continuing to edit the historical record.
+    res.json({ ...defect, carriedForward, carriedForwardFrom });
   });
 
   // ===================== §2.2 — AI ACTION SUMMARY =====================
@@ -1299,7 +1327,7 @@ export async function registerRoutes(
           const parsed = typeof rawCategories === "string" ? JSON.parse(rawCategories) : rawCategories;
           if (Array.isArray(parsed)) {
             for (const c of parsed) {
-              if (c && c.code) categoryNames.set(String(c.code), String(c.name ?? c.code));
+              if (c && c.code) categoryNames.set(String(c.code), String(c.label ?? c.name ?? c.code));
             }
           }
         } catch {

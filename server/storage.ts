@@ -917,6 +917,7 @@ export interface IStorage {
   createReport(report: InsertReport): Promise<Report>;
   updateReport(id: number, report: Partial<InsertReport>): Promise<Report | undefined>;
   deleteReport(id: number): Promise<void>;
+  carryForwardDefect(defectId: number, targetReportId: number): Promise<{ defect: Defect; created: boolean } | null>;
   startNextInspection(sourceReportId: number, metadata: StartNextInspectionMetadata): Promise<Report>;
   // Defects
   getDefectsByProject(projectId: number): Promise<Defect[]>;
@@ -1087,6 +1088,195 @@ export class DatabaseStorage implements IStorage {
   // seeds prior history rows, clones photos preserving originReportId, sets priorReportId,
   // and writes a meta key LAST so a partial run is detectable. Does NOT auto-archive or
   // mutate any 'complete' rows on the source report — they stay on report N (audit trail).
+  // Clone one record into another inspection, preserving structured identity, history
+  // seeding and the full photo lineage. Extracted from startNextInspection so the
+  // carry-forward-on-amend path cannot drift from the bulk path: any field added to one
+  // is added to both. `historyReportId` is the report the seeded prior-history rows are
+  // attributed to, which is the report the source row belongs to.
+  private cloneDefectIntoReport(d: Defect, targetReportId: number, historyReportId: number, now: string): Defect {
+    const newDefect = db.insert(defects).values({
+      projectId: d.projectId,
+      reportId: targetReportId,
+      uid: d.uid,
+      dateOpened: d.dateOpened,
+      dateClosed: d.dateClosed,
+      comment: d.comment,
+      actionRequired: d.actionRequired,
+      assignedTo: d.assignedTo,
+      dueDate: d.dueDate,
+      verificationMethod: d.verificationMethod,
+      verificationPerson: d.verificationPerson,
+      status: "open",
+      recordType: d.recordType,
+      // Preserve structured identity so the clone is the same record, not a new one.
+      elevationCode: d.elevationCode,
+      dropCode: d.dropCode,
+      levelCode: d.levelCode,
+      workTypeCode: d.workTypeCode,
+      seqNumber: d.seqNumber,
+      legacyId: d.legacyId,
+      locationStructured: d.locationStructured,
+      inspectionOpened: d.inspectionOpened, // preserved — where the record FIRST appeared
+      // Export-profile classification is part of the record's identity, not of a single
+      // inspection. Omitting these made every clone fall back to the column default,
+      // so a categorised item reappeared as "(uncategorised)" in the next inspection
+      // and in its exports. Both MUST be carried forward.
+      audience: d.audience,
+      categoryCode: d.categoryCode,
+      createdAt: now,
+    }).returning().get();
+
+    // Seed prior history rows pointing at the SOURCE report so they render as "prior".
+    if (d.comment?.trim()) {
+      db.insert(observationHistory).values({
+        defectId: newDefect.id,
+        reportId: historyReportId,
+        text: d.comment,
+        createdAt: now,
+      }).run();
+    }
+    if (d.actionRequired?.trim()) {
+      db.insert(actionHistory).values({
+        defectId: newDefect.id,
+        reportId: historyReportId,
+        text: d.actionRequired,
+        createdAt: now,
+      }).run();
+    }
+
+    // Clone photos: walk the FULL clone lineage (all defects rows sharing this
+    // projectId+uid), not just the immediate parent row. This makes cloning
+    // lossless AND self-healing: if an earlier inspection dropped a photo, this
+    // step recovers it because we traverse the whole lineage. New reportId =
+    // targetReportId but originReportId is preserved so age (current vs prior) is
+    // computed correctly — all cloned photos render "OLD".
+    const lineagePhotos = db
+      .select({ photo: photos })
+      .from(photos)
+      .innerJoin(defects, eq(defects.id, photos.defectId))
+      .where(and(eq(defects.projectId, d.projectId), eq(defects.uid, d.uid)))
+      .all()
+      .map((r) => r.photo);
+
+    // Dedupe by the same rule as getAllPhotosForItem (Fix 1): identity from the earliest
+    // row per (originReportId, slot) group (both clone-stable by design, milestone 9),
+    // with caption and captureDate taking the most-recent non-empty value across the
+    // group so user edits made on later visits are carried into the new clone. createdAt
+    // is fresh on every clone, so it is not part of identity — otherwise each clone would
+    // look unique and we'd re-clone every copy.
+    const dedupedPhotos = dedupePhotoLineage(lineagePhotos);
+
+    for (const p of dedupedPhotos) {
+      const originReportId = p.originReportId ?? p.reportId;
+      // Skip if a clone for this (newDefect.id, originReportId, slot) already exists.
+      const alreadyCloned = db
+        .select()
+        .from(photos)
+        .where(and(
+          eq(photos.defectId, newDefect.id),
+          eq(photos.slot, p.slot),
+          ...(originReportId != null ? [eq(photos.originReportId, originReportId)] : []),
+        ))
+        .get();
+      if (alreadyCloned) continue;
+
+      const srcPath = path.join(uploadDir, p.filename);
+      if (!fs.existsSync(srcPath)) {
+        // Do NOT silently skip — log so the dropped file is visible.
+        console.error(
+          `[cloneDefectIntoReport] DROPPED photo: source file missing on disk. ` +
+          `photoId=${p.id} defectUid=${d.uid} filename=${p.filename} srcPath=${srcPath}`
+        );
+        continue;
+      }
+      const ext = path.extname(p.filename);
+      const newFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const destPath = path.join(uploadDir, newFilename);
+      fs.copyFileSync(srcPath, destPath);
+      db.insert(photos).values({
+        defectId: newDefect.id,
+        filename: newFilename,
+        caption: p.caption,
+        slot: p.slot,
+        reportId: targetReportId,
+        originReportId, // preserve original source report
+        captureDate: p.captureDate ?? null,
+        createdAt: now,
+      }).run();
+    }
+
+    return newDefect;
+  }
+
+  // Bring a record from an earlier inspection into `targetReportId`.
+  //
+  // Used when a record is amended while the user is working in a later inspection than the
+  // row itself belongs to — typically reached from the elevation drawing, where pins survive
+  // long after Start Next Inspection stopped carrying a closed item forward. The historical
+  // row is deliberately left untouched so an issued report keeps saying what it said on the
+  // day; the amendment lands on a fresh row in the target inspection instead.
+  //
+  // Never moves a record backwards in time, and never creates a second row if the lineage is
+  // already present in the target inspection.
+  async carryForwardDefect(
+    defectId: number,
+    targetReportId: number,
+  ): Promise<{ defect: Defect; created: boolean } | null> {
+    const source = db.select().from(defects).where(eq(defects.id, defectId)).get();
+    if (!source) return null;
+    if (source.reportId === targetReportId) return { defect: source, created: false };
+
+    const targetReport = db.select().from(reports).where(eq(reports.id, targetReportId)).get();
+    if (!targetReport || targetReport.projectId !== source.projectId) return null;
+
+    const sourceReport = source.reportId
+      ? db.select().from(reports).where(eq(reports.id, source.reportId)).get()
+      : undefined;
+    if (!sourceReport) return null;
+
+    // Forward only. Comparing inspection numbers rather than row ids because a project can
+    // hold two reports for the same inspection (revisions), and a lower id is not reliably
+    // an earlier inspection.
+    const num = (r: { inspectionNumber: string | null; id: number }) => {
+      const n = parseInt(String(r.inspectionNumber ?? ""), 10);
+      return Number.isFinite(n) ? n : r.id;
+    };
+    if (num(targetReport) <= num(sourceReport)) return { defect: source, created: false };
+
+    const now = new Date().toISOString();
+    const aliases = this.resolveUidAliases(source.projectId, source.uid);
+    const uids = Array.from(new Set(aliases.concat(source.uid)));
+
+    // One transaction so two concurrent saves cannot both decide the row is missing.
+    const run = sqlite.transaction(() => {
+      const placeholders = uids.map(() => "?").join(", ");
+      const present = sqlite.prepare(`
+        SELECT id FROM defects
+        WHERE project_id = ? AND report_id = ? AND uid IN (${placeholders})
+        ORDER BY id DESC LIMIT 1
+      `).get(source.projectId, targetReportId, ...uids) as { id: number } | undefined;
+
+      if (present) {
+        const row = db.select().from(defects).where(eq(defects.id, present.id)).get()!;
+        return { defect: row, created: false };
+      }
+      const clone = this.cloneDefectIntoReport(source, targetReportId, source.reportId!, now);
+      return { defect: clone, created: true };
+    });
+
+    const result = run();
+
+    // Point the drawing at the row that is now live, following any rename.
+    if (result.created) {
+      await this.updateMarkersByDefectId(
+        result.defect.id,
+        { status: result.defect.status },
+        result.defect.uid,
+      );
+    }
+    return result;
+  }
+
   async startNextInspection(sourceReportId: number, metadata: StartNextInspectionMetadata): Promise<Report> {
     const source = db.select().from(reports).where(eq(reports.id, sourceReportId)).get();
     if (!source) throw new Error("Source report not found");
@@ -1141,116 +1331,7 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(defects.reportId, sourceReportId), eq(defects.status, "open")))
       .all();
     for (const d of sourceDefects) {
-      const newDefect = db.insert(defects).values({
-        projectId: d.projectId,
-        reportId: newReport.id,
-        uid: d.uid,
-        dateOpened: d.dateOpened,
-        dateClosed: d.dateClosed,
-        comment: d.comment,
-        actionRequired: d.actionRequired,
-        assignedTo: d.assignedTo,
-        dueDate: d.dueDate,
-        verificationMethod: d.verificationMethod,
-        verificationPerson: d.verificationPerson,
-        status: "open",
-        recordType: d.recordType,
-        // Preserve structured identity so the clone is the same record, not a new one.
-        elevationCode: d.elevationCode,
-        dropCode: d.dropCode,
-        levelCode: d.levelCode,
-        workTypeCode: d.workTypeCode,
-        seqNumber: d.seqNumber,
-        legacyId: d.legacyId,
-        locationStructured: d.locationStructured,
-        inspectionOpened: d.inspectionOpened, // preserved — where the record FIRST appeared
-        // Export-profile classification is part of the record's identity, not of a single
-        // inspection. Omitting these made every clone fall back to the column default,
-        // so a categorised item reappeared as "(uncategorised)" in the next inspection
-        // and in its exports. Both MUST be carried forward.
-        audience: d.audience,
-        categoryCode: d.categoryCode,
-        createdAt: now,
-      }).returning().get();
-
-      // Seed prior history rows pointing at the SOURCE report so they render as "prior".
-      if (d.comment?.trim()) {
-        db.insert(observationHistory).values({
-          defectId: newDefect.id,
-          reportId: source.id,
-          text: d.comment,
-          createdAt: now,
-        }).run();
-      }
-      if (d.actionRequired?.trim()) {
-        db.insert(actionHistory).values({
-          defectId: newDefect.id,
-          reportId: source.id,
-          text: d.actionRequired,
-          createdAt: now,
-        }).run();
-      }
-
-      // Clone photos: walk the FULL clone lineage (all defects rows sharing this
-      // projectId+uid), not just the immediate parent row. This makes cloning
-      // lossless AND self-healing: if an earlier inspection dropped a photo, this
-      // step recovers it because we traverse the whole lineage. New reportId =
-      // newReport.id but originReportId is preserved so age (current vs prior) is
-      // computed correctly — all cloned photos render "OLD".
-      const lineagePhotos = db
-        .select({ photo: photos })
-        .from(photos)
-        .innerJoin(defects, eq(defects.id, photos.defectId))
-        .where(and(eq(defects.projectId, d.projectId), eq(defects.uid, d.uid)))
-        .all()
-        .map((r) => r.photo);
-
-      // Dedupe by the same rule as getAllPhotosForItem (Fix 1): identity from the earliest
-      // row per (originReportId, slot) group (both clone-stable by design, milestone 9),
-      // with caption and captureDate taking the most-recent non-empty value across the
-      // group so user edits made on later visits are carried into the new clone. createdAt
-      // is fresh on every clone, so it is not part of identity — otherwise each clone would
-      // look unique and we'd re-clone every copy.
-      const dedupedPhotos = dedupePhotoLineage(lineagePhotos);
-
-      for (const p of dedupedPhotos) {
-        const originReportId = p.originReportId ?? p.reportId;
-        // Skip if a clone for this (newDefect.id, originReportId, slot) already exists.
-        const alreadyCloned = db
-          .select()
-          .from(photos)
-          .where(and(
-            eq(photos.defectId, newDefect.id),
-            eq(photos.slot, p.slot),
-            ...(originReportId != null ? [eq(photos.originReportId, originReportId)] : []),
-          ))
-          .get();
-        if (alreadyCloned) continue;
-
-        const srcPath = path.join(uploadDir, p.filename);
-        if (!fs.existsSync(srcPath)) {
-          // Do NOT silently skip — log so the dropped file is visible.
-          console.error(
-            `[startNextInspection] DROPPED photo: source file missing on disk. ` +
-            `photoId=${p.id} defectUid=${d.uid} filename=${p.filename} srcPath=${srcPath}`
-          );
-          continue;
-        }
-        const ext = path.extname(p.filename);
-        const newFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-        const destPath = path.join(uploadDir, newFilename);
-        fs.copyFileSync(srcPath, destPath);
-        db.insert(photos).values({
-          defectId: newDefect.id,
-          filename: newFilename,
-          caption: p.caption,
-          slot: p.slot,
-          reportId: newReport.id,
-          originReportId, // preserve original source report
-          captureDate: p.captureDate ?? null,
-          createdAt: now,
-        }).run();
-      }
+      this.cloneDefectIntoReport(d, newReport.id, source.id, now);
     }
 
     // Write the meta key LAST so a partial run is detectable.

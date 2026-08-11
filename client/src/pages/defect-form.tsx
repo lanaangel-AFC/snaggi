@@ -137,6 +137,36 @@ export default function DefectForm() {
     return parsed;
   })();
 
+  // Every amendment is submitted with the inspection the user is working in, which is not
+  // always the inspection the row belongs to — pins on a drawing outlive the inspection that
+  // last carried the record. If the server carries the record forward it answers with a
+  // different row id, and from that point the form must edit the new row, so the URL is
+  // swapped underneath without disturbing what the user has typed.
+  const contextReportId = reportId ? Number(reportId) : undefined;
+  const activeDefectIdRef = useRef<string | undefined>(defectId);
+  useEffect(() => {
+    activeDefectIdRef.current = defectId;
+  }, [defectId]);
+
+  const patchDefect = async (body: Record<string, any>) => {
+    const id = activeDefectIdRef.current;
+    const res = await apiRequest("PATCH", `/api/defects/${id}`, {
+      ...body,
+      ...(contextReportId != null && Number.isFinite(contextReportId) ? { contextReportId } : {}),
+    });
+    const data = await res.json();
+    if (data?.id != null && String(data.id) !== String(id)) {
+      activeDefectIdRef.current = String(data.id);
+      if (data.carriedForward) {
+        toast({ title: "Brought forward into this inspection" });
+      }
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
+      navigate(`/projects/${projectId}/reports/${reportId}/defects/${data.id}`, { replace: true });
+    }
+    return data;
+  };
+
   // Two-step flow: Step 1 = pick work type, Step 2 = full form
   const [formStep, setFormStep] = useState<"workType" | "form">(isEdit ? "form" : "workType");
   const [showOtherWorkTypes, setShowOtherWorkTypes] = useState(false);
@@ -386,7 +416,7 @@ export default function DefectForm() {
       const current = formRef.current;
       setAutosaveStatus("saving");
       try {
-        await apiRequest("PATCH", `/api/defects/${defectId}`, {
+        await patchDefect({
           comment: current.comment,
           actionRequired: current.actionRequired,
         });
@@ -773,8 +803,7 @@ export default function DefectForm() {
       if (isEdit) {
         // Include updated UID if the fields were changed (open items only)
         const updatedUid = assembledUid || uid;
-        const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { ...form, uid: updatedUid, ...uidParts, categoryCode: categoryCode || null, audience });
-        return res.json();
+        return await patchDefect({ ...form, uid: updatedUid, ...uidParts, categoryCode: categoryCode || null, audience });
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
           ...form,
@@ -831,8 +860,7 @@ export default function DefectForm() {
   // Toggle a record's classification between Defect and Observation on an existing record.
   const recordTypeMutation = useMutation({
     mutationFn: async (newType: "defect" | "observation") => {
-      const res = await apiRequest("PATCH", `/api/defects/${defectId}`, { recordType: newType });
-      return res.json();
+      return await patchDefect({ recordType: newType });
     },
     onSuccess: (_data, newType) => {
       // Invalidate everything that buckets a record by type: report list (DEFECTS vs OBSERVATIONS),
@@ -931,7 +959,7 @@ export default function DefectForm() {
         const dateClosed = new Date().toISOString().split("T")[0];
         setForm((prev) => ({ ...prev, status: "complete", dateClosed }));
         try {
-          await apiRequest("PATCH", `/api/defects/${defectId}`, { status: "complete", dateClosed });
+          await patchDefect({ status: "complete", dateClosed });
           queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
           queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/defects`] });
           toast({ title: `${recordType === "observation" ? "Observation" : "Defect"} marked as complete` });
