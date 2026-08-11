@@ -349,12 +349,15 @@ export default function AnnotationCanvas() {
     setMarkerDialog({ open: true, x: marker.xPercent, y: marker.yPercent, editing: marker });
   };
 
-  // Open the record a pin represents, in the report it actually lives in.
+  // Open the record a pin represents, in the inspection currently being viewed. The row id
+  // may belong to an earlier report; passing the active report as the context means an
+  // amendment is carried forward into this inspection rather than rewriting an issued one.
   const openRecord = (marker: ResolvedMarker) => {
     const r = marker.resolved;
     if (!r) return;
     setExpandedPinId(null);
-    navigate(`/projects/${projectId}/reports/${r.reportId}/defects/${r.defectId}`);
+    const contextReportId = activeReportId ?? r.reportId;
+    navigate(`/projects/${projectId}/reports/${contextReportId}/defects/${r.defectId}`);
   };
 
   // Create a new record at the pending pin. The defect form owns UID assembly, duplicate
