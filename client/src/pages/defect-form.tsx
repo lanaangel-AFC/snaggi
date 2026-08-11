@@ -801,9 +801,30 @@ export default function DefectForm() {
         seqNumber: seqNumber || null,
       };
       if (isEdit) {
-        // Include updated UID if the fields were changed (open items only)
-        const updatedUid = assembledUid || uid;
-        return await patchDefect({ ...form, uid: updatedUid, ...uidParts, categoryCode: categoryCode || null, audience });
+        // A save must never silently empty part of a record's identity. If a part is blank in
+        // the form but present on the stored record the field was not edited, it simply had not
+        // seeded yet, so keep what is stored. Without this the UID is reassembled a segment
+        // short (E-05-07-OT-02 becoming E-05-OT-02) and the record loses its level.
+        const stored = existingDefect as any;
+        const keep = (formValue: string, storedValue: any) =>
+          formValue ? formValue : (storedValue ?? null);
+        const safeParts = {
+          elevationCode: keep(elevation, stored?.elevationCode),
+          dropCode: keep(drop, stored?.dropCode),
+          levelCode: keep(level, stored?.levelCode),
+          workTypeCode: keep(workType, stored?.workTypeCode),
+          seqNumber: keep(seqNumber, stored?.seqNumber),
+        };
+        const recoveredPart =
+          safeParts.elevationCode !== (elevation || null) ||
+          safeParts.dropCode !== (drop || null) ||
+          safeParts.levelCode !== (level || null) ||
+          safeParts.workTypeCode !== (workType || null) ||
+          safeParts.seqNumber !== (seqNumber || null);
+        // If anything had to be recovered the assembled UID is untrustworthy, so keep the
+        // stored one rather than writing a shortened name over it.
+        const updatedUid = recoveredPart ? (stored?.uid ?? uid) : (assembledUid || uid);
+        return await patchDefect({ ...form, uid: updatedUid, ...safeParts, categoryCode: categoryCode || null, audience });
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
           ...form,
