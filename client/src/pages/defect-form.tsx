@@ -205,6 +205,29 @@ export default function DefectForm() {
     queryKey: ["/api/global-settings"],
   });
 
+  // Editing an issued inspection looks identical to editing the current one, which is how an
+  // amendment ends up in a report that was signed off months ago. Name the inspection when it
+  // is not the latest, and offer a way over to the current one.
+  const { data: projectReports } = useQuery<any[]>({
+    queryKey: [`/api/projects/${projectId}/reports`],
+    enabled: !!projectId,
+  });
+
+  const latestReport = useMemo(() => {
+    if (!projectReports || projectReports.length === 0) return null;
+    return projectReports
+      .slice()
+      .sort((a, b) => {
+        const an = Number(a.inspectionNumber);
+        const bn = Number(b.inspectionNumber);
+        if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return bn - an;
+        return b.id - a.id;
+      })[0];
+  }, [projectReports]);
+
+  const isHistoricalReport =
+    !!latestReport && !!reportId && Number(reportId) !== Number(latestReport.id);
+
   const enabledUidParts = useMemo(() => {
     try { return JSON.parse((project as any)?.enabledUidParts || '{}'); } catch { return { elevation: true, drop: true, level: true, workType: true }; }
   }, [(project as any)?.enabledUidParts]);
@@ -1138,6 +1161,28 @@ export default function DefectForm() {
           Back to Report
         </button>
       </Link>
+
+      {isEdit && isHistoricalReport && (
+        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5">
+          <p className="text-sm text-amber-900 dark:text-amber-200">
+            You are editing inspection {report?.inspectionNumber ?? reportId}, which is not the
+            current inspection ({latestReport?.inspectionNumber}). Changes here amend a report that
+            has already been issued.
+          </p>
+          <button
+            type="button"
+            className="mt-1.5 text-sm font-medium underline text-amber-900 dark:text-amber-200"
+            onClick={() =>
+              navigate(
+                `/projects/${projectId}/reports/${latestReport.id}/defects/${activeDefectIdRef.current ?? defectId}`,
+              )
+            }
+            data-testid="button-open-in-current-inspection"
+          >
+            Open in inspection {latestReport?.inspectionNumber} instead
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">

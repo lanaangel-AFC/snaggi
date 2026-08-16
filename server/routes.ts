@@ -1319,6 +1319,16 @@ export async function registerRoutes(
 
       const markerList = await storage.getMarkersByElevation(elevationId);
 
+      // A pin can only show one state, and that state may belong to an earlier inspection
+      // than the one being viewed. Naming that inspection is what stops a green pin from
+      // looking like it contradicts an open form.
+      const inspectionNumbers = new Map<number, string>();
+      for (const r of sqlite.prepare(
+        `SELECT id, inspection_number FROM reports WHERE project_id = ?`,
+      ).all(projectId) as Array<{ id: number; inspection_number: string }>) {
+        inspectionNumbers.set(r.id, String(r.inspection_number));
+      }
+
       const project = await storage.getProject(projectId);
       const categoryNames = new Map<string, string>();
       const rawCategories = (project as any)?.categories;
@@ -1413,6 +1423,7 @@ export async function registerRoutes(
             categoryCode: row.category_code ?? null,
             categoryName: row.category_code ? categoryNames.get(row.category_code) ?? row.category_code : null,
             reportId: row.report_id,
+            inspectionNumber: inspectionNumbers.get(row.report_id) ?? null,
             inReport: reportId != null ? row.report_id === reportId : true,
             resolvedVia: via,
             lastPhoto: photo ? { filename: photo.filename, caption: photo.caption, slot: photo.slot } : null,
