@@ -1552,16 +1552,27 @@ export class DatabaseStorage implements IStorage {
     if (elevationIds.length === 0) return 0;
 
     // Rows that are or ever were this record, so pins holding a stale id are caught too.
-    const lineageIds = db
-      .select({ id: defects.id })
+    const lineageRows = db
+      .select({ id: defects.id, status: defects.status, reportId: defects.reportId })
       .from(defects)
       .where(and(eq(defects.projectId, d.projectId), inArray(defects.uid, matchUids)))
-      .all()
-      .map((x) => x.id);
+      .all();
+    const lineageIds = lineageRows.map((x) => x.id);
+
+    // A pin shows one state, so it must show the newest copy of the record. Editing a
+    // superseded copy — reopening the inspection 07 row of an item signed off at
+    // inspection 08, say — must not drag the pin back onto that row or stamp its status,
+    // or the drawing would contradict the current inspection.
+    const newest = lineageRows
+      .slice()
+      .sort((a, b) => (b.reportId ?? 0) - (a.reportId ?? 0) || b.id - a.id)[0];
+    const target = newest && newest.id !== defectId ? newest : null;
+    const applied: Partial<InsertMarker> = { ...updates };
+    if (target && applied.status !== undefined) applied.status = target.status as any;
 
     return db
       .update(markers)
-      .set({ ...updates, defectId })
+      .set({ ...applied, defectId: target ? target.id : defectId })
       .where(
         and(
           inArray(markers.elevationId, elevationIds),

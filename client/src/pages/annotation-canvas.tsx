@@ -59,6 +59,7 @@ type ResolvedRecord = {
   categoryCode: string | null;
   categoryName: string | null;
   reportId: number;
+  inspectionNumber: string | null;
   inReport: boolean;
   resolvedVia: string | null;
   lastPhoto: { filename: string; caption: string | null; slot: string } | null;
@@ -813,7 +814,9 @@ export default function AnnotationCanvas() {
 
                 {expandedMarker.resolved && !expandedMarker.resolved.inReport && (
                   <p className="text-[11px] text-amber-600 mt-0.5">
-                    Not in this inspection — last seen in an earlier one
+                    {expandedMarker.resolved.inspectionNumber
+                      ? `Status is from inspection ${expandedMarker.resolved.inspectionNumber} — not carried into this one`
+                      : "Not in this inspection — last seen in an earlier one"}
                   </p>
                 )}
 
