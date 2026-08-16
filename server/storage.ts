@@ -1330,8 +1330,23 @@ export class DatabaseStorage implements IStorage {
     const sourceDefects = db.select().from(defects)
       .where(and(eq(defects.reportId, sourceReportId), eq(defects.status, "open")))
       .all();
+    const clonedIds: number[] = [];
     for (const d of sourceDefects) {
-      this.cloneDefectIntoReport(d, newReport.id, source.id, now);
+      clonedIds.push(this.cloneDefectIntoReport(d, newReport.id, source.id, now).id);
+    }
+
+    // Point every pin at the copy it now belongs to. Without this a drawing keeps pointing at
+    // the previous inspection's rows until someone runs the resync by hand, so a pin's stored
+    // status drifts from the record the moment either one changes.
+    for (const id of clonedIds) {
+      try {
+        const row = db.select().from(defects).where(eq(defects.id, id)).get();
+        if (row) await this.updateMarkersByDefectId(id, { status: row.status });
+      } catch (err) {
+        // A pin that will not relink must not abort a new inspection; the resync endpoint
+        // remains available to repair it.
+        console.error("[startNextInspection] marker relink failed for defect", id, err);
+      }
     }
 
     // Write the meta key LAST so a partial run is detectable.
