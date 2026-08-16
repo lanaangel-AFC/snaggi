@@ -26,13 +26,23 @@ async function main() {
     workTypeCode: "RR", seqNumber: 1, inspectionOpened: "01",
   } as any);
   await storage.createDefect({ ...base, uid: "E-01-02-CR-01", status: "open" } as any);
-  await storage.createDefect({ ...base, uid: "E-01-03-CR-01", status: "complete" } as any);
+  const closed = await storage.createDefect({ ...base, uid: "E-01-03-CR-01", status: "complete" } as any);
 
   const uploadsDir = path.join(process.env.DATA_DIR || ".", "uploads");
   fs.mkdirSync(uploadsDir, { recursive: true });
   fs.writeFileSync(path.join(uploadsDir, "a.jpg"), "x");
   sqlite.prepare(`INSERT INTO photos (defect_id, filename, slot, report_id, created_at) VALUES (?,?,?,?,?)`)
     .run(openA.id, "a.jpg", "defect1", r1.id, now);
+
+  const elev = await storage.createElevation({ projectId: pid, name: "East", filename: "f.png", fileType: "image", createdAt: now } as any);
+  const pin = await storage.createMarker({
+    elevationId: elev.id, defectId: openA.id, defectUid: "E-01-01-RR-01",
+    status: "open", xPercent: 5, yPercent: 5, createdAt: now,
+  } as any);
+  const pinClosed = await storage.createMarker({
+    elevationId: elev.id, defectId: closed.id, defectUid: "E-01-03-CR-01",
+    status: "complete", xPercent: 8, yPercent: 8, createdAt: now,
+  } as any);
 
   const r2 = await storage.startNextInspection(r1.id, { inspectionNumber: "02", inspectionDate: "2026-02-01" } as any);
 
@@ -63,6 +73,14 @@ async function main() {
 
   const meta = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`).get(`start_next_inspection_for_report_${r1.id}`) as any;
   check("completion meta key written", !!meta, "missing");
+
+  // A pin must follow the record into the new inspection without a manual resync.
+  const pinAfter = sqlite.prepare(`SELECT defect_id, status FROM markers WHERE id = ?`).get(pin.id) as any;
+  check("pin relinked to the new inspection's copy", pinAfter.defect_id === a.id, `pin points at ${pinAfter.defect_id}, new copy is ${a.id}`);
+  check("pin status matches the new copy", pinAfter.status === "open", pinAfter.status);
+  const closedPin = sqlite.prepare(`SELECT defect_id, status FROM markers WHERE id = ?`).get(pinClosed.id) as any;
+  check("pin for a closed record stays on the record that closed it", closedPin.defect_id === closed.id, String(closedPin.defect_id));
+  check("pin for a closed record stays complete", closedPin.status === "complete", closedPin.status);
 
   let failed = 0;
   for (const [n, ok, d] of checks) {
