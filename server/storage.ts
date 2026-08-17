@@ -1336,20 +1336,31 @@ export class DatabaseStorage implements IStorage {
     const uidKey = (uid: string) => this.resolveUidAliases(projectId, uid).slice().sort().join("|");
     const presentLineages = new Set(inThisReport.map((d) => uidKey(d.uid)));
 
-    // Stranded: latest copy of the lineage lives in an EARLIER inspection and is still open.
-    // Newer inspections are excluded — a record belonging to a later inspection is not this
-    // inspection's problem, and including it would put future work on today's list.
-    const strandedByLineage = new Map<string, typeof allDefects[number]>();
+    // Stranded: the NEWEST copy of the lineage lives in an earlier inspection and is still open.
+    //
+    // The status has to be read off the newest copy, never off the copy being considered. A
+    // record that ran open through inspections 05-07 and was signed off at 08 leaves three
+    // open rows behind it; judging each row on its own status would put a closed item back on
+    // the list. This is the same rule the elevation drawing uses to colour a pin — newest copy
+    // in the lineage wins — so a list item and its pin can never disagree.
+    const newestByLineage = new Map<string, typeof allDefects[number]>();
     for (const d of allDefects) {
-      if (d.status !== "open") continue;
-      if (d.reportId === reportId) continue;
-      if (inspNumOf(d.reportId) >= thisInspNum) continue;
       const key = uidKey(d.uid);
-      if (presentLineages.has(key)) continue;
-      const prev = strandedByLineage.get(key);
-      if (!prev || inspNumOf(d.reportId) > inspNumOf(prev.reportId) || (inspNumOf(d.reportId) === inspNumOf(prev.reportId) && d.id > prev.id)) {
-        strandedByLineage.set(key, d);
+      const prev = newestByLineage.get(key);
+      if (!prev
+        || inspNumOf(d.reportId) > inspNumOf(prev.reportId)
+        || (inspNumOf(d.reportId) === inspNumOf(prev.reportId) && d.id > prev.id)) {
+        newestByLineage.set(key, d);
       }
+    }
+
+    const strandedByLineage = new Map<string, typeof allDefects[number]>();
+    for (const [key, newest] of Array.from(newestByLineage.entries())) {
+      if (newest.status !== "open") continue;            // closed off, however many open copies precede it
+      if (newest.reportId === reportId) continue;        // already in this inspection
+      if (presentLineages.has(key)) continue;            // a sibling copy is in this inspection
+      if (inspNumOf(newest.reportId) >= thisInspNum) continue; // belongs to a later inspection
+      strandedByLineage.set(key, newest);
     }
 
     const isDue = (dueDate: string | null | undefined): boolean => {
