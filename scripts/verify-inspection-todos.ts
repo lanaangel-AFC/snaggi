@@ -56,6 +56,15 @@ async function main() {
   // --- NOT stranded: open at 07 but its lineage IS present in 11
   await storage.createDefect({ ...base, reportId: r7.id, uid: "E-02-09-LR-03", status: "open" } as any);
   await storage.createDefect({ ...base, reportId: r11.id, uid: "E-02-09-LR-03", status: "open", dueDate: "2026-09-30" } as any);
+  // --- NOT stranded: the exact shape that leaked closed items onto the list. Ran open through
+  // 07, signed off at 08, never carried into 11. The open row at 07 must NOT be listed, because
+  // the newest copy of the lineage is complete.
+  await storage.createDefect({ ...base, reportId: r7.id, uid: "E-04-09-LR-01", status: "open" } as any);
+  await storage.createDefect({ ...base, reportId: r8.id, uid: "E-04-09-LR-01", status: "complete", dateClosed: "2026-07-27" } as any);
+  // --- STRANDED: open at 07, a LATER copy exists at 08 but is also still open. The newest copy
+  // is the 08 one, so that is the row the item must point at — not the 07 one.
+  await storage.createDefect({ ...base, reportId: r7.id, uid: "E-05-09-BR-01", status: "open" } as any);
+  const strandedNewest = await storage.createDefect({ ...base, reportId: r8.id, uid: "E-05-09-BR-01", status: "open", dueDate: "2026-07-01" } as any);
 
   const app = express();
   app.use(express.json());
@@ -99,6 +108,14 @@ async function main() {
   check("already-complete record is not listed", !byUid.has("E-01-09-CR-05"), "");
   check("stranded item is listed", grp("E-02-09-LR-01") === "stranded", String(grp("E-02-09-LR-01")));
   check("closed earlier record is not stranded", !byUid.has("E-02-09-LR-02"), "");
+  check("lineage signed off in a later inspection is NOT stranded",
+    !byUid.has("E-04-09-LR-01"), JSON.stringify(byUid.get("E-04-09-LR-01") ?? null));
+  check("stranded item points at the newest copy of its lineage",
+    byUid.get("E-05-09-BR-01")?.defectId === strandedNewest.id,
+    `${byUid.get("E-05-09-BR-01")?.defectId} vs ${strandedNewest.id}`);
+  check("stranded item names the newest copy's inspection",
+    byUid.get("E-05-09-BR-01")?.sourceInspectionNumber === "08",
+    String(byUid.get("E-05-09-BR-01")?.sourceInspectionNumber));
   check("lineage present in this inspection is not stranded",
     byUid.get("E-02-09-LR-03")?.groupKey === "open", String(grp("E-02-09-LR-03")));
   check("no duplicate rows per uid", list.items.length === new Set(list.items.map((i: any) => i.uid)).size,
@@ -174,9 +191,16 @@ async function main() {
   check("the new list starts with nothing ticked", l12.done === 0, `done=${l12.done}`);
   check("the new list is scoped to the new inspection",
     l12.items.every((i: any) => i.reportId === r12.id), "");
-  check("items open in the new inspection are grouped, not stranded",
-    l12.items.filter((i: any) => i.groupKey === "stranded").length === 0,
-    JSON.stringify(l12.items.filter((i: any) => i.groupKey === "stranded").map((i: any) => i.uid)));
+  // Records carried into the new inspection must be grouped as in-inspection work, never as
+  // stranded. E-05-09-BR-01 is the exception by design: it was never brought forward, so it
+  // stays stranded until someone acts on it.
+  const strandedIn12 = l12.items.filter((i: any) => i.groupKey === "stranded").map((i: any) => i.uid);
+  check("carried records are not marked stranded in the new list",
+    strandedIn12.length === 1 && strandedIn12[0] === "E-05-09-BR-01", JSON.stringify(strandedIn12));
+  check("a genuinely stranded lineage stays stranded in the next inspection",
+    strandedIn12.includes("E-05-09-BR-01"), JSON.stringify(strandedIn12));
+  check("closed lineage stays off the next inspection's list too",
+    !l12.items.some((i: any) => i.uid === "E-04-09-LR-01"), "");
   check("previous inspection's list is unaffected", (await getTodos(r11.id)).total === before, "");
   check("mid-inspection record now appears in the next list",
     l12.items.some((i: any) => i.uid === "E-03-09-CR-99"), "");
