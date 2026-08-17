@@ -15,6 +15,7 @@ import {
   type NarrativeHold, type InsertNarrativeHold, narrativeHolds,
   type ProgramSchedule, type InsertProgramSchedule, programSchedule,
   type StageProgressMap, type InsertStageProgressMap, stageProgressMap,
+  type InspectionTodo, type InsertInspectionTodo, inspectionTodos,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -252,6 +253,25 @@ sqlite.exec(`
     status_narrative TEXT DEFAULT '',
     audience TEXT NOT NULL DEFAULT 'both',
     updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS inspection_todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    report_id INTEGER NOT NULL,
+    defect_id INTEGER NOT NULL,
+    uid TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    record_type TEXT NOT NULL DEFAULT 'defect',
+    comment TEXT NOT NULL DEFAULT '',
+    action_text TEXT NOT NULL DEFAULT '',
+    due_date TEXT DEFAULT '',
+    assigned_to TEXT DEFAULT '',
+    category_code TEXT,
+    source_report_id INTEGER,
+    source_inspection_number TEXT,
+    done_at TEXT,
+    done_reason TEXT,
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS stage_progress_map (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -951,6 +971,11 @@ export interface IStorage {
   updateMarker(id: number, marker: Partial<InsertMarker>): Promise<Marker | undefined>;
   deleteMarker(id: number): Promise<void>;
   resolveUidAliases(projectId: number, uid: string): string[];
+  // Inspection to-do list (snapshot)
+  previewInspectionTodos(reportId: number): InsertInspectionTodo[];
+  buildInspectionTodos(reportId: number, opts?: { force?: boolean }): { created: number; skipped: boolean; items: InspectionTodo[] };
+  getInspectionTodos(reportId: number): InspectionTodo[];
+  markInspectionTodosDone(defectId: number, reason: string): number;
   updateMarkersByDefectId(defectId: number, updates: Partial<InsertMarker>, previousUid?: string): Promise<number>;
   // Observation/Action History
   getObservationHistory(defectId: number): Promise<ObservationHistory[]>;
@@ -1277,6 +1302,163 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  // ---------------------------------------------------------------------------
+  // Inspection to-do list
+  // ---------------------------------------------------------------------------
+
+  // Build the snapshot for one inspection. Idempotent by default: a report that already
+  // has a list is left alone, so re-running this after an inspection has begun can never
+  // wipe the ticks already earned. force: true clears and rebuilds.
+  // Pure computation, no writes — so a dry run can show exactly what would be created
+  // without leaving the very rows it was asked only to preview.
+  previewInspectionTodos(reportId: number): InsertInspectionTodo[] {
+    const report = db.select().from(reports).where(eq(reports.id, reportId)).get();
+    if (!report) throw new Error("Report not found");
+
+    const projectId = report.projectId;
+    const inspectionDate = String(report.inspectionDate || "").slice(0, 10);
+    const now = new Date().toISOString();
+
+    const projectReports = db.select().from(reports).where(eq(reports.projectId, projectId)).all();
+    const inspNumOf = (rid: number | null | undefined): number => {
+      const r = projectReports.find((x) => x.id === rid);
+      const n = parseInt(String(r?.inspectionNumber ?? "0"), 10);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const thisInspNum = inspNumOf(reportId);
+
+    const allDefects = db.select().from(defects).where(eq(defects.projectId, projectId)).all();
+    const inThisReport = allDefects.filter((d) => d.reportId === reportId);
+
+    // A record's lineage is keyed on its UID (including historical aliases), because a
+    // carried-forward record is a NEW row each inspection. Anything whose lineage already
+    // appears in this inspection is not stranded, however many earlier copies exist.
+    const uidKey = (uid: string) => this.resolveUidAliases(projectId, uid).slice().sort().join("|");
+    const presentLineages = new Set(inThisReport.map((d) => uidKey(d.uid)));
+
+    // Stranded: latest copy of the lineage lives in an EARLIER inspection and is still open.
+    // Newer inspections are excluded — a record belonging to a later inspection is not this
+    // inspection's problem, and including it would put future work on today's list.
+    const strandedByLineage = new Map<string, typeof allDefects[number]>();
+    for (const d of allDefects) {
+      if (d.status !== "open") continue;
+      if (d.reportId === reportId) continue;
+      if (inspNumOf(d.reportId) >= thisInspNum) continue;
+      const key = uidKey(d.uid);
+      if (presentLineages.has(key)) continue;
+      const prev = strandedByLineage.get(key);
+      if (!prev || inspNumOf(d.reportId) > inspNumOf(prev.reportId) || (inspNumOf(d.reportId) === inspNumOf(prev.reportId) && d.id > prev.id)) {
+        strandedByLineage.set(key, d);
+      }
+    }
+
+    const isDue = (dueDate: string | null | undefined): boolean => {
+      const due = String(dueDate || "").slice(0, 10);
+      if (!due || !inspectionDate) return false;
+      return due <= inspectionDate;
+    };
+
+    // The one-line "what I need to do" prefers the AI action summary when one exists and
+    // falls back to the full action text, so the column is never blank.
+    const actionTextOf = (d: typeof allDefects[number]): string => {
+      const summary = String(d.actionSummary || "").trim();
+      if (summary && summary.toLowerCase() !== "none") return summary;
+      return String(d.actionRequired || "").trim();
+    };
+
+    const rows: InsertInspectionTodo[] = [];
+    for (const d of inThisReport) {
+      if (d.status !== "open") continue;
+      rows.push({
+        projectId,
+        reportId,
+        defectId: d.id,
+        uid: d.uid,
+        groupKey: isDue(d.dueDate) ? "due" : "open",
+        recordType: d.recordType || "defect",
+        comment: String(d.comment || ""),
+        actionText: actionTextOf(d),
+        dueDate: String(d.dueDate || ""),
+        assignedTo: String(d.assignedTo || ""),
+        categoryCode: d.categoryCode ?? null,
+        sourceReportId: null,
+        sourceInspectionNumber: null,
+        doneAt: null,
+        doneReason: null,
+        createdAt: now,
+      });
+    }
+    for (const d of Array.from(strandedByLineage.values())) {
+      const sourceReport = projectReports.find((r) => r.id === d.reportId);
+      rows.push({
+        projectId,
+        reportId,
+        defectId: d.id,
+        uid: d.uid,
+        groupKey: "stranded",
+        recordType: d.recordType || "defect",
+        comment: String(d.comment || ""),
+        actionText: actionTextOf(d),
+        dueDate: String(d.dueDate || ""),
+        assignedTo: String(d.assignedTo || ""),
+        categoryCode: d.categoryCode ?? null,
+        sourceReportId: d.reportId ?? null,
+        sourceInspectionNumber: sourceReport?.inspectionNumber ?? null,
+        doneAt: null,
+        doneReason: null,
+        createdAt: now,
+      });
+    }
+
+    return rows;
+  }
+
+  buildInspectionTodos(reportId: number, opts?: { force?: boolean }): { created: number; skipped: boolean; items: InspectionTodo[] } {
+    const existing = db.select().from(inspectionTodos).where(eq(inspectionTodos.reportId, reportId)).all();
+    if (existing.length > 0 && !opts?.force) {
+      return { created: 0, skipped: true, items: existing };
+    }
+
+    const rows = this.previewInspectionTodos(reportId);
+    const insertAll = sqlite.transaction(() => {
+      if (opts?.force) {
+        db.delete(inspectionTodos).where(eq(inspectionTodos.reportId, reportId)).run();
+      }
+      for (const r of rows) db.insert(inspectionTodos).values(r).run();
+    });
+    insertAll();
+
+    return {
+      created: rows.length,
+      skipped: false,
+      items: db.select().from(inspectionTodos).where(eq(inspectionTodos.reportId, reportId)).all(),
+    };
+  }
+
+  getInspectionTodos(reportId: number): InspectionTodo[] {
+    return db.select().from(inspectionTodos).where(eq(inspectionTodos.reportId, reportId)).all();
+  }
+
+  // Tick off every outstanding to-do that points at this record's lineage. Called after a
+  // successful defect save, which is the only definition of "done" the user has to remember:
+  // update the form, and the to-do closes itself.
+  markInspectionTodosDone(defectId: number, reason: string): number {
+    const d = db.select().from(defects).where(eq(defects.id, defectId)).get();
+    if (!d) return 0;
+    const aliases = this.resolveUidAliases(d.projectId, d.uid);
+    const open = db.select().from(inspectionTodos)
+      .where(and(eq(inspectionTodos.projectId, d.projectId), inArray(inspectionTodos.uid, aliases)))
+      .all()
+      .filter((t) => !t.doneAt);
+    if (open.length === 0) return 0;
+    const now = new Date().toISOString();
+    for (const t of open) {
+      db.update(inspectionTodos).set({ doneAt: now, doneReason: reason })
+        .where(eq(inspectionTodos.id, t.id)).run();
+    }
+    return open.length;
+  }
+
   async startNextInspection(sourceReportId: number, metadata: StartNextInspectionMetadata): Promise<Report> {
     const source = db.select().from(reports).where(eq(reports.id, sourceReportId)).get();
     if (!source) throw new Error("Source report not found");
@@ -1347,6 +1529,14 @@ export class DatabaseStorage implements IStorage {
         // remains available to repair it.
         console.error("[startNextInspection] marker relink failed for defect", id, err);
       }
+    }
+
+    // Snapshot the to-do list for the new inspection. Wrapped because a list that fails to
+    // build must not abort the inspection itself; it can be generated afterwards.
+    try {
+      this.buildInspectionTodos(newReport.id);
+    } catch (err) {
+      console.error("[startNextInspection] to-do snapshot failed for report", newReport.id, err);
     }
 
     // Write the meta key LAST so a partial run is detectable.

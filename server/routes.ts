@@ -418,6 +418,79 @@ export async function registerRoutes(
     res.json(report);
   });
 
+  // Inspection to-do list. The list is a snapshot written when the inspection starts, so
+  // GET only reads it back — it never recomputes, which is what keeps it stable during a visit.
+  // The live status of each linked record is attached for display so a to-do can show that its
+  // record has since been completed without the snapshot itself being rewritten.
+  app.get("/api/reports/:id/todos", async (req, res) => {
+    const reportId = Number(req.params.id);
+    const report = await storage.getReport(reportId);
+    if (!report) return res.status(404).json({ message: "Report not found" });
+
+    const todos = storage.getInspectionTodos(reportId);
+    const projectDefects = await storage.getDefectsByProject(report.projectId);
+    const byId = new Map(projectDefects.map((d) => [d.id, d]));
+
+    const items = todos.map((t) => {
+      const live = byId.get(t.defectId);
+      return {
+        ...t,
+        liveStatus: live?.status ?? null,
+        // Where the form link should point. A stranded item is opened in ITS OWN inspection;
+        // the form's own banner then offers to carry it into the current one, so the choice
+        // to amend an issued report stays explicit.
+        linkReportId: t.groupKey === "stranded" ? (t.sourceReportId ?? reportId) : reportId,
+      };
+    });
+
+    res.json({
+      reportId,
+      inspectionNumber: report.inspectionNumber,
+      inspectionDate: report.inspectionDate,
+      generated: todos.length > 0,
+      total: items.length,
+      done: items.filter((i) => i.doneAt).length,
+      items,
+    });
+  });
+
+  // Generate (or rebuild) the list for an inspection that already exists. Dry-run by default
+  // in the house style: only {"dryRun": false} writes. force: true clears an existing list,
+  // which discards its ticks, so it is never the default.
+  app.post("/api/reports/:id/todos/generate", async (req, res) => {
+    const reportId = Number(req.params.id);
+    const report = await storage.getReport(reportId);
+    if (!report) return res.status(404).json({ message: "Report not found" });
+
+    const dryRun = req.body?.dryRun !== false;
+    const force = req.body?.force === true;
+
+    const existing = storage.getInspectionTodos(reportId);
+    if (dryRun) {
+      const preview = storage.previewInspectionTodos(reportId);
+      const willWrite = existing.length === 0 || force;
+      return res.json({
+        dryRun: true,
+        alreadyGenerated: existing.length > 0,
+        existingCount: existing.length,
+        wouldCreate: willWrite ? preview.length : 0,
+        message: willWrite
+          ? "No list exists yet; post {\"dryRun\": false} to generate it."
+          : "A list already exists for this inspection; pass force to rebuild it (ticks are lost).",
+        sample: preview.slice(0, 25),
+      });
+    }
+
+    const result = storage.buildInspectionTodos(reportId, { force });
+    res.json({
+      dryRun: false,
+      created: result.created,
+      skipped: result.skipped,
+      total: result.items.length,
+      sample: result.items.slice(0, 25),
+    });
+  });
+
   app.post("/api/projects/:projectId/reports", async (req, res) => {
     const projectId = Number(req.params.projectId);
     const data = { ...req.body, projectId, createdAt: new Date().toISOString() };
@@ -589,9 +662,26 @@ export async function registerRoutes(
       await storage.updateMarkersByDefectId(defect.id, markerUpdates, existing.uid);
     }
 
+    // Tick off any inspection to-do pointing at this record. Only user-facing fields count:
+    // the AI action-summary regeneration also PATCHes defects, and a background job must not
+    // be able to tick items the inspector never looked at.
+    const TODO_FIELDS = [
+      "comment", "actionRequired", "status", "dateClosed", "dueDate", "assignedTo",
+      "categoryCode", "recordType", "verificationMethod", "verificationPerson", "audience",
+    ];
+    let todosClosed = 0;
+    if (TODO_FIELDS.some((f) => (updates as Record<string, unknown>)[f] !== undefined)) {
+      try {
+        const reason = updates.status && updates.status !== "open" ? "completed" : "updated";
+        todosClosed = storage.markInspectionTodosDone(defect.id, reason);
+      } catch (err) {
+        console.error("[patch defect] to-do tick-off failed for defect", defect.id, err);
+      }
+    }
+
     // carriedForward tells the client the amendment landed on a different row, so it can
     // redirect to it instead of continuing to edit the historical record.
-    res.json({ ...defect, carriedForward, carriedForwardFrom });
+    res.json({ ...defect, carriedForward, carriedForwardFrom, todosClosed });
   });
 
   // ===================== §2.2 — AI ACTION SUMMARY =====================

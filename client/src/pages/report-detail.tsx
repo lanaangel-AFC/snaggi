@@ -20,7 +20,7 @@ import {
   ArrowLeft, Plus, FileText, Camera, ChevronRight, Trash2,
   MapPin, User, UserCheck, AlertTriangle, CheckCircle2, Archive,
   ChevronDown, FileDown, Eye, Settings, X, ImageDown, Share2, Copy, Link as LinkIcon,
-  Sparkles, AlertCircle, Loader2, Map as MapIcon
+  Sparkles, AlertCircle, Loader2, Map as MapIcon, ListChecks
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -428,6 +428,16 @@ export default function ReportDetail() {
             )}
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => navigate(`/projects/${projectId}/reports/${reportId}/todos`)}
+              data-testid="button-inspection-todos"
+            >
+              <ListChecks className="w-4 h-4" />
+              To do
+            </Button>
             {projectElevations.length > 0 && (
               <Button
                 variant="outline"
