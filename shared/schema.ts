@@ -310,6 +310,44 @@ export type ProgramSchedule = typeof programSchedule.$inferSelect;
 export type InsertStageProgressMap = z.infer<typeof insertStageProgressMapSchema>;
 export type StageProgressMap = typeof stageProgressMap.$inferSelect;
 
+// Inspection to-do list.
+// A SNAPSHOT, deliberately: rows are written once when an inspection starts (or when the
+// list is generated for an existing inspection) and are never recomputed. That makes the
+// list a record of what was outstanding on the day rather than a live query whose contents
+// shift underneath the inspector mid-visit.
+//
+// groupKey:
+//   "due"      — open in this inspection, dueDate on or before the inspection date (any party)
+//   "open"     — open in this inspection, not due yet
+//   "stranded" — still open in an EARLIER inspection and never carried into this one
+//
+// doneAt is stamped by the defect PATCH route the first time the linked record is saved,
+// so ticking off happens as a side effect of updating the form rather than as a second,
+// separately maintained piece of state that could disagree with the record.
+export const inspectionTodos = sqliteTable("inspection_todos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  reportId: integer("report_id").notNull(),
+  defectId: integer("defect_id").notNull(),
+  uid: text("uid").notNull(),
+  groupKey: text("group_key").notNull(),
+  recordType: text("record_type").notNull().default("defect"),
+  comment: text("comment").notNull().default(""),
+  actionText: text("action_text").notNull().default(""),
+  dueDate: text("due_date").default(""),
+  assignedTo: text("assigned_to").default(""),
+  categoryCode: text("category_code"),
+  sourceReportId: integer("source_report_id"),
+  sourceInspectionNumber: text("source_inspection_number"),
+  doneAt: text("done_at"),
+  doneReason: text("done_reason"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertInspectionTodoSchema = createInsertSchema(inspectionTodos).omit({ id: true });
+export type InsertInspectionTodo = z.infer<typeof insertInspectionTodoSchema>;
+export type InspectionTodo = typeof inspectionTodos.$inferSelect;
+
 // Users (kept from template)
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),

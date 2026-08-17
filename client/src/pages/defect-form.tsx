@@ -155,6 +155,14 @@ export default function DefectForm() {
       ...(contextReportId != null && Number.isFinite(contextReportId) ? { contextReportId } : {}),
     });
     const data = await res.json();
+    // The server ticks off any inspection to-do pointing at this record, so the cached list
+    // is stale the moment a save succeeds. Queries default to staleTime: Infinity, so
+    // walking back to the list would otherwise still show the item outstanding.
+    if (data?.todosClosed) {
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && /^\/api\/reports\/\d+\/todos$/.test(q.queryKey[0] as string),
+      });
+    }
     if (data?.id != null && String(data.id) !== String(id)) {
       activeDefectIdRef.current = String(data.id);
       if (data.carriedForward) {
