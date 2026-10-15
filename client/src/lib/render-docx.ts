@@ -18,9 +18,10 @@ import {
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 import { usesRecordWording } from "./wording";
+import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, hasInstructionSection, instructionRows, sectionNo } from "./project-instructions";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
-  const data = { project: tree.project, report: tree.report };
+  const data = { project: tree.project, report: tree.report, projectInstructions: tree.projectInstructions };
   const wordDims = getLocationDimensions(tree.project?.locationDimensions);
 
   const docxLib = await import("docx");
@@ -930,7 +931,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
 
   // ===================== SECTION 4 — CARRIED-FORWARD REGISTER =====================
   const carriedChildren: any[] = [];
-  carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "4. Carried-forward Register", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }));
+  carriedChildren.push(new Paragraph({ children: [new TextRun({ text: `${sectionNo(data, 4)}. Carried-forward Register`, size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }));
   carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "Open items not covered in this inspection's locations.", size: 18, color: "666666", italics: true, font: "Aptos" })], spacing: { after: 160 } }));
   if (tree.carriedForward.empty) {
     carriedChildren.push(new Paragraph({ children: [new TextRun({ text: "Nothing for this report.", size: 20, font: "Aptos", color: "999999", italics: true })] }));
@@ -950,7 +951,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
 
   // ===================== SECTION 5 — APPENDICES =====================
   const appendixChildren: any[] = [];
-  appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "5. Appendices", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 120 } }));
+  appendixChildren.push(new Paragraph({ children: [new TextRun({ text: `${sectionNo(data, 5)}. Appendices`, size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 120 } }));
   if (tree.appendixMode === "reference") {
     appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "Technical Method Statements", size: 28, font: "Aptos", bold: true, color: CAPTION_BLUE })], spacing: { after: 60 } }));
     appendixChildren.push(new Paragraph({ children: [new TextRun({ text: "Refer to the contractor report for full technical method statements.", size: 20, font: "Aptos" })], spacing: { after: 160 } }));
@@ -983,6 +984,39 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     { properties: sectionProps, children: statusChildren },
   ];
 
+  // ===================== SECTION 3 — PROJECT INSTRUCTIONS (WP6) =====================
+  // New projects only. Always emitted there (even when empty) so section numbers stay fixed.
+  if (hasInstructionSection(data)) {
+    const piChildren: any[] = [];
+    piChildren.push(new Paragraph({ children: [new TextRun({ text: "3. Project Instructions", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 80 } }));
+    piChildren.push(new Paragraph({ children: [new TextRun({ text: INSTRUCTION_SUBTITLE, size: 18, color: "666666", italics: true, font: "Aptos" })], spacing: { after: 160 } }));
+    const piRows = instructionRows(data);
+    if (piRows.length === 0) {
+      piChildren.push(new Paragraph({ children: [new TextRun({ text: "No project instructions issued.", size: 20, font: "Aptos", color: "999999", italics: true })] }));
+    } else {
+      const widths = [800, 1050, 1300, 1975, 1975, 1400, 1200];
+      const rowBorder = { style: BorderStyle.SINGLE, size: 1, color: "E0E0E0" };
+      const header = new TableRow({
+        tableHeader: true,
+        children: INSTRUCTION_HEADERS.map((label, i) => new TableCell({
+          width: { size: widths[i], type: WidthType.DXA },
+          children: [new Paragraph({ children: [new TextRun({ text: label, size: 16, font: "Aptos", bold: true, color: CAPTION_BLUE })], spacing: { before: 30, after: 30 } })],
+          borders: { top: noBorder, left: noBorder, right: noBorder, bottom: { style: BorderStyle.SINGLE, size: 4, color: DARK_TEXT } },
+        })),
+      });
+      const body = piRows.map((cells) => new TableRow({
+        cantSplit: true,
+        children: cells.map((text, i) => new TableCell({
+          width: { size: widths[i], type: WidthType.DXA },
+          children: [new Paragraph({ children: [new TextRun({ text: safeText(text), size: 14, font: "Aptos", bold: i === 0, color: i === 6 && text !== "Ongoing" ? "888888" : undefined })], spacing: { before: 25, after: 25 } })],
+          borders: { top: rowBorder, left: noBorder, right: noBorder, bottom: rowBorder },
+        })),
+      }));
+      piChildren.push(new Table({ width: { size: 9700, type: WidthType.DXA }, columnWidths: widths, layout: TableLayoutType.FIXED, rows: [header, ...body] }));
+    }
+    docSections.push({ properties: sectionProps, children: piChildren });
+  }
+
   // This Inspection — emit each non-empty bucket as its own section.
   if (tree.thisInspection.new.length > 0) {
     docSections.push({ properties: sectionProps, children: await buildBucketSection("NEW THIS INSPECTION", "Items added during this inspection.", tree.thisInspection.new, false) });
@@ -995,7 +1029,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   }
   if (tree.thisInspection.empty) {
     docSections.push({ properties: sectionProps, children: [
-      new Paragraph({ children: [new TextRun({ text: "3. This Inspection", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }),
+      new Paragraph({ children: [new TextRun({ text: `${sectionNo(data, 3)}. This Inspection`, size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 100 } }),
       new Paragraph({ children: [new TextRun({ text: "Nothing for this report.", size: 20, font: "Aptos", color: "999999", italics: true })] }),
     ] });
   }
@@ -1008,7 +1042,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   // inspection has notes, so reports without any are unchanged.
   if (tree.notes.length > 0) {
     const noteChildren: any[] = [];
-    noteChildren.push(new Paragraph({ children: [new TextRun({ text: "6. Notes", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 80 } }));
+    noteChildren.push(new Paragraph({ children: [new TextRun({ text: `${sectionNo(data, 6)}. Notes`, size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 80 } }));
     noteChildren.push(new Paragraph({ children: [new TextRun({ text: "Observations recorded in this inspection that need no action. Notes are not carried forward.", size: 18, color: "666666", italics: true, font: "Aptos" })], spacing: { after: 200 } }));
     for (let i = 0; i < tree.notes.length; i++) {
       if (i > 0) noteChildren.push(new Paragraph({ children: [new PageBreak()] }));

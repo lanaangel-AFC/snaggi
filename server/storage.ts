@@ -360,6 +360,34 @@ safeAddColumn("reports", "project_snapshot", "TEXT");
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
 
+// WP6: Project Instructions (new projects only; see shared/schema.ts).
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS project_instructions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    report_id INTEGER,
+    ref TEXT NOT NULL,
+    work_types TEXT NOT NULL DEFAULT '[]',
+    observation TEXT NOT NULL DEFAULT '',
+    action_required TEXT NOT NULL DEFAULT '',
+    responsibility TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    date_issued TEXT NOT NULL,
+    date_withdrawn TEXT,
+    photos TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS instruction_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instruction_id INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    changed_at TEXT NOT NULL
+  );
+`);
+
 // Photo backfill — runs ONCE, then records completion in meta so it never re-corrupts.
 // Original logic (e0ff323) ran on every startup for orphan photos. Now gated.
 {
@@ -616,11 +644,31 @@ safeAddColumn("global_settings", "category_library", "TEXT DEFAULT '[]'");
         { code: "WIP", label: "Work in progress" },
         { code: "PI", label: "Provide Information" },
         { code: "RD", label: "Redesign" },
-        { code: "PN", label: "Project Note" },
+        // WP6: "Project Note" is no longer seeded (see the retirement block below).
       ];
       sqlite.prepare("UPDATE global_settings SET category_library = ? WHERE id = ?").run(JSON.stringify(seed), row.id);
     }
     sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('category_library_seed_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
+// WP6: Project Instructions now have their own button, and no-action observations are
+// "notes", so "Project Note" (PN) is retired from the generic library to avoid confusion.
+// Existing projects keep their own copies; only future picks are affected. Runs once.
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'category_library_retire_pn_v1'`).get();
+  if (!alreadyRan) {
+    const row = sqlite.prepare("SELECT id, category_library FROM global_settings LIMIT 1").get() as any;
+    let current: any[] = [];
+    try { current = JSON.parse(row?.category_library || "[]"); } catch {}
+    if (row && Array.isArray(current)) {
+      const kept = current.filter((c: any) => !(c && c.code === "PN" && /project note/i.test(String(c.label || ""))));
+      if (kept.length !== current.length) {
+        sqlite.prepare("UPDATE global_settings SET category_library = ? WHERE id = ?").run(JSON.stringify(kept), row.id);
+        console.log("[category-library] Retired PN Project Note from the generic library");
+      }
+    }
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('category_library_retire_pn_v1', ?)`).run(new Date().toISOString());
   }
 }
 
@@ -1084,6 +1132,9 @@ export class DatabaseStorage implements IStorage {
       db.delete(markers).where(eq(markers.elevationId, e.id)).run();
     }
     db.delete(elevations).where(eq(elevations.projectId, id)).run();
+    // WP6: Project Instructions belong to the project.
+    sqlite.prepare("DELETE FROM instruction_history WHERE instruction_id IN (SELECT id FROM project_instructions WHERE project_id = ?)").run(id);
+    sqlite.prepare("DELETE FROM project_instructions WHERE project_id = ?").run(id);
     db.delete(projects).where(eq(projects.id, id)).run();
   }
 

@@ -36,7 +36,7 @@ import { renderDocx } from "@/lib/render-docx";
 import { renderPdf } from "@/lib/render-pdf";
 import { formatDefectLocation, formatReportDate } from "@/lib/render-helpers";
 import { useState, useMemo } from "react";
-import { recordWords, typeWords } from "@/lib/wording";
+import { usesRecordWording, recordWords, typeWords } from "@/lib/wording";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -89,6 +89,13 @@ export default function ReportDetail() {
 
   const { data: defects, isLoading: defectsLoading } = useQuery<Defect[]>({
     queryKey: [`/api/reports/${reportId}/defects`],
+  });
+
+  // WP6: Project Instructions (new projects only) — project-wide, listed newest first.
+  const instructionsEnabled = usesRecordWording(project as any);
+  const { data: instructions = [] } = useQuery<any[]>({
+    queryKey: [`/api/projects/${projectId}/instructions`],
+    enabled: instructionsEnabled,
   });
 
   // §2.2 — Action summary staleness for this report. Lightweight endpoint returns
@@ -801,7 +808,7 @@ export default function ReportDetail() {
       </div>
 
       {/* Actions */}
-      <div className="flex gap-3 mb-6">
+      <div className="flex flex-wrap gap-3 mb-6">
         <Link href={`/projects/${projectId}/reports/${reportId}/defects/new-defect`}>
           <Button>
             <Plus className="w-4 h-4 mr-2" />
@@ -814,6 +821,14 @@ export default function ReportDetail() {
             Add Observation
           </Button>
         </Link>
+        {instructionsEnabled && (
+          <Link href={`/projects/${projectId}/reports/${reportId}/instructions/new`}>
+            <Button variant="secondary" data-testid="button-add-instruction">
+              <Plus className="w-4 h-4 mr-2" />
+              Add Project Instruction
+            </Button>
+          </Link>
+        )}
 
         {/* §2.2 — Bulk regenerate action summaries for this report. Only useful when
             there are stale rows; we still show it so the user can refresh after edits. */}
@@ -904,6 +919,35 @@ export default function ReportDetail() {
           Share
         </Button>
       </div>
+
+      {instructionsEnabled && instructions.length > 0 && (
+        <div className="mb-8" data-testid="instructions-list">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className="text-sm font-semibold">Project Instructions</h2>
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{instructions.length}</Badge>
+            <span className="text-xs text-muted-foreground">Project-wide · Ongoing</span>
+          </div>
+          <div className="space-y-2">
+            {instructions.map((ins: any) => (
+              <Link key={ins.id} href={`/projects/${projectId}/reports/${reportId}/instructions/${ins.id}`}>
+                <Card className={`p-3 hover:bg-accent/40 cursor-pointer ${ins.status === "withdrawn" ? "opacity-70" : ""}`} data-testid={`card-instruction-${ins.id}`}>
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="font-mono text-sm font-semibold">{ins.ref}</span>
+                    <Badge variant="secondary" className="bg-violet-50 text-violet-700 border border-violet-200 text-[10px] px-1.5 py-0">PROJECT INSTRUCTION</Badge>
+                    {ins.status === "withdrawn" ? (
+                      <Badge variant="secondary" className="bg-slate-100 text-slate-700 border border-slate-300 text-[10px] px-1.5 py-0">WITHDRAWN</Badge>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">Ongoing · {ins.responsibility}</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground mb-0.5">{(ins.workTypeLabels || ins.workTypes).join(", ")}</div>
+                  <div className="text-sm line-clamp-2">{ins.actionRequired}</div>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {defectsLoading ? (
         <div className="space-y-3">

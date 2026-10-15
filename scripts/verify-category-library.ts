@@ -7,7 +7,8 @@ const check = (name: string, ok: boolean, detail = "") => {
 };
 
 const lib0 = getGlobalSettings().categoryLibrary;
-check("fresh install seeds the standard five", JSON.stringify(lib0.map((c) => c.code)) === JSON.stringify(["RR", "WIP", "PI", "RD", "PN"]), JSON.stringify(lib0));
+// WP6 retired "Project Note" (PN) from the library: Project Instructions have their own button.
+check("fresh install seeds the standard four (no Project Note)", JSON.stringify(lib0.map((c) => c.code)) === JSON.stringify(["RR", "WIP", "PI", "RD"]), JSON.stringify(lib0));
 check("seed labels", lib0.find((c) => c.code === "PI")?.label === "Provide Information");
 check("seed is gated by a meta key", !!sqlite.prepare(`SELECT value FROM meta WHERE key='category_library_seed_v1'`).get());
 check("work types still returned alongside", getGlobalSettings().workTypes.length > 0);

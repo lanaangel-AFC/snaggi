@@ -252,6 +252,9 @@ export type ReportTree = {
   // WP5: no-action notes recorded in this inspection. Rendered in their own section at
   // the end of the report and kept out of every other section and count.
   notes: any[];
+  // WP6: Project Instructions as they stood for this report (new projects only; the
+  // server sends none for older projects). Newest first; same list for every audience.
+  projectInstructions: any[];
 
   // Section 6: appendix behaviour.
   appendixMode: AppendixMode;
@@ -618,6 +621,7 @@ export function buildReportTree(
     thisInspection: { new: tiNew, amended: tiAmended, completed: tiCompleted, empty: tiEmpty },
     carriedForward: { groups: carriedGroups, empty: carriedGroups.length === 0 },
     notes,
+    projectInstructions: Array.isArray(data?.projectInstructions) ? data.projectInstructions : [],
     appendixMode,
   };
 }
