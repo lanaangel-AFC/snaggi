@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
+import { readQueryParams, clearQueryParams } from "@/lib/url-params";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -82,14 +83,26 @@ export default function AnnotationCanvas() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
-  // Parse ?defect= and ?locationId= from the hash (hash routing puts query params inside the hash)
-  const { defectParam, locationIdParam } = (() => {
-    const hash = window.location.hash;
-    const qIndex = hash.indexOf("?");
-    if (qIndex === -1) return { defectParam: null, locationIdParam: null };
-    const params = new URLSearchParams(hash.substring(qIndex));
-    return { defectParam: params.get("defect"), locationIdParam: params.get("locationId") };
-  })();
+  // Read ?defect=, ?defectId=, ?locationId= and ?returnTo= (see lib/url-params for why they
+  // are looked for outside the hash too). defectId pins the exact row the form was editing; matching
+  // on UID alone can pick up a copy of the record from another inspection. returnTo is the
+  // form the inspector came from: when present the drawing is a one-pin errand that ends by
+  // going straight back there.
+  const [{ defectParam, defectIdParam, locationIdParam, returnToParam }] = useState(() => {
+    const params = readQueryParams();
+    const rt = params.get("returnTo");
+    // Only ever return to a page inside this app.
+    const safeReturn = rt && rt.startsWith("/projects/") && !rt.includes("//") ? rt : null;
+    return {
+      defectParam: params.get("defect"),
+      defectIdParam: params.get("defectId"),
+      locationIdParam: params.get("locationId"),
+      returnToParam: safeReturn,
+    };
+  });
+  // Taken once on arrival: clear them so a later visit to a drawing is not mistaken for this one.
+  useEffect(() => { clearQueryParams(["defect", "defectId", "locationId", "returnTo"]); }, []);
+  const isPinErrand = !!(defectParam && returnToParam);
 
   // State
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -103,6 +116,9 @@ export default function AnnotationCanvas() {
   const [expandedPinId, setExpandedPinId] = useState<number | null>(null);
   // Where the user tapped in placing mode, held while they choose what to put there.
   const [pendingPin, setPendingPin] = useState<{ x: number; y: number } | null>(null);
+  // Pin-errand mode: the spot tapped for the record the form sent us with, waiting for Accept.
+  // Tapping again moves it.
+  const [draftPin, setDraftPin] = useState<{ x: number; y: number } | null>(null);
   const [markerDialog, setMarkerDialog] = useState<{
     open: boolean;
     x: number;
@@ -211,13 +227,20 @@ export default function AnnotationCanvas() {
     if (!defectParam || defectParamHandled || defects.length === 0) return;
     setDefectParamHandled(true);
 
-    // Pre-select the defect in the form
-    const matchingDefect = defects.find((d) => d.uid === defectParam);
+    // Pre-select the record. The row id from the form wins; UID is the fallback for older links.
+    const matchingDefect =
+      (defectIdParam ? defects.find((d) => String(d.id) === defectIdParam) : undefined) ??
+      defects.find((d) => d.uid === defectParam);
     if (matchingDefect) {
       setFormDefectId(String(matchingDefect.id));
       setFormUid(defectParam); // Use the param UID (may be location UID)
       setFormStatus(matchingDefect.status === "complete" ? "complete" : "open");
       setFormNote(matchingDefect.comment || "");
+    } else if (defectIdParam) {
+      // The form named the exact row, but the cached register predates it (a record saved or
+      // carried forward moments ago). Link by id anyway; the drawing resolves its status.
+      setFormDefectId(defectIdParam);
+      setFormUid(defectParam);
     } else {
       // Defect UID not found in list — use it as custom
       setFormDefectId("custom");
@@ -230,8 +253,9 @@ export default function AnnotationCanvas() {
     }
 
     setPlacingMode(true);
-    toast({ title: `Tap the drawing to mark the location of ${defectParam}` });
-  }, [defectParam, defects, defectParamHandled]);
+    // The errand bar already says what to do.
+    if (!isPinErrand) toast({ title: `Tap the drawing to mark the location of ${defectParam}` });
+  }, [defectParam, defectIdParam, isPinErrand, defects, defectParamHandled]);
 
   // Load image or PDF
   useEffect(() => {
@@ -318,6 +342,12 @@ export default function AnnotationCanvas() {
       const x = ((e.clientX - rect.left) / rect.width) * 100;
       const y = ((e.clientY - rect.top) / rect.height) * 100;
       if (x < 0 || x > 100 || y < 0 || y > 100) return;
+      // Sent from a form: drop a draft pin and wait for Accept. Stay in placing mode so a
+      // second tap moves the pin instead of opening anything.
+      if (isPinErrand) {
+        setDraftPin({ x, y });
+        return;
+      }
       setPlacingMode(false);
       // Arriving with ?defect= means the record already exists and only needs a location,
       // so skip the "what goes here?" step and go straight to the link form.
@@ -327,8 +357,40 @@ export default function AnnotationCanvas() {
         setPendingPin({ x, y });
       }
     },
-    [placingMode, defectParam]
+    [placingMode, defectParam, isPinErrand]
   );
+
+  // Save the draft pin, linked to the record the form sent, and go straight back to that form.
+  const acceptDraftPin = () => {
+    if (!draftPin || !returnToParam || !formUid.trim()) return;
+    const defectIdNum = formDefectId && formDefectId !== "custom" ? Number(formDefectId) : null;
+    createMarkerMut.mutate(
+      {
+        defectId: defectIdNum,
+        defectUid: formUid.trim(),
+        status: formStatus,
+        note: formNote.trim(),
+        xPercent: draftPin.x,
+        yPercent: draftPin.y,
+        ...(formLocationId ? { locationId: formLocationId } : {}),
+      },
+      {
+        onSuccess: () => {
+          toast({ title: `Pin placed for ${formUid.trim()}` });
+          navigate(returnToParam, { replace: true });
+        },
+        onError: () => {
+          toast({ title: "The pin could not be saved. Try again.", variant: "destructive" });
+        },
+      },
+    );
+  };
+
+  const cancelPinErrand = () => {
+    setDraftPin(null);
+    setPlacingMode(false);
+    if (returnToParam) navigate(returnToParam, { replace: true });
+  };
 
   // Tapping a pin expands it in place rather than opening the marker editor, so the
   // common case (what is this?) costs one tap and no dialog.
@@ -602,7 +664,7 @@ export default function AnnotationCanvas() {
     <div className="flex flex-col h-screen">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b bg-background/95 backdrop-blur z-20 flex-shrink-0">
-        <Link href={backHref}>
+        <Link href={isPinErrand && returnToParam ? returnToParam : backHref}>
           <Button variant="ghost" size="icon" className="h-8 w-8">
             <ArrowLeft className="w-4 h-4" />
           </Button>
@@ -663,7 +725,7 @@ export default function AnnotationCanvas() {
             {visibleMarkers.length}/{markerList.length}
           </span>
         </div>
-        <Button
+        {!isPinErrand && <Button
           size="sm"
           variant={placingMode ? "default" : "outline"}
           className="h-7 text-xs gap-1 flex-shrink-0"
@@ -674,7 +736,7 @@ export default function AnnotationCanvas() {
         >
           <Crosshair className="w-3 h-3" />
           {placingMode ? "Tap to place" : "Add"}
-        </Button>
+        </Button>}
       </div>
 
       <div className="flex items-center gap-3 px-3 py-1 border-b text-xs text-muted-foreground flex-shrink-0 overflow-x-auto">
@@ -729,6 +791,30 @@ export default function AnnotationCanvas() {
               draggable={false}
               onLoad={() => setImageLoaded(true)}
             />
+            {/* Draft pin for the record the form sent, waiting for Accept */}
+            {imageLoaded && draftPin && (
+              <div
+                className="absolute flex flex-col items-center pointer-events-none"
+                style={{
+                  left: `${draftPin.x}%`,
+                  top: `${draftPin.y}%`,
+                  transform: `translate(-50%, -100%) scale(${1 / scale})`,
+                  transformOrigin: "bottom center",
+                  zIndex: 30,
+                }}
+                data-testid="draft-pin"
+              >
+                <svg width={26} height={35} viewBox="0 0 16 22" fill="none" style={{ filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.45))" }}>
+                  <path
+                    d="M8 0C3.6 0 0 3.6 0 8c0 5.4 7.05 13.09 7.35 13.43a.87.87 0 001.3 0C8.95 21.09 16 13.4 16 8c0-4.4-3.6-8-8-8z"
+                    fill="#2563EB"
+                    stroke="white"
+                    strokeWidth="1.2"
+                  />
+                  <circle cx="8" cy="8" r="3" fill="white" />
+                </svg>
+              </div>
+            )}
             {/* Markers overlay — pin only; detail lives in the expansion card below */}
             {imageLoaded &&
               visibleMarkers.map((marker) => {
@@ -857,6 +943,34 @@ export default function AnnotationCanvas() {
       </div>
 
       {/* What goes at the pin the user just dropped */}
+      {/* Pin errand bar: placing a pin for the form the inspector came from */}
+      {isPinErrand && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 border-t bg-background flex-shrink-0"
+          style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+          data-testid="pin-errand-bar"
+        >
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">{formUid || defectParam}</p>
+            <p className="text-xs text-muted-foreground">
+              {draftPin ? "Tap again to move the pin, or accept to go back to the form." : "Tap the drawing to place the pin."}
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={cancelPinErrand} data-testid="button-cancel-pin">
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={acceptDraftPin}
+            disabled={!draftPin || createMarkerMut.isPending}
+            data-testid="button-accept-pin"
+          >
+            {createMarkerMut.isPending ? "Saving..." : "Accept"}
+          </Button>
+        </div>
+      )}
+
       <Dialog open={!!pendingPin} onOpenChange={(v) => !v && setPendingPin(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
