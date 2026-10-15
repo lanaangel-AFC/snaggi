@@ -48,6 +48,9 @@ export const projects = sqliteTable("projects", {
   categories: text("categories").default("[]"),
   // Per-profile export config (contractor/client): filenameSuffix + ordered categoryTreatments.
   exportProfiles: text("export_profiles").default('{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"WIP","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"WIP","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'),
+  // WP2: 1 = project created before the record-wording change (keeps its original
+  // wording); 2 = created after it (says "record"; the form follows its type).
+  featureVersion: integer("feature_version").default(1),
   createdAt: text("created_at").notNull(),
 });
 

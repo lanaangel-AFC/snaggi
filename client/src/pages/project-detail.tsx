@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { Project, Report, Defect, Elevation } from "@shared/schema";
 import { useState, useMemo } from "react";
+import { recordWords } from "@/lib/wording";
 import ProjectStatusSection from "@/components/ProjectStatusSection";
 import ProjectSetupEditors from "@/components/ProjectSetupEditors";
 import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor } from "@/components/ProjectSetupExtraEditors";
@@ -372,7 +373,7 @@ export default function ProjectDetail() {
               {/* UID Parameters */}
               <div>
                 <Label className="mb-2 block">UID Parameters</Label>
-                <p className="text-xs text-muted-foreground mb-2">Choose which fields appear in the defect ID</p>
+                <p className="text-xs text-muted-foreground mb-2">Choose which fields appear in the {recordWords(project as any).one} ID</p>
                 <div className="space-y-2">
                   <label className="flex items-center gap-2 text-sm cursor-pointer">
                     <Checkbox checked={editEnabledParts.elevation} onCheckedChange={() => toggleEditUidPart("elevation")} />

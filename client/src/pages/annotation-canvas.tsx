@@ -3,6 +3,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
 import { readQueryParams, clearQueryParams } from "@/lib/url-params";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { recordWords } from "@/lib/wording";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -137,6 +138,9 @@ export default function AnnotationCanvas() {
   const lastTouchCenter = useRef<{ x: number; y: number } | null>(null);
 
   // Queries
+  // WP2: the project's wording setting ("record" in new projects).
+  const { data: wordingProject } = useQuery<any>({ queryKey: ["/api/projects", projectId] });
+  const rw = recordWords(wordingProject);
   const { data: elevation } = useQuery<Elevation>({
     queryKey: ["/api/elevations", elevationId],
     queryFn: async () => {
@@ -1018,10 +1022,10 @@ export default function AnnotationCanvas() {
           </DialogHeader>
           <form onSubmit={handleFormSubmit} className="space-y-4">
             <div>
-              <Label>Link to Defect</Label>
+              <Label>Link to {rw.One}</Label>
               <Select value={formDefectId} onValueChange={handleDefectSelect}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select a defect or enter custom..." />
+                  <SelectValue placeholder={`Select a ${rw.one} or enter custom...`} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="custom">Custom UID (not in register)</SelectItem>
@@ -1051,7 +1055,7 @@ export default function AnnotationCanvas() {
             </div>
             {formDefectId === "custom" && (
               <div>
-                <Label htmlFor="defectUid">Defect UID</Label>
+                <Label htmlFor="defectUid">{rw.One} UID</Label>
                 <Input
                   id="defectUid"
                   value={formUid}

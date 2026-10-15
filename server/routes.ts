@@ -238,7 +238,9 @@ export async function registerRoutes(
   });
 
   app.patch("/api/projects/:id", async (req, res) => {
-    const project = await storage.updateProject(Number(req.params.id), req.body);
+    // The wording/feature version is fixed when a project is created (WP2).
+    const { featureVersion: _ignored, ...patch } = req.body ?? {};
+    const project = await storage.updateProject(Number(req.params.id), patch);
     if (!project) return res.status(404).json({ message: "Project not found" });
     res.json(project);
   });

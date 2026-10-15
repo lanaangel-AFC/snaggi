@@ -121,7 +121,7 @@ export default function ProjectList() {
           <h1 className="text-xl font-semibold tracking-tight" data-testid="text-page-title">
             Snaggi
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">Defect tracking and elevation markup</p>
+          <p className="text-sm text-muted-foreground mt-1">Inspection records and elevation markup</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -236,7 +236,7 @@ export default function ProjectList() {
               {/* UID Parameters */}
               <div>
                 <Label className="mb-2 block">UID Parameters</Label>
-                <p className="text-xs text-muted-foreground mb-2">Choose which fields appear in the defect ID</p>
+                <p className="text-xs text-muted-foreground mb-2">Choose which fields appear in the record ID</p>
                 <div className="space-y-2">
                   <label className="flex items-center gap-2 text-sm cursor-pointer">
                     <Checkbox checked={enabledParts.elevation} onCheckedChange={() => toggleUidPart("elevation")} />
@@ -357,7 +357,7 @@ export default function ProjectList() {
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (confirm("Delete this project and all its defects?")) {
+                  if (confirm("Delete this project and all its records?")) {
                     deleteMutation.mutate(project.id);
                   }
                 }}

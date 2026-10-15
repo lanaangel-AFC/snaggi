@@ -18,6 +18,7 @@ import {
   parseProjectSnapshot, resolveProjectField,
   deriveAreaRef,
 } from "./render-helpers";
+import { usesRecordWording } from "./wording";
 
 export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
   const data = { project: tree.project, report: tree.report };
@@ -367,12 +368,12 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   // §1.5.1 "Unique identifier" follows as a bolded subsection heading.
   if (y + 24 > pageHeight - 20) y = newSection();
   doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(...DARK_TEXT);
-  doc.text("1.5 Defect/observation UID nomenclature", margin, y); y += 8;
+  doc.text(usesRecordWording(data.project) ? "1.5 Record UID nomenclature" : "1.5 Defect/observation UID nomenclature", margin, y); y += 8;
   doc.setFontSize(12); doc.setFont("helvetica", "bold");
   doc.text("1.5.1 Unique identifier", margin, y); y += 6;
   doc.setFontSize(10); doc.setFont("helvetica", "normal");
   const uidParas: string[] = [
-    "Throughout the document, observations and defects are referred to by their unique identifier (UID).",
+    (usesRecordWording(data.project) ? "Throughout the document, each record (observation or defect) is referred to by its unique identifier (UID)." : "Throughout the document, observations and defects are referred to by their unique identifier (UID)."),
     "The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.",
   ];
   uidParas.forEach((para) => {

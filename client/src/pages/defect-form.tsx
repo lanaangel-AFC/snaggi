@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo, Project, Elevation, DefectLocation } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { typeWords } from "@/lib/wording";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -203,6 +204,8 @@ export default function DefectForm() {
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
   });
+  // WP2: in new projects the form's wording follows the record type; older projects say "defect".
+  const tw = typeWords(project as any, recordType);
 
   const { data: report } = useQuery<any>({
     queryKey: ["/api/reports", reportId],
@@ -366,7 +369,7 @@ export default function DefectForm() {
 
   const addAdditionalLocation = async () => {
     if (!defectId || defectId === "new-defect" || defectId === "new-observation") {
-      toast({ title: "Save the defect first before adding locations", variant: "destructive" });
+      toast({ title: `Save the ${tw.one} first before adding locations`, variant: "destructive" });
       return;
     }
     try {
@@ -1024,7 +1027,7 @@ export default function DefectForm() {
 
   const handlePhotoUpload = async (file: File, slot: SlotKey) => {
     if (!defectId) {
-      toast({ title: "Save the defect first before adding photos", variant: "destructive" });
+      toast({ title: `Save the ${tw.one} first before adding photos`, variant: "destructive" });
       return;
     }
     setUploading(slot);
@@ -1235,8 +1238,8 @@ export default function DefectForm() {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 mb-6">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
           <h1 className="text-xl font-semibold tracking-tight">
             {isEdit ? `Edit ${recordType === "observation" ? "Observation" : "Defect"}` : `New ${recordType === "observation" ? "Observation" : "Defect"}`}
           </h1>
@@ -1271,7 +1274,7 @@ export default function DefectForm() {
                         onError: () => setRecordType(recordType),
                       });
                     }}
-                    className={`px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    className={`px-2.5 py-1 text-xs font-medium whitespace-nowrap transition-colors disabled:opacity-50 ${
                       recordType === type
                         ? "bg-primary text-primary-foreground"
                         : "bg-background text-muted-foreground hover:bg-accent/60"
@@ -1489,7 +1492,7 @@ export default function DefectForm() {
         {formStep === "form" && (<>
         <Card className="p-4 space-y-4 bg-accent/30">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">Defect ID</h3>
+            <h3 className="text-sm font-medium">{tw.One} ID</h3>
             {(assembledUid || uid) && (
               <span className="font-mono text-sm font-semibold text-primary" data-testid="text-defect-uid">
                 {isEdit ? uid : assembledUid}
@@ -1702,7 +1705,7 @@ export default function DefectForm() {
           <Textarea
             id="comment"
             ref={commentRef}
-            placeholder="Describe the defect observed..."
+            placeholder={tw.one === "observation" ? "Describe what was observed..." : "Describe the defect observed..."}
             value={form.comment}
             onChange={set("comment")}
             rows={3}
@@ -1824,7 +1827,7 @@ export default function DefectForm() {
           <Textarea
             id="actionRequired"
             ref={actionRef}
-            placeholder="What needs to be done to rectify this defect?"
+            placeholder={tw.one === "observation" ? "What action is needed, if any?" : "What needs to be done to rectify this defect?"}
             value={form.actionRequired}
             onChange={set("actionRequired")}
             rows={2}
@@ -2051,7 +2054,7 @@ export default function DefectForm() {
                   <div className="rounded-md border border-emerald-300 bg-emerald-50/50 dark:bg-emerald-900/10 p-2.5 space-y-2">
                     <p className="text-xs font-medium text-emerald-800 dark:text-emerald-400">Add note for this inspection</p>
                     <Textarea
-                      placeholder="Note about this defect for the current inspection..."
+                      placeholder={`Note about this ${tw.one} for the current inspection...`}
                       value={inspNoteText}
                       onChange={(e) => setInspNoteText(e.target.value)}
                       rows={2}
@@ -2091,7 +2094,7 @@ export default function DefectForm() {
                 </Collapsible>
               )}
               {current.length === 0 && prior.length === 0 && (
-                <p className="text-xs text-muted-foreground">No history yet for this defect.</p>
+                <p className="text-xs text-muted-foreground">No history yet for this {tw.one}.</p>
               )}
             </div>
           );
@@ -2446,7 +2449,7 @@ export default function DefectForm() {
         {/* Submit */}
         <Button type="submit" className="w-full" disabled={saveMutation.isPending || !canSave} data-testid="button-save-defect">
           <Save className="w-4 h-4 mr-2" />
-          {saveMutation.isPending ? "Saving..." : isEdit ? "Update Defect" : "Save Defect"}
+          {saveMutation.isPending ? "Saving..." : isEdit ? `Update ${tw.One}` : `Save ${tw.One}`}
         </Button>
 
         </>)}

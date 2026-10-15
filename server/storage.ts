@@ -327,6 +327,7 @@ safeAddColumn("reports", "prior_report_id", "INTEGER"); // report this one was c
 safeAddColumn("photos", "capture_date", "TEXT"); // when photo was taken (EXIF/manual); display falls back to created_at
 safeAddColumn("projects", "show_completed_register", "INTEGER DEFAULT 0"); // D3: wire-only, render deferred
 // Export-profiles (Pass 1) additions.
+safeAddColumn("projects", "feature_version", "INTEGER DEFAULT 1"); // WP2: existing projects stay at 1
 safeAddColumn("projects", "categories", "TEXT DEFAULT '[]'"); // follow-up action categories [{code,label,isDefault?}]
 safeAddColumn("projects", "export_profiles", `TEXT DEFAULT '{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'`);
 safeAddColumn("defects", "audience", "TEXT DEFAULT 'both'"); // "both" | "contractor" | "client"
@@ -1062,7 +1063,8 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(projects).where(eq(projects.id, id)).get();
   }
   async createProject(project: InsertProject): Promise<Project> {
-    return db.insert(projects).values(project).returning().get();
+    // New projects get the current feature version (WP2 record wording onwards).
+    return db.insert(projects).values({ ...project, featureVersion: project.featureVersion ?? 2 }).returning().get();
   }
   async updateProject(id: number, project: Partial<InsertProject>): Promise<Project | undefined> {
     return db.update(projects).set(project).where(eq(projects.id, id)).returning().get();

@@ -17,6 +17,7 @@ import {
   truncateWordBoundary, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
+import { usesRecordWording } from "./wording";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
   const data = { project: tree.project, report: tree.report };
@@ -399,7 +400,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   // every report, so the text is hard-coded here (no project-level override).
   // §1.5.1 "Unique identifier" is rendered as a HEADING_3 subsection.
   introChildren.push(new Paragraph({
-    children: [new TextRun({ text: "Defect/observation UID nomenclature", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
+    children: [new TextRun({ text: usesRecordWording(data.project) ? "Record UID nomenclature" : "Defect/observation UID nomenclature", size: 32, font: "Aptos", bold: true, color: DARK_TEXT })],
     heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 100 },
   }));
   introChildren.push(new Paragraph({
@@ -408,7 +409,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   }));
   introChildren.push(new Paragraph({
     children: [new TextRun({
-      text: "Throughout the document, observations and defects are referred to by their unique identifier (UID).",
+      text: (usesRecordWording(data.project) ? "Throughout the document, each record (observation or defect) is referred to by its unique identifier (UID)." : "Throughout the document, observations and defects are referred to by their unique identifier (UID)."),
       size: 22, font: "Aptos", color: DARK_TEXT,
     })],
     spacing: { after: 80 },
