@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes } from "./storage";
+import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes, addToCategoryLibrary, removeFromCategoryLibrary } from "./storage";
 import {
   buildActionSummaryInput,
   generateActionSummary,
@@ -188,6 +188,21 @@ export async function registerRoutes(
   app.post("/api/global-settings/work-types", async (req, res) => {
     addGlobalWorkType(req.body);
     res.json({ ok: true });
+  });
+
+  // Generic category library (shared across projects). Adding never overwrites an entry
+  // with the same code; removing never touches a project that already uses the category.
+  app.post("/api/global-settings/categories", async (req, res) => {
+    const { code, label } = req.body ?? {};
+    if (!String(code || "").trim() || !String(label || "").trim()) {
+      return res.status(400).json({ message: "Code and label are required" });
+    }
+    const result = addToCategoryLibrary({ code, label });
+    res.status(result.added ? 201 : 200).json(result);
+  });
+
+  app.delete("/api/global-settings/categories/:code", async (req, res) => {
+    res.json(removeFromCategoryLibrary(String(req.params.code)));
   });
 
   // === PROJECTS ===
