@@ -133,11 +133,49 @@ function ensureTerminalPeriod(s: string): string {
 
 // ---------- OpenAI call ----------
 
-const SYSTEM_PROMPT = `You write one-sentence action items for a façade defect remediation report. \
-Output a single imperative sentence, ≤25 words, plain English, no preamble, no bullet points, no markdown, no quotes. \
+const SYSTEM_PROMPT = `You write one-sentence action items for a façade remediation report. \
+Output a single sentence, ≤25 words, plain English, no preamble, no bullet points, no markdown, no quotes. \
+When naming who acts, use "to", never "must": write "Contractor to provide…", not "Contractor must provide…". \
 Preserve any hold points and safety-critical phrases ("hold point", "do not", "must not", "stop work", "WHS") verbatim. \
-If the input does not describe a required action, infer one from the observation. \
+If the action required says or implies the works are complete and nothing further is needed, reply exactly "No action necessary." \
+Only if the action required is "(none)", infer an action from the observation. \
 Never invent specifications, materials, or trade names not present in the input.`;
+
+// "X must <verb>" becomes "X to <verb>". The prompt asks for this, but the model does not
+// always comply and the rule is the user's, so it is enforced here too. "must not" is a
+// locked safety phrase and is left alone.
+export function replaceMustWithTo(s: string): string {
+  return s.replace(/\bmust(?!\s+not\b)(\s+)/gi, (_m, ws) => `to${ws}`);
+}
+
+// True when the manually entered action amounts to "the works are done, nothing to do",
+// e.g. "Works complete. No action necessary." Every sentence has to be a short completion
+// or no-action statement; anything with real work in it ("…complete. Clean brickwork.")
+// goes to the model as normal.
+const NO_ACTION_PHRASE = /\b(no|nil)( further)? (action|works?)( is| are)?( (necessary|required|needed))?\b/i;
+const NO_ACTION_RE = /^((no|nil)( further)? (action|works?)( is| are)?( (necessary|required|needed))?|nil|observation only)$/i;
+const COMPLETE_RE = /\b(complete|completed|finished|done|closed|resolved|addressed|applied)\b/i;
+const NOT_DONE_RE = /\b(not|but|except|however|still|outstanding|incomplete|require|requires|required|to|until|once|when|partially)\b/i;
+// "Complete repair", "Complete the sealant": complete used as an instruction, not a status.
+const IMPERATIVE_COMPLETE_RE = /^complete\s+\S/i;
+const DATE_PREFIX_RE = /^\d{1,2}\/\d{1,2}\/\d{2,4}\s*:\s*/;
+export function impliesNoActionRequired(actionRequired: string): boolean {
+  const sentences = normaliseField(actionRequired)
+    .replace(DATE_PREFIX_RE, "")
+    .split(/[.;!\n]+|\s[-\u2013\u2014]\s|,\s*(?=(?:no|nil)\b)/i)
+    .map((x) => (x ?? "").trim().replace(/[,:]+$/, ""))
+    .filter(Boolean);
+  if (sentences.length === 0) return false;
+  return sentences.every((x) => {
+    if (NO_ACTION_RE.test(x)) return true;
+    if (IMPERATIVE_COMPLETE_RE.test(x)) return false;
+    const rest = x.replace(NO_ACTION_PHRASE, "").replace(/^[,\s]+|[,\s]+$/g, "");
+    if (!rest) return true;
+    return rest.split(/\s+/).length <= 7 && COMPLETE_RE.test(rest) && !NOT_DONE_RE.test(rest);
+  });
+}
+
+export const NO_ACTION_SUMMARY = "No action necessary.";
 
 function buildUserPrompt(fields: BuiltActionSummaryInput["fields"]): string {
   return [
@@ -169,6 +207,12 @@ export async function generateActionSummary(raw: ActionSummaryInputs): Promise<G
   // Fast path: nothing to summarise at all.
   if (!built.fields.observation && !built.fields.actionRequired) {
     return { summary: "", source: "fallback", hash: built.hash, fallbackReason: "empty-input" };
+  }
+
+  // The inspector has said the works are done: say so, rather than letting the model
+  // turn the observation into a task.
+  if (impliesNoActionRequired(built.fields.actionRequired)) {
+    return { summary: NO_ACTION_SUMMARY, source: "ai", hash: built.hash };
   }
 
   if (!apiKey) {
@@ -212,7 +256,7 @@ export async function generateActionSummary(raw: ActionSummaryInputs): Promise<G
     }
     const json: any = await resp.json();
     const content: string = json?.choices?.[0]?.message?.content ?? "";
-    const cleaned = sanitiseModelOutput(content);
+    const cleaned = replaceMustWithTo(sanitiseModelOutput(content));
     if (!cleaned) {
       return {
         summary: fallbackActionSummary(raw.observation, raw.actionRequired),
