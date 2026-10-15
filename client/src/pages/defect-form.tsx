@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
+import { readQueryParams, clearQueryParams } from "@/lib/url-params";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -122,12 +123,9 @@ export default function DefectForm() {
   // Arrived from the drawing: the user dropped a pin first and the record is being created
   // to sit under it. We carry the coordinates through rather than creating the marker up
   // front, so abandoning the form leaves no orphan pin on the elevation.
-  const pendingPin = (() => {
+  const [pendingPin] = useState(() => {
     if (typeof window === "undefined") return null;
-    const hash = window.location.hash;
-    const qIndex = hash.indexOf("?");
-    if (qIndex === -1) return null;
-    const params = new URLSearchParams(hash.substring(qIndex));
+    const params = readQueryParams();
     const elevationId = params.get("pinElevationId");
     const x = params.get("pinX");
     const y = params.get("pinY");
@@ -135,7 +133,9 @@ export default function DefectForm() {
     const parsed = { elevationId: Number(elevationId), x: Number(x), y: Number(y) };
     if (Number.isNaN(parsed.elevationId) || Number.isNaN(parsed.x) || Number.isNaN(parsed.y)) return null;
     return parsed;
-  })();
+  });
+  // Taken once: clear them so they cannot follow the user to another page.
+  useEffect(() => { clearQueryParams(["pinElevationId", "pinX", "pinY"]); }, []);
 
   // Every amendment is submitted with the inspection the user is working in, which is not
   // always the inspection the row belongs to — pins on a drawing outlive the inspection that
@@ -474,6 +474,50 @@ export default function DefectForm() {
     }
   };
 
+  // True when the form holds edits the server has not got. Mark on Elevation saves them first
+  // so nothing typed is lost on the way to the drawing. An unchanged form is deliberately NOT
+  // re-saved: a save ticks off the record's to-do item, which must only happen for real edits.
+  const hasUnsavedEdits = (): boolean => {
+    const ed = existingDefect as any;
+    if (!ed) return false;
+    const norm = (v: any) => (v == null ? "" : String(v));
+    const fields = ["dateOpened", "dateClosed", "comment", "actionRequired", "assignedTo", "dueDate",
+      "verificationMethod", "verificationPerson", "status"] as const;
+    if (fields.some((k) => norm((form as any)[k]) !== norm(ed[k]))) return true;
+    if (norm(categoryCode) !== norm(ed.categoryCode)) return true;
+    if (norm(audience) !== norm(ed.audience || "both")) return true;
+    const parts: Array<[string, string]> = [[elevation, "elevationCode"], [drop, "dropCode"], [level, "levelCode"],
+      [workType, "workTypeCode"], [seqNumber, "seqNumber"]];
+    return parts.some(([v, k]) => v !== "" && norm(v) !== norm(ed[k]));
+  };
+
+  // Save anything outstanding, then open the drawing for THIS inspection with the exact row
+  // this form is editing and the way back to it. The drawing places one pin, linked to that
+  // row, and returns here on Accept.
+  const openElevationForPin = async (elevationId: number, opts?: { locUid?: string; locationId?: number }) => {
+    if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
+    let recordUid = uid || assembledUid;
+    try {
+      await flushPendingLocationPatches();
+      if (hasUnsavedEdits()) {
+        const saved: any = await saveMutation.mutateAsync();
+        if (saved?.uid) recordUid = saved.uid;
+      }
+    } catch {
+      // saveMutation reports its own error; stay on the form so nothing is lost.
+      return;
+    }
+    const rowId = activeDefectIdRef.current ?? defectId;
+    const returnTo = `/projects/${projectId}/reports/${reportId}/defects/${rowId}`;
+    const params = new URLSearchParams({
+      defect: opts?.locUid || recordUid,
+      defectId: String(rowId),
+      returnTo,
+    });
+    if (opts?.locationId) params.set("locationId", String(opts.locationId));
+    navigate(`/projects/${projectId}/reports/${reportId}/elevations/${elevationId}?${params.toString()}`);
+  };
+
   const handleMarkLocationOnElevation = async (loc: DefectLocation) => {
     try {
       const res = await apiRequest("GET", `/api/projects/${projectId}/elevations`);
@@ -482,7 +526,7 @@ export default function DefectForm() {
       if (elevationsList.length === 0) {
         toast({ title: "No elevations uploaded for this project yet.", variant: "destructive" });
       } else if (elevationsList.length === 1) {
-        navigate(`/projects/${projectId}/elevations/${elevationsList[0].id}?defect=${encodeURIComponent(locUid)}&locationId=${loc.id}`);
+        await openElevationForPin(elevationsList[0].id, { locUid, locationId: loc.id });
       } else {
         setProjectElevations(elevationsList);
         setLocationPickerTarget(loc);
@@ -500,11 +544,10 @@ export default function DefectForm() {
     try {
       const res = await apiRequest("GET", `/api/projects/${projectId}/elevations`);
       const elevations: Elevation[] = await res.json();
-      const defectUid = uid || assembledUid;
       if (elevations.length === 0) {
         toast({ title: "No elevations uploaded for this project yet. Upload one from the project page first.", variant: "destructive" });
       } else if (elevations.length === 1) {
-        navigate(`/projects/${projectId}/elevations/${elevations[0].id}?defect=${encodeURIComponent(defectUid)}`);
+        await openElevationForPin(elevations[0].id);
       } else {
         setProjectElevations(elevations);
         setElevationPickerOpen(true);
@@ -1292,11 +1335,11 @@ export default function DefectForm() {
                   setElevationPickerOpen(false);
                   if (locationPickerTarget) {
                     const locUid = locationPickerTarget.uid || computeLocationUid(locationPickerTarget.elevation || "", locationPickerTarget.drop || "", locationPickerTarget.level || "");
-                    navigate(`/projects/${projectId}/elevations/${el.id}?defect=${encodeURIComponent(locUid)}&locationId=${locationPickerTarget.id}`);
+                    const locationId = locationPickerTarget.id;
                     setLocationPickerTarget(null);
+                    openElevationForPin(el.id, { locUid, locationId });
                   } else {
-                    const defectUid = uid || assembledUid;
-                    navigate(`/projects/${projectId}/elevations/${el.id}?defect=${encodeURIComponent(defectUid)}`);
+                    openElevationForPin(el.id);
                   }
                 }}
               >
