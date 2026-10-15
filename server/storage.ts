@@ -597,6 +597,31 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`
   }
 }
 
+// Generic category library: follow-up action categories any project can pick from, kept
+// across projects. Seeded once with the standard set; after that it only changes when the
+// user saves a category to it or removes one. Projects keep their own copies, so editing
+// the library never alters an existing project.
+safeAddColumn("global_settings", "category_library", "TEXT DEFAULT '[]'");
+{
+  const alreadyRan = sqlite.prepare(`SELECT value FROM meta WHERE key = 'category_library_seed_v1'`).get();
+  if (!alreadyRan) {
+    const row = sqlite.prepare("SELECT id, category_library FROM global_settings LIMIT 1").get() as any;
+    let current: any[] = [];
+    try { current = JSON.parse(row?.category_library || "[]"); } catch {}
+    if (row && (!Array.isArray(current) || current.length === 0)) {
+      const seed = [
+        { code: "RR", label: "Rectify" },
+        { code: "WIP", label: "Work in progress" },
+        { code: "PI", label: "Provide Information" },
+        { code: "RD", label: "Redesign" },
+        { code: "PN", label: "Project Note" },
+      ];
+      sqlite.prepare("UPDATE global_settings SET category_library = ? WHERE id = ?").run(JSON.stringify(seed), row.id);
+    }
+    sqlite.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('category_library_seed_v1', ?)`).run(new Date().toISOString());
+  }
+}
+
 // Built-in work type codes that are always valid (mirrors client WORK_TYPES + global defaults).
 export const BUILTIN_WORK_TYPE_CODES = [
   "CR","CK","PT","WP","GL","CL","ST","SE","FL","RR","GK","SR","SM","BR","LR","SS","GW","OT",
@@ -1913,9 +1938,42 @@ export class DatabaseStorage implements IStorage {
 }
 
 // Global settings helpers (raw SQL — single-row table)
-export function getGlobalSettings(): { workTypes: { code: string; label: string }[] } {
-  const row = sqlite.prepare("SELECT work_types FROM global_settings LIMIT 1").get() as any;
-  return { workTypes: row ? JSON.parse(row.work_types) : [] };
+export function getGlobalSettings(): {
+  workTypes: { code: string; label: string }[];
+  categoryLibrary: { code: string; label: string }[];
+} {
+  const row = sqlite.prepare("SELECT work_types, category_library FROM global_settings LIMIT 1").get() as any;
+  let categoryLibrary: { code: string; label: string }[] = [];
+  try { categoryLibrary = JSON.parse(row?.category_library || "[]"); } catch {}
+  return { workTypes: row ? JSON.parse(row.work_types) : [], categoryLibrary };
+}
+
+function writeCategoryLibrary(list: { code: string; label: string }[]): void {
+  sqlite.prepare("UPDATE global_settings SET category_library = ? WHERE id = (SELECT id FROM global_settings LIMIT 1)")
+    .run(JSON.stringify(list));
+}
+
+/** Add a category to the generic library. A code already in the library is left as it is. */
+export function addToCategoryLibrary(cat: { code: string; label: string }):
+  { added: boolean; existing?: { code: string; label: string }; library: { code: string; label: string }[] } {
+  const code = String(cat.code || "").trim().toUpperCase();
+  const label = String(cat.label || "").trim();
+  const library = getGlobalSettings().categoryLibrary;
+  if (!code || !label) return { added: false, library };
+  const existing = library.find((c) => c.code === code);
+  if (existing) return { added: false, existing, library };
+  const next = [...library, { code, label }];
+  writeCategoryLibrary(next);
+  return { added: true, library: next };
+}
+
+/** Remove a category from the generic library. Projects already using it keep it. */
+export function removeFromCategoryLibrary(code: string): { removed: boolean; library: { code: string; label: string }[] } {
+  const library = getGlobalSettings().categoryLibrary;
+  const next = library.filter((c) => c.code !== code);
+  if (next.length === library.length) return { removed: false, library };
+  writeCategoryLibrary(next);
+  return { removed: true, library: next };
 }
 
 export function addGlobalWorkType(wt: { code: string; label: string }): void {

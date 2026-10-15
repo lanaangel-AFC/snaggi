@@ -275,7 +275,7 @@ export default function ProjectDetail() {
                 e.preventDefault();
                 updateProjectMutation.mutate(editForm);
               }}
-              className="space-y-4"
+              className="space-y-4 min-w-0"
             >
               <div>
                 <Label>Project Name</Label>
