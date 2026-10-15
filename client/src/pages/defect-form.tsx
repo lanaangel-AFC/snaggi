@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo, Project, Elevation, DefectLocation } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { typeWords } from "@/lib/wording";
+import { typeWords, usesRecordWording } from "@/lib/wording";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -206,6 +206,10 @@ export default function DefectForm() {
   });
   // WP2: in new projects the form's wording follows the record type; older projects say "defect".
   const tw = typeWords(project as any, recordType);
+  // WP5: observations in new projects can be recorded with no action needed (a "note").
+  const [actionNeeded, setActionNeeded] = useState(true);
+  const notesEnabled = usesRecordWording(project as any);
+  const isNote = notesEnabled && recordType === "observation" && !actionNeeded;
 
   const { data: report } = useQuery<any>({
     queryKey: ["/api/reports", reportId],
@@ -489,6 +493,7 @@ export default function DefectForm() {
     if (fields.some((k) => norm((form as any)[k]) !== norm(ed[k]))) return true;
     if (norm(categoryCode) !== norm(ed.categoryCode)) return true;
     if (norm(audience) !== norm(ed.audience || "both")) return true;
+    if (actionNeeded !== !(ed.actionNeeded === false || ed.actionNeeded === 0)) return true;
     const parts: Array<[string, string]> = [[elevation, "elevationCode"], [drop, "dropCode"], [level, "levelCode"],
       [workType, "workTypeCode"], [seqNumber, "seqNumber"]];
     return parts.some(([v, k]) => v !== "" && norm(v) !== norm(ed[k]));
@@ -666,7 +671,7 @@ export default function DefectForm() {
   const [duplicateAlertShown, setDuplicateAlertShown] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isEdit || !assembledUid || !reportDefects || assembledUid === duplicateAlertShown) return;
+    if (isEdit || isNote || !assembledUid || !reportDefects || assembledUid === duplicateAlertShown) return;
     const match = reportDefects.find((d) => d.uid === assembledUid);
     if (match) {
       setDuplicateAlertShown(assembledUid);
@@ -754,6 +759,7 @@ export default function DefectForm() {
         actionSummaryInputHash: (existingDefect as any).actionSummaryInputHash ?? "",
       });
       setUid(existingDefect.uid);
+      setActionNeeded(!((existingDefect as any).actionNeeded === false || (existingDefect as any).actionNeeded === 0));
       if ((existingDefect as any).recordType) {
         setRecordType((existingDefect as any).recordType);
       }
@@ -901,7 +907,10 @@ export default function DefectForm() {
         // If anything had to be recovered the assembled UID is untrustworthy, so keep the
         // stored one rather than writing a shortened name over it.
         const updatedUid = recoveredPart ? (stored?.uid ?? uid) : (assembledUid || uid);
-        return await patchDefect({ ...form, uid: updatedUid, ...safeParts, categoryCode: categoryCode || null, audience });
+        return await patchDefect({
+          ...form, uid: updatedUid, ...safeParts, categoryCode: isNote ? null : (categoryCode || null), audience,
+          ...(notesEnabled ? { actionNeeded: !isNote } : {}),
+        });
       } else {
         const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
           ...form,
@@ -910,8 +919,9 @@ export default function DefectForm() {
           uidOverride: assembledUid,
           recordType,
           ...uidParts,
-          categoryCode: categoryCode || null,
+          categoryCode: isNote ? null : (categoryCode || null),
           audience,
+          ...(notesEnabled ? { actionNeeded: !isNote } : {}),
         });
         return res.json();
       }
@@ -923,8 +933,10 @@ export default function DefectForm() {
       if (isEdit && defectId) {
         queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
       }
-      const typeLabel = recordType === "observation" ? "Observation" : "Defect";
-      toast({ title: isEdit ? `${typeLabel} updated` : `${typeLabel} created` });
+      // The server owns note references, and assigns a full UID when a note becomes actionable.
+      if (isEdit && data?.uid) setUid(data.uid);
+      const typeLabel = isNote ? "Note" : recordType === "observation" ? "Observation" : "Defect";
+      toast({ title: isEdit ? `${typeLabel} updated${data?.uid ? ` (${data.uid})` : ""}` : `${typeLabel} created${data?.uid ? ` (${data.uid})` : ""}` });
       if (!isEdit && pendingPin) {
         // Place the pin the user dropped, then hand them back to the drawing they came
         // from. A failed marker write must not look like a failed save: the record is
@@ -960,7 +972,8 @@ export default function DefectForm() {
     mutationFn: async (newType: "defect" | "observation") => {
       return await patchDefect({ recordType: newType });
     },
-    onSuccess: (_data, newType) => {
+    onSuccess: (_data: any, newType) => {
+      if (_data?.uid) setUid(_data.uid);
       // Invalidate everything that buckets a record by type: report list (DEFECTS vs OBSERVATIONS),
       // project-wide list, the singular defect, and the assembled report export data.
       queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
@@ -968,6 +981,8 @@ export default function DefectForm() {
       queryClient.invalidateQueries({ queryKey: ["/api/defects", defectId] });
       queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/report-data`] });
       toast({ title: `Changed to ${newType === "observation" ? "Observation" : "Defect"}` });
+      // A note that becomes a defect is given a full UID by the server (WP5).
+      if (newType === "defect") setActionNeeded(true);
     },
     onError: () => {
       toast({ title: "Failed to change record type", variant: "destructive" });
@@ -1243,7 +1258,7 @@ export default function DefectForm() {
           <h1 className="text-xl font-semibold tracking-tight">
             {isEdit ? `Edit ${recordType === "observation" ? "Observation" : "Defect"}` : `New ${recordType === "observation" ? "Observation" : "Defect"}`}
           </h1>
-          {isEdit && (
+          {isEdit && !isNote && (
             <Badge
               variant="secondary"
               className={isComplete
@@ -1288,7 +1303,7 @@ export default function DefectForm() {
             </div>
           )}
         </div>
-        {isEdit && (
+        {isEdit && !isNote && (
           <div>
             {!isComplete ? (
               <Button variant="secondary" onClick={handleMarkComplete} data-testid="button-mark-complete">
@@ -1492,10 +1507,14 @@ export default function DefectForm() {
         {formStep === "form" && (<>
         <Card className="p-4 space-y-4 bg-accent/30">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">{tw.One} ID</h3>
-            {(assembledUid || uid) && (
+            <h3 className="text-sm font-medium">{isNote ? "Note reference" : `${tw.One} ID`}</h3>
+            {isNote ? (
+              <span className="font-mono text-sm font-semibold text-slate-500" data-testid="text-defect-uid">
+                {isEdit && uid.startsWith("Note-") ? uid : "Assigned on save"}
+              </span>
+            ) : (assembledUid || uid) && (
               <span className="font-mono text-sm font-semibold text-primary" data-testid="text-defect-uid">
-                {isEdit ? uid : assembledUid}
+                {isEdit && !uid.startsWith("Note-") ? uid : assembledUid}
               </span>
             )}
           </div>
@@ -1603,10 +1622,41 @@ export default function DefectForm() {
           </p>
         </Card>
 
+        {/* WP5: Action required? (observations in new projects only) */}
+        {notesEnabled && recordType === "observation" && (
+          <Card className="p-4 space-y-2" data-testid="action-needed-card">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Label className="text-sm">Action required?</Label>
+              <div className="inline-flex rounded-md border overflow-hidden" data-testid="action-needed-toggle">
+                {([["yes", true], ["no", false]] as const).map(([key, val]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setActionNeeded(val)}
+                    className={`px-4 py-1.5 text-sm font-medium whitespace-nowrap transition-colors ${
+                      actionNeeded === val ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:bg-accent/60"
+                    }`}
+                    data-testid={`button-action-needed-${key}`}
+                  >
+                    {val ? "Yes" : "No"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {isNote && (
+              <p className="text-xs text-muted-foreground" data-testid="note-explainer">
+                Saved as a note with a reference like Note-12-03 instead of a UID. Notes stay in this inspection only:
+                they aren't carried forward, aren't added to the to-do list, show as grey pins, and are listed in their own
+                section at the end of the report. Photos are still needed. Switch to Yes later to give it a full UID.
+              </p>
+            )}
+          </Card>
+        )}
+
         {/* Category + Audience (export profiles) */}
         <Card className="p-4 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
+            {!isNote && <div>
               <Label htmlFor="category" className="text-xs">Category</Label>
               <Select value={categoryCode || "__none__"} onValueChange={(v) => setCategoryCode(v === "__none__" ? "" : v)}>
                 <SelectTrigger data-testid="select-category">
@@ -1619,7 +1669,7 @@ export default function DefectForm() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </div>}
             <div>
               <Label className="text-xs">Audience</Label>
               <div className="flex gap-1 mt-1" data-testid="audience-pill">
@@ -1831,7 +1881,7 @@ export default function DefectForm() {
             value={form.actionRequired}
             onChange={set("actionRequired")}
             rows={2}
-            required
+            required={!isNote}
             data-testid="input-action-required"
           />
           {isEdit && actHistory && actHistory.length > 0 && (
@@ -1924,8 +1974,8 @@ export default function DefectForm() {
             exported Action List. Only meaningful when editing an existing defect because
             the regenerate endpoint needs a persisted defectId. The textarea is editable;
             any manual edit flips source to "manual" and Regenerate then asks for confirmation
-            before overwriting. */}
-        {isEdit && (
+            before overwriting. Notes have no action, so no summary (WP5). */}
+        {isEdit && !isNote && (
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Label htmlFor="actionSummary">Action Summary</Label>
@@ -2100,7 +2150,8 @@ export default function DefectForm() {
           );
         })()}
 
-        {/* By Whom / By When */}
+        {/* By Whom / By When — not needed for a no-action note (WP5) */}
+        {!isNote && <>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label htmlFor="assignedTo">By Whom</Label>
@@ -2171,6 +2222,7 @@ export default function DefectForm() {
             </div>
           </div>
         </Card>
+        </>}
 
         {/* Additional Locations */}
         {isEdit && (

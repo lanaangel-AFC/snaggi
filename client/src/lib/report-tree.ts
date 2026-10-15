@@ -249,6 +249,9 @@ export type ReportTree = {
   // Section 5: Carried-forward register (open items NOT in locationsCovered).
   // Always itemised (ignores treatment) but uses the profile's category order.
   carriedForward: { groups: CategoryGroup[]; empty: boolean };
+  // WP5: no-action notes recorded in this inspection. Rendered in their own section at
+  // the end of the report and kept out of every other section and count.
+  notes: any[];
 
   // Section 6: appendix behaviour.
   appendixMode: AppendixMode;
@@ -463,9 +466,14 @@ export function buildReportTree(
 
   // ---- Record-level audience filter on the report's defects ----
   const allDefectsRaw: any[] = Array.isArray(data?.defects) ? data.defects : [];
-  const includedDefects = allDefectsRaw
+  const isNote = (d: any) => d?.recordType === "observation" && (d?.actionNeeded === false || d?.actionNeeded === 0);
+  const audienceDefects = allDefectsRaw
     .filter((d) => audienceIncludes(d.audience, profile))
     .map((d) => withTrimmedPhotos(d, profile, currentReportId));
+  const includedDefects = audienceDefects.filter((d) => !isNote(d));
+  const notes = audienceDefects
+    .filter((d) => isNote(d) && (currentReportId == null || d.reportId == null || d.reportId === currentReportId))
+    .sort((a, b) => String(a.uid).localeCompare(String(b.uid), undefined, { numeric: true }));
 
   const defectsOnlyAndObs = includedDefects; // we group defects & observations together by category
 
@@ -609,6 +617,7 @@ export function buildReportTree(
     progressSummary,
     thisInspection: { new: tiNew, amended: tiAmended, completed: tiCompleted, empty: tiEmpty },
     carriedForward: { groups: carriedGroups, empty: carriedGroups.length === 0 },
+    notes,
     appendixMode,
   };
 }

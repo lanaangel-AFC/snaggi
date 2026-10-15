@@ -93,6 +93,10 @@ export const defects = sqliteTable("defects", {
   verificationPerson: text("verification_person").notNull(),
   status: text("status").notNull().default("open"), // stored: open, complete, archived (displayStatus computes Open|Amended|Closed|Archived)
   recordType: text("record_type").notNull().default("defect"), // defect, observation
+  // WP5: false = an observation with no action needed (a "note"). Notes carry a reference
+  // like Note-12-03 in place of a UID, never carry forward and never go on the to-do list.
+  // Only available in projects with featureVersion >= 2; defects always need action.
+  actionNeeded: integer("action_needed", { mode: "boolean" }).default(true),
   // Structured UID parts — source of truth for the form so it never re-parses the assembled uid string.
   elevationCode: text("elevation_code"),
   dropCode: text("drop_code"),

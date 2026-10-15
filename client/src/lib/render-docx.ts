@@ -521,7 +521,8 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
     return photoElements;
   };
 
-  const buildWordDefectPage = async (defect: any, options?: { showChangeSummary?: boolean }): Promise<any[]> => {
+  const buildWordDefectPage = async (defect: any, options?: { showChangeSummary?: boolean; note?: boolean }): Promise<any[]> => {
+    const asNote = !!options?.note;
     const elements: any[] = [];
     const hasMultipleLocations = defect.locations && defect.locations.length > 0;
     const events = defect.events;
@@ -533,11 +534,13 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
 
     elements.push(new Paragraph({
       children: [
-        new TextRun({ text: isObs ? " OBSERVATION " : " DEFECT ", bold: true, size: 16, font: "Aptos", color: "FFFFFF", shading: { type: ShadingType.SOLID, color: isObs ? "3B82F6" : "D97706" } }),
+        new TextRun({ text: asNote ? " NOTE " : isObs ? " OBSERVATION " : " DEFECT ", bold: true, size: 16, font: "Aptos", color: "FFFFFF", shading: { type: ShadingType.SOLID, color: asNote ? "94A3B8" : isObs ? "3B82F6" : "D97706" } }),
         new TextRun({ text: "  " }),
         new TextRun({ text: headingText, bold: true, size: 28, font: "Aptos", color: CAPTION_BLUE }),
-        new TextRun({ text: "    " }),
-        new TextRun({ text: defect.status === "complete" ? "COMPLETE" : "OPEN", bold: true, size: 20, color: defect.status === "complete" ? "228B22" : "C89600" }),
+        ...(asNote ? [] : [
+          new TextRun({ text: "    " }),
+          new TextRun({ text: defect.status === "complete" ? "COMPLETE" : "OPEN", bold: true, size: 20, color: defect.status === "complete" ? "228B22" : "C89600" }),
+        ]),
       ],
       spacing: { after: 40 },
     }));
@@ -577,7 +580,11 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
 
     const obsLabel = (events && !events.isNew && events.amendedFields.observation) ? "Observation (amended this inspection)" : "Observation";
     const actLabel = (events && !events.isNew && events.amendedFields.action) ? "Action Required (amended this inspection)" : "Action Required";
-    const infoRows = [
+    const infoRows = asNote ? [
+      ["Date Recorded", safeText(defect.dateOpened)],
+      ["Observation", safeText(defect.comment)],
+      ["Action Required", "No action required"],
+    ] : [
       ["Date Opened", safeText(defect.dateOpened)],
       ["Date Completed", safeText(defect.dateClosed) || "\u2014"],
       [obsLabel, safeText(defect.comment)],
@@ -995,6 +1002,20 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
 
   docSections.push({ properties: sectionProps, children: carriedChildren });
   docSections.push({ properties: sectionProps, children: appendixChildren });
+
+  // ===================== SECTION 6 — NOTES (WP5) =====================
+  // No-action notes from this inspection, grouped at the very end. Only emitted when the
+  // inspection has notes, so reports without any are unchanged.
+  if (tree.notes.length > 0) {
+    const noteChildren: any[] = [];
+    noteChildren.push(new Paragraph({ children: [new TextRun({ text: "6. Notes", size: 40, font: "Aptos", bold: true, color: DARK_TEXT })], heading: HeadingLevel.HEADING_1, spacing: { after: 80 } }));
+    noteChildren.push(new Paragraph({ children: [new TextRun({ text: "Observations recorded in this inspection that need no action. Notes are not carried forward.", size: 18, color: "666666", italics: true, font: "Aptos" })], spacing: { after: 200 } }));
+    for (let i = 0; i < tree.notes.length; i++) {
+      if (i > 0) noteChildren.push(new Paragraph({ children: [new PageBreak()] }));
+      noteChildren.push(...(await buildWordDefectPage(tree.notes[i], { note: true })));
+    }
+    docSections.push({ properties: sectionProps, children: noteChildren });
+  }
 
   const wordDoc = new Document({
     creator: "Angel Façade Consulting",
