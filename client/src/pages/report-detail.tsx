@@ -1070,6 +1070,11 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
                   COMPLETED
                 </Badge>
               )}
+              {defect.recordType === "observation" && ((defect as any).actionNeeded === false || (defect as any).actionNeeded === 0) && (
+                <Badge variant="secondary" className="bg-slate-100 text-slate-600 dark:bg-slate-800/40 dark:text-slate-300 text-[10px] px-1.5 py-0 border border-slate-300" data-testid="badge-note">
+                  NOTE · NO ACTION
+                </Badge>
+              )}
               {isActionSummaryStale && (
                 <Badge
                   variant="secondary"

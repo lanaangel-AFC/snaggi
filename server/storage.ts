@@ -328,6 +328,7 @@ safeAddColumn("photos", "capture_date", "TEXT"); // when photo was taken (EXIF/m
 safeAddColumn("projects", "show_completed_register", "INTEGER DEFAULT 0"); // D3: wire-only, render deferred
 // Export-profiles (Pass 1) additions.
 safeAddColumn("projects", "feature_version", "INTEGER DEFAULT 1"); // WP2: existing projects stay at 1
+safeAddColumn("defects", "action_needed", "INTEGER DEFAULT 1"); // WP5: 0 = no-action note
 safeAddColumn("projects", "categories", "TEXT DEFAULT '[]'"); // follow-up action categories [{code,label,isDefault?}]
 safeAddColumn("projects", "export_profiles", `TEXT DEFAULT '{"contractor":{"filenameSuffix":"Contractor","categoryTreatments":[{"code":"RR","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"summarise"}]},"client":{"filenameSuffix":"Client","categoryTreatments":[{"code":"RD","treatment":"itemise"},{"code":"PN","treatment":"itemise"},{"code":"PI","treatment":"itemise"},{"code":"RR","treatment":"summarise"}]}}'`);
 safeAddColumn("defects", "audience", "TEXT DEFAULT 'both'"); // "both" | "contractor" | "client"
@@ -1277,6 +1278,8 @@ export class DatabaseStorage implements IStorage {
     const source = db.select().from(defects).where(eq(defects.id, defectId)).get();
     if (!source) return null;
     if (source.reportId === targetReportId) return { defect: source, created: false };
+    // A note belongs only to the inspection it was recorded in: edit it in place.
+    if (isNoteRecord(source)) return { defect: source, created: false };
 
     const targetReport = db.select().from(reports).where(eq(reports.id, targetReportId)).get();
     if (!targetReport || targetReport.projectId !== source.projectId) return null;
@@ -1354,7 +1357,9 @@ export class DatabaseStorage implements IStorage {
     };
     const thisInspNum = inspNumOf(reportId);
 
-    const allDefects = db.select().from(defects).where(eq(defects.projectId, projectId)).all();
+    // Notes need no action, so they never appear on the to-do list (WP5).
+    const allDefects = db.select().from(defects).where(eq(defects.projectId, projectId)).all()
+      .filter((d) => !isNoteRecord(d));
     const inThisReport = allDefects.filter((d) => d.reportId === reportId);
 
     // A record's lineage is keyed on its UID (including historical aliases), because a
@@ -1549,7 +1554,8 @@ export class DatabaseStorage implements IStorage {
     // 'complete'/'archived' rows are intentionally NOT cloned — they remain on report N.
     const sourceDefects = db.select().from(defects)
       .where(and(eq(defects.reportId, sourceReportId), eq(defects.status, "open")))
-      .all();
+      .all()
+      .filter((d) => !isNoteRecord(d)); // notes never carry forward (WP5)
     const clonedIds: number[] = [];
     for (const d of sourceDefects) {
       clonedIds.push(this.cloneDefectIntoReport(d, newReport.id, source.id, now).id);
@@ -1937,6 +1943,41 @@ export class DatabaseStorage implements IStorage {
     }
     return db.insert(stageProgressMap).values({ ...patch, projectId, updatedAt: now }).returning().get();
   }
+}
+
+// WP5: a note is an observation recorded with no action needed.
+export function isNoteRecord(d: { recordType?: string | null; actionNeeded?: boolean | number | null } | null | undefined): boolean {
+  if (!d) return false;
+  const a: any = d.actionNeeded;
+  return d.recordType === "observation" && (a === false || a === 0);
+}
+
+/** Next note reference for a report: Note-{inspection}-{nn}, e.g. Note-12-03. */
+export function nextNoteRef(reportId: number): string {
+  const r = sqlite.prepare("SELECT inspection_number FROM reports WHERE id = ?").get(reportId) as { inspection_number: string | null } | undefined;
+  const n = parseInt(String(r?.inspection_number ?? ""), 10);
+  const insp = Number.isFinite(n) ? String(n).padStart(2, "0") : "00";
+  const prefix = `Note-${insp}-`;
+  const rows = sqlite.prepare("SELECT uid FROM defects WHERE report_id = ? AND uid LIKE ?").all(reportId, `${prefix}%`) as { uid: string }[];
+  // Numbers are never reused, even after a note is switched to Yes and given a UID, so a
+  // reference always means one record. The highest number issued is kept in meta.
+  const metaKey = `note_seq_report_${reportId}`;
+  const issued = sqlite.prepare("SELECT value FROM meta WHERE key = ?").get(metaKey) as { value: string } | undefined;
+  let max = issued ? parseInt(issued.value, 10) || 0 : 0;
+  for (const row of rows) {
+    const k = parseInt(row.uid.slice(prefix.length), 10);
+    if (Number.isFinite(k) && k > max) max = k;
+  }
+  sqlite.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(metaKey, String(max + 1));
+  return `${prefix}${String(max + 1).padStart(2, "0")}`;
+}
+
+/** True when the record's UID also appears in another inspection (it has history to keep). */
+export function hasEarlierCopies(d: { id: number; projectId: number; uid: string; reportId: number | null }): boolean {
+  const row = sqlite.prepare(
+    "SELECT 1 FROM defects WHERE project_id = ? AND uid = ? AND id != ? AND IFNULL(report_id, -1) != IFNULL(?, -1) LIMIT 1"
+  ).get(d.projectId, d.uid, d.id, d.reportId);
+  return !!row;
 }
 
 // Global settings helpers (raw SQL — single-row table)

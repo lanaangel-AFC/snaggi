@@ -621,14 +621,15 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     return yy;
   };
 
-  const renderDefectPage = async (defect: any, options?: { showChangeSummary?: boolean }) => {
+  const renderDefectPage = async (defect: any, options?: { showChangeSummary?: boolean; note?: boolean }) => {
+    const asNote = !!options?.note;
     const hasMultipleLocations = defect.locations && defect.locations.length > 0;
     const events = defect.events;
     const photosAddedIds = events ? new Set<number>(events.photosAddedThisInspection || []) : undefined;
     let yy = newSection();
 
-    const typeLabel = (defect.recordType === "observation") ? "OBSERVATION" : "DEFECT";
-    const typeBgColor = (defect.recordType === "observation") ? [59, 130, 246] : [217, 119, 6];
+    const typeLabel = asNote ? "NOTE" : (defect.recordType === "observation") ? "OBSERVATION" : "DEFECT";
+    const typeBgColor = asNote ? [148, 163, 184] : (defect.recordType === "observation") ? [59, 130, 246] : [217, 119, 6];
     doc.setFontSize(8); doc.setFont("helvetica", "bold");
     const badgeW = doc.getTextWidth(typeLabel) + 6;
     doc.setFillColor(typeBgColor[0], typeBgColor[1], typeBgColor[2]);
@@ -641,7 +642,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     const statusLabel = defect.status === "complete" ? "COMPLETE" : "OPEN";
     const statusColor = defect.status === "complete" ? [34, 139, 34] : [200, 150, 0];
     doc.setFontSize(10); doc.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
-    doc.text(statusLabel, pageWidth - margin - doc.getTextWidth(statusLabel), yy);
+    if (!asNote) doc.text(statusLabel, pageWidth - margin - doc.getTextWidth(statusLabel), yy);
     doc.setTextColor(0); yy += 5;
 
     if (!hasMultipleLocations) {
@@ -671,7 +672,11 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
 
     const obsLabel = (events && !events.isNew && events.amendedFields.observation) ? "Observation (amended)" : "Observation";
     const actLabel = (events && !events.isNew && events.amendedFields.action) ? "Action Required (amended)" : "Action Required";
-    const infoBody = [
+    const infoBody = asNote ? [
+      ["Date Recorded", defect.dateOpened || "\u2014"],
+      ["Observation", defect.comment || "\u2014"],
+      ["Action Required", "No action required"],
+    ] : [
       ["Date Opened", defect.dateOpened || "\u2014"],
       ["Date Completed", defect.dateClosed || "\u2014"],
       [obsLabel, defect.comment || "\u2014"],
@@ -876,6 +881,15 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
     doc.setFontSize(12); doc.setFont("helvetica", "bold"); doc.setTextColor(...CAPTION_BLUE); doc.text("Coverage Drawings", margin, y); y += 6;
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(60);
     doc.text(doc.splitTextToSize(String(data.report.locationsCovered || "Refer to inspection locations covered."), contentWidth), margin, y);
+  }
+
+  // ===================== SECTION 6 — NOTES (WP5) =====================
+  // No-action notes from this inspection, grouped at the very end. Only emitted when the
+  // inspection has notes, so reports without any are unchanged.
+  if (tree.notes.length > 0) {
+    y = newSection();
+    y = sectionHeading("6. Notes", "Observations recorded in this inspection that need no action. Notes are not carried forward.", y);
+    for (const n of tree.notes) await renderDefectPage(n, { note: true });
   }
 
   return doc.output("blob");

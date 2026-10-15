@@ -42,6 +42,7 @@ const STATUS_COLORS: Record<string, string> = {
   in_progress: "#F59E0B",
   complete: "#22C55E",
   archived: "#9CA3AF",
+  note: "#94A3B8", // WP5: no-action notes, neutral grey
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -49,6 +50,7 @@ const STATUS_LABELS: Record<string, string> = {
   in_progress: "In Progress",
   complete: "Complete",
   archived: "Archived",
+  note: "Note (no action)",
 };
 
 // What the pin resolves to in the inspection currently being viewed. Supplied by
@@ -58,6 +60,7 @@ type ResolvedRecord = {
   uid: string;
   status: string;
   recordType: string;
+  isNote?: boolean;
   categoryCode: string | null;
   categoryName: string | null;
   reportId: number;
@@ -207,7 +210,7 @@ export default function AnnotationCanvas() {
 
   // A pin's live state is the record's, falling back to the pin's own stored status when
   // lineage found nothing (free-text pins).
-  const effectiveStatus = (m: ResolvedMarker) => m.resolved?.status ?? m.status;
+  const effectiveStatus = (m: ResolvedMarker) => (m.resolved?.isNote ? "note" : (m.resolved?.status ?? m.status));
 
   const visibleMarkers = useMemo(() => {
     return markerList.filter((m) => {
@@ -654,6 +657,7 @@ export default function AnnotationCanvas() {
       in_progress: markerList.filter((m) => effectiveStatus(m) === "in_progress").length,
       complete: markerList.filter((m) => effectiveStatus(m) === "complete").length,
       archived: markerList.filter((m) => effectiveStatus(m) === "archived").length,
+      note: markerList.filter((m) => effectiveStatus(m) === "note").length,
     }),
     [markerList]
   );
@@ -760,6 +764,12 @@ export default function AnnotationCanvas() {
           <span className="flex items-center gap-1 whitespace-nowrap">
             <span className="w-2 h-2 rounded-full bg-[#9CA3AF]" />
             Archived {counts.archived}
+          </span>
+        )}
+        {counts.note > 0 && (
+          <span className="flex items-center gap-1 whitespace-nowrap" data-testid="legend-notes">
+            <span className="w-2 h-2 rounded-full bg-[#94A3B8]" />
+            Notes {counts.note}
           </span>
         )}
       </div>

@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes, addToCategoryLibrary, removeFromCategoryLibrary } from "./storage";
+import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes, addToCategoryLibrary, removeFromCategoryLibrary, isNoteRecord, nextNoteRef, hasEarlierCopies } from "./storage";
 import {
   buildActionSummaryInput,
   generateActionSummary,
@@ -578,12 +578,27 @@ export async function registerRoutes(
       const projectId = Number(req.params.projectId);
       const uidPrefix = req.body.uidPrefix;
       if (!uidPrefix) return res.status(400).json({ message: "UID prefix (drop-level-worktype) is required" });
+      const reportIdVal = req.body.reportId ? Number(req.body.reportId) : null;
+
+      // WP5: an observation with no action needed is a note. It gets a Note-{insp}-{nn}
+      // reference instead of a UID. Only projects created after WP2 offer notes.
+      const wantsNote = req.body.actionNeeded === false && (req.body.recordType || "defect") === "observation";
+      if (wantsNote) {
+        const project = await storage.getProject(projectId);
+        if (Number((project as any)?.featureVersion ?? 1) < 2) {
+          return res.status(400).json({ message: "No-action notes are only available in projects created after this feature was added" });
+        }
+        if (!reportIdVal) return res.status(400).json({ message: "A note must belong to an inspection" });
+      }
+      req.body.actionNeeded = !wantsNote;
+
       // Use the client-provided UID if they set a custom number, otherwise auto-generate
-      const uid = req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix);
+      const uid = wantsNote
+        ? nextNoteRef(reportIdVal!)
+        : (req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix));
 
       // Check for duplicate UID within the same report (not project-wide, since copies share UIDs)
-      const reportIdVal = req.body.reportId ? Number(req.body.reportId) : null;
-      if (reportIdVal) {
+      if (reportIdVal && !wantsNote) {
         const existingInReport = await storage.getDefectsByReport(reportIdVal);
         const duplicate = existingInReport.find((d) => d.uid === uid);
         if (duplicate) {
@@ -625,7 +640,8 @@ export async function registerRoutes(
     if (!requested) return res.status(404).json({ message: "Defect not found" });
 
     const ctxReportId = Number(contextReportId);
-    if (Number.isFinite(ctxReportId) && requested.reportId !== ctxReportId) {
+    // Notes are never carried forward (WP5): they are edited in place in their own inspection.
+    if (Number.isFinite(ctxReportId) && requested.reportId !== ctxReportId && !isNoteRecord(requested)) {
       const cf = await storage.carryForwardDefect(requestedId, ctxReportId);
       if (cf && cf.defect.id !== requestedId) {
         defectId = cf.defect.id;
@@ -637,6 +653,47 @@ export async function registerRoutes(
     // Capture history BEFORE applying the update
     const existing = await storage.getDefect(defectId);
     if (!existing) return res.status(404).json({ message: "Defect not found" });
+
+    // WP5: work out whether the record is (or becomes) a note, and give it the right reference.
+    // The server owns the reference so the form can never overwrite a Note-12-03 with a UID.
+    {
+      const wasNote = isNoteRecord(existing);
+      const nextType = updates.recordType ?? existing.recordType;
+      let nextAction = updates.actionNeeded !== undefined ? updates.actionNeeded !== false : !wasNote;
+      if (nextType !== "observation") nextAction = true; // defects always need action
+      const willBeNote = nextType === "observation" && !nextAction;
+      if (willBeNote && !wasNote) {
+        const project = await storage.getProject(existing.projectId);
+        if (Number((project as any)?.featureVersion ?? 1) < 2) {
+          return res.status(400).json({ message: "No-action notes are only available in projects created after this feature was added" });
+        }
+        if (!existing.reportId) return res.status(400).json({ message: "A note must belong to an inspection" });
+        if (hasEarlierCopies(existing)) {
+          return res.status(400).json({ message: "This record continues from an earlier inspection, so it can't become a note. Mark it complete instead." });
+        }
+        updates.uid = nextNoteRef(existing.reportId);
+        updates.categoryCode = null;
+      } else if (willBeNote && wasNote) {
+        delete updates.uid; // keep the note's reference
+      } else if (!willBeNote && wasNote) {
+        // No -> Yes: assign a full UID from the record's location parts.
+        const part = (k: string) => (updates[k] !== undefined ? updates[k] : (existing as any)[k]) || "";
+        const prefix = [part("elevationCode"), part("dropCode"), part("levelCode"), part("workTypeCode")].filter(Boolean).join("-");
+        const inReport = existing.reportId ? await storage.getDefectsByReport(existing.reportId) : [];
+        const taken = (u: string) => inReport.some((d) => d.id !== existing.id && d.uid === u)
+          || !!sqlite.prepare("SELECT 1 FROM defects WHERE project_id = ? AND uid = ? AND id != ? LIMIT 1").get(existing.projectId, u, existing.id);
+        let uid = typeof updates.uid === "string" && updates.uid && !updates.uid.startsWith("Note-") ? updates.uid : "";
+        if (!uid || taken(uid)) {
+          if (!prefix) return res.status(400).json({ message: "Pick a work type so the record can be given a UID" });
+          let n = 1;
+          do { uid = `${prefix}-${String(n).padStart(2, "0")}`; n++; } while (taken(uid));
+        }
+        updates.uid = uid;
+      }
+      if (updates.actionNeeded !== undefined || nextType !== existing.recordType || wasNote !== willBeNote) {
+        updates.actionNeeded = !willBeNote;
+      }
+    }
 
     const now = new Date().toISOString();
     if (updates.comment !== undefined && updates.comment !== existing.comment && existing.comment?.trim()) {
@@ -826,7 +883,8 @@ export async function registerRoutes(
       if (!report) return res.status(404).json({ message: "Report not found" });
       const force = String(req.query.force ?? "").toLowerCase() === "true";
 
-      const defectsInReport = await storage.getDefectsByReport(reportId);
+      const defectsInReport = (await storage.getDefectsByReport(reportId)).filter((d) => !isNoteRecord(d)); // WP5
+
       const results: Array<{
         defectId: number;
         uid: string;
@@ -888,7 +946,8 @@ export async function registerRoutes(
       const report = await storage.getReport(reportId);
       if (!report) return res.status(404).json({ message: "Report not found" });
 
-      const defectsInReport = await storage.getDefectsByReport(reportId);
+      // Notes have no action, so they never need an action summary (WP5).
+      const defectsInReport = (await storage.getDefectsByReport(reportId)).filter((d) => !isNoteRecord(d));
       const stale: Array<{ defectId: number; uid: string; reason: "missing" | "hash-mismatch" }> = [];
       for (const d of defectsInReport) {
         const inputs = await buildActionSummaryInputsForDefect(d);
@@ -1396,7 +1455,7 @@ export async function registerRoutes(
   // === MARKERS ===
   type DefectRow = {
     id: number; uid: string; status: string; report_id: number;
-    record_type: string | null; category_code: string | null;
+    record_type: string | null; category_code: string | null; action_needed: number | null;
   };
 
   app.get("/api/elevations/:elevationId/markers", async (req, res) => {
@@ -1465,7 +1524,7 @@ export async function registerRoutes(
       const findInReport = (uids: string[], targetReport: number) => {
         const placeholders = uids.map(() => "?").join(", ");
         return sqlite.prepare(`
-          SELECT id, uid, status, report_id, record_type, category_code
+          SELECT id, uid, status, report_id, record_type, category_code, action_needed
           FROM defects
           WHERE project_id = ? AND report_id = ? AND uid IN (${placeholders})
           ORDER BY id DESC
@@ -1476,7 +1535,7 @@ export async function registerRoutes(
       const findLatest = (uids: string[]) => {
         const placeholders = uids.map(() => "?").join(", ");
         return sqlite.prepare(`
-          SELECT id, uid, status, report_id, record_type, category_code
+          SELECT id, uid, status, report_id, record_type, category_code, action_needed
           FROM defects
           WHERE project_id = ? AND uid IN (${placeholders})
           ORDER BY report_id DESC, id DESC
@@ -1511,7 +1570,7 @@ export async function registerRoutes(
         // pointing at a superseded row still resolves to something rather than an orphan.
         if (!row && marker.defectId) {
           row = sqlite.prepare(`
-            SELECT id, uid, status, report_id, record_type, category_code
+            SELECT id, uid, status, report_id, record_type, category_code, action_needed
             FROM defects WHERE id = ?
           `).get(marker.defectId) as DefectRow | undefined;
           if (row) via = "id";
@@ -1527,6 +1586,8 @@ export async function registerRoutes(
             uid: row.uid,
             status: row.status,
             recordType: row.record_type ?? "defect",
+            // WP5: notes show as neutral grey pins.
+            isNote: row.record_type === "observation" && row.action_needed === 0,
             categoryCode: row.category_code ?? null,
             categoryName: row.category_code ? categoryNames.get(row.category_code) ?? row.category_code : null,
             reportId: row.report_id,
