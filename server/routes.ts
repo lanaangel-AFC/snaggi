@@ -9,12 +9,25 @@ import {
 } from "./action-summary";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import { getLocationDimensions } from "@shared/location";
+import {
+  listInstructions, getInstruction, createInstruction, updateInstruction, deleteInstruction,
+  getInstructionHistory, setInstructionPhotos, validateInstruction, instructionsForReport,
+} from "./instructions";
 import { escapeCsvField } from "@shared/csv";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import sharp from "sharp";
 import archiver from "archiver";
+
+// WP6: "SE Sealant" style label for a work type code (project custom list, then the
+// global list, then the code itself).
+function labelForWorkType(project: any, code: string): string {
+  let custom: { code: string; label: string }[] = [];
+  try { custom = JSON.parse(project?.customWorkTypes || "[]"); } catch {}
+  const hit = custom.find((w) => w.code === code) || getGlobalSettings().workTypes.find((w) => w.code === code);
+  return hit?.label ? `${code} ${hit.label}` : code;
+}
 
 const uploadDir = path.join(dataDir, "uploads");
 const thumbDir = path.join(dataDir, "thumbs");
@@ -421,6 +434,111 @@ export async function registerRoutes(
   app.post("/api/projects/:id/status-images", upload.single("image"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No image uploaded" });
     res.status(201).json({ filename: req.file.filename });
+  });
+
+  // === PROJECT INSTRUCTIONS (WP6, new projects only) ===
+  const instructionProject = async (projectId: number, res: any) => {
+    const project = await storage.getProject(projectId);
+    if (!project) { res.status(404).json({ message: "Project not found" }); return null; }
+    if ((project.featureVersion ?? 1) < 2) {
+      res.status(400).json({ message: "Project Instructions are only available in projects created after this feature was added." });
+      return null;
+    }
+    return project;
+  };
+  const withLabels = (project: any, i: any) => ({ ...i, workTypeLabels: i.workTypes.map((c: string) => labelForWorkType(project, c)) });
+
+  app.get("/api/projects/:id/instructions", async (req, res) => {
+    const project = await storage.getProject(Number(req.params.id));
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    if ((project.featureVersion ?? 1) < 2) return res.json([]);
+    res.json(listInstructions(project.id).map((i) => withLabels(project, i)));
+  });
+
+  app.post("/api/projects/:id/instructions", async (req, res) => {
+    const project = await instructionProject(Number(req.params.id), res);
+    if (!project) return;
+    const body = req.body ?? {};
+    const err = validateInstruction(body, false);
+    if (err) return res.status(400).json({ message: err });
+    if (body.reportId != null) {
+      const report = await storage.getReport(Number(body.reportId));
+      if (!report || report.projectId !== project.id) return res.status(400).json({ message: "Inspection not found in this project" });
+    }
+    const created = createInstruction(project.id, {
+      reportId: body.reportId != null ? Number(body.reportId) : null,
+      workTypes: body.workTypes, observation: body.observation, actionRequired: body.actionRequired,
+      responsibility: body.responsibility, dateIssued: body.dateIssued,
+    });
+    res.status(201).json(withLabels(project, created));
+  });
+
+  app.get("/api/instructions/:id", async (req, res) => {
+    const ins = getInstruction(Number(req.params.id));
+    if (!ins) return res.status(404).json({ message: "Instruction not found" });
+    const project = await storage.getProject(ins.projectId);
+    res.json({ ...withLabels(project, ins), history: getInstructionHistory(ins.id) });
+  });
+
+  app.patch("/api/instructions/:id", async (req, res) => {
+    const ins = getInstruction(Number(req.params.id));
+    if (!ins) return res.status(404).json({ message: "Instruction not found" });
+    const project = await instructionProject(ins.projectId, res);
+    if (!project) return;
+    const body = req.body ?? {};
+    const patch: any = {};
+    for (const k of ["workTypes", "observation", "actionRequired", "responsibility", "dateIssued", "status"]) {
+      if (body[k] !== undefined) patch[k] = body[k];
+    }
+    const err = validateInstruction(patch, true);
+    if (err) return res.status(400).json({ message: err });
+    const updated = updateInstruction(ins.id, patch)!;
+    res.json({ ...withLabels(project, updated), history: getInstructionHistory(ins.id) });
+  });
+
+  app.delete("/api/instructions/:id", async (req, res) => {
+    const ins = getInstruction(Number(req.params.id));
+    if (!ins) return res.status(404).json({ message: "Instruction not found" });
+    for (const p of ins.photos) {
+      for (const dir of [uploadDir, thumbDir]) {
+        const f = path.join(dir, p.filename);
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+      }
+    }
+    deleteInstruction(ins.id);
+    res.status(204).end();
+  });
+
+  // Optional photos (kept with the instruction; the report table is text only).
+  app.post("/api/instructions/:id/photos", upload.single("photo"), async (req, res) => {
+    const ins = getInstruction(Number(req.params.id));
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (!ins) return res.status(404).json({ message: "Instruction not found" });
+    const origPath = path.join(uploadDir, req.file.filename);
+    try {
+      const tmpPath = `${origPath}.resized.tmp`;
+      await sharp(origPath).resize(2000, 2000, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toFile(tmpPath);
+      fs.renameSync(tmpPath, origPath);
+    } catch (err) {
+      console.warn("Instruction photo resize failed; keeping raw upload:", err);
+    }
+    try {
+      await sharp(origPath).resize(800, 600, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 70 }).toFile(path.join(thumbDir, req.file.filename));
+    } catch {}
+    const updated = setInstructionPhotos(ins.id, [...ins.photos, { filename: req.file.filename, caption: req.body.caption || null }]);
+    res.status(201).json(updated);
+  });
+
+  app.delete("/api/instructions/:id/photos/:filename", async (req, res) => {
+    const ins = getInstruction(Number(req.params.id));
+    if (!ins) return res.status(404).json({ message: "Instruction not found" });
+    const name = path.basename(String(req.params.filename));
+    if (!ins.photos.some((p) => p.filename === name)) return res.status(404).json({ message: "Photo not found" });
+    for (const dir of [uploadDir, thumbDir]) {
+      const f = path.join(dir, name);
+      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+    }
+    res.json(setInstructionPhotos(ins.id, ins.photos.filter((p) => p.filename !== name)));
   });
 
   // === REPORTS ===
@@ -1397,6 +1515,10 @@ export async function registerRoutes(
     res.json({
       project, report, defects: defectsWithPhotos, allProjectDefects,
       projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null },
+      // WP6: Project Instructions as they stood for this report (new projects only).
+      projectInstructions: (project.featureVersion ?? 1) >= 2
+        ? instructionsForReport(project.id, windowEnd).map((i) => ({ ...i, workTypeLabels: i.workTypes.map((c) => labelForWorkType(project, c)) }))
+        : [],
     });
   });
 

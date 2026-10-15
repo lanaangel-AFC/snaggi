@@ -294,9 +294,14 @@ export default function DefectForm() {
   const projectCategories = useMemo(() => {
     try {
       const arr = JSON.parse((project as any)?.categories || "[]");
-      return Array.isArray(arr) ? arr.filter((c: any) => c && c.code) : [];
+      // WP6: in new projects Project Instructions have their own button, so a
+      // "Project Instruction" category is not offered on defects or observations.
+      const hidePI = usesRecordWording(project as any);
+      return Array.isArray(arr)
+        ? arr.filter((c: any) => c && c.code && !(hidePI && /project instruction/i.test(String(c.label || ""))))
+        : [];
     } catch { return []; }
-  }, [(project as any)?.categories]);
+  }, [(project as any)?.categories, (project as any)?.featureVersion]);
   const [categoryCode, setCategoryCode] = useState<string>("");
   const [audience, setAudience] = useState<string>("both");
   const categoryInitRef = useRef(false);

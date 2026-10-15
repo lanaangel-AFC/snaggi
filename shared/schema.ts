@@ -355,6 +355,41 @@ export const insertInspectionTodoSchema = createInsertSchema(inspectionTodos).om
 export type InsertInspectionTodo = z.infer<typeof insertInspectionTodoSchema>;
 export type InspectionTodo = typeof inspectionTodos.$inferSelect;
 
+// WP6: Project Instructions — project-wide instructions to the contractor that apply to
+// one or more work types for the life of the project (not to a location). Numbered
+// PI-01, PI-02… per project (numbers never reused). By When is always "Ongoing"; there is
+// no verification. Withdrawn instructions stay listed in reports, marked "Withdrawn".
+export const projectInstructions = sqliteTable("project_instructions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  reportId: integer("report_id"), // inspection it was issued in (informational)
+  ref: text("ref").notNull(), // PI-01
+  workTypes: text("work_types").notNull().default("[]"), // JSON array of work type codes
+  observation: text("observation").notNull().default(""),
+  actionRequired: text("action_required").notNull().default(""),
+  responsibility: text("responsibility").notNull().default(""),
+  status: text("status").notNull().default("active"), // "active" | "withdrawn"
+  dateIssued: text("date_issued").notNull(), // YYYY-MM-DD
+  dateWithdrawn: text("date_withdrawn"),
+  photos: text("photos").notNull().default("[]"), // JSON [{filename, caption}]
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
+});
+export const insertProjectInstructionSchema = createInsertSchema(projectInstructions).omit({ id: true });
+export type InsertProjectInstruction = z.infer<typeof insertProjectInstructionSchema>;
+export type ProjectInstruction = typeof projectInstructions.$inferSelect;
+
+// Edit history for Project Instructions (the report shows current wording only).
+export const instructionHistory = sqliteTable("instruction_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  instructionId: integer("instruction_id").notNull(),
+  field: text("field").notNull(), // observation | actionRequired | responsibility | workTypes | status
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  changedAt: text("changed_at").notNull(),
+});
+export type InstructionHistory = typeof instructionHistory.$inferSelect;
+
 // Users (kept from template)
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),

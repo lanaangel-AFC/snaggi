@@ -10,6 +10,7 @@ import ProjectDetail from "@/pages/project-detail";
 import ReportDetail from "@/pages/report-detail";
 import InspectionTodos from "@/pages/inspection-todos";
 import DefectForm from "@/pages/defect-form";
+import InstructionForm from "@/pages/instruction-form";
 import AnnotationCanvas from "@/pages/annotation-canvas";
 import SharedReport from "@/pages/shared-report";
 import MigrationPreview from "@/pages/migration-preview";
@@ -25,6 +26,7 @@ function AppRouter() {
       <Route path="/projects/:projectId/reports/:reportId/defects/new-defect" component={DefectForm} />
       <Route path="/projects/:projectId/reports/:reportId/defects/new-observation" component={DefectForm} />
       <Route path="/projects/:projectId/reports/:reportId/defects/:defectId" component={DefectForm} />
+      <Route path="/projects/:projectId/reports/:reportId/instructions/:instructionId" component={InstructionForm} />
       {/* Report-scoped canvas: the drawing-first entry point. The unscoped route below is
           kept for older links and falls back to the project's newest inspection. */}
       <Route path="/projects/:projectId/reports/:reportId/elevations/:elevationId" component={AnnotationCanvas} />

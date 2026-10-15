@@ -19,9 +19,10 @@ import {
   deriveAreaRef,
 } from "./render-helpers";
 import { usesRecordWording } from "./wording";
+import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, hasInstructionSection, instructionRows, sectionNo } from "./project-instructions";
 
 export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
-  const data = { project: tree.project, report: tree.report };
+  const data = { project: tree.project, report: tree.report, projectInstructions: tree.projectInstructions };
   const pdfDims = getLocationDimensions(tree.project?.locationDimensions);
 
   const { default: jsPDF } = await import("jspdf");
@@ -830,6 +831,29 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   // (§2.1 Progress Summary now lives inside §2 Project Status above — client-only
   //  trailing block removed as part of the §2.1/§2.2 restructure.)
 
+  // ===================== SECTION 3 — PROJECT INSTRUCTIONS (WP6) =====================
+  // New projects only. Always emitted there (even when empty) so section numbers stay fixed.
+  if (hasInstructionSection(data)) {
+    y = newSection();
+    y = sectionHeading("3. Project Instructions", INSTRUCTION_SUBTITLE, y);
+    const piRows = instructionRows(data);
+    if (piRows.length === 0) {
+      doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("No project instructions issued.", margin, y);
+    } else {
+      // Widths sum to 166, the same span as the Section 2 action list.
+      autoTable(doc, {
+        startY: y, head: [INSTRUCTION_HEADERS], body: piRows, margin: { left: margin, right: margin },
+        styles: { fontSize: 6.5, cellPadding: 1.5, overflow: "linebreak", valign: "top" },
+        headStyles: { fillColor: [255, 255, 255], textColor: [...CAPTION_BLUE], fontStyle: "bold", lineWidth: { bottom: 0.5 }, lineColor: [...DARK_TEXT] },
+        columnStyles: { 0: { cellWidth: 14, fontStyle: "bold" }, 1: { cellWidth: 17 }, 2: { cellWidth: 22 }, 3: { cellWidth: 38 }, 4: { cellWidth: 38 }, 5: { cellWidth: 20 }, 6: { cellWidth: 17 } },
+        rowPageBreak: "avoid",
+        didDrawPage: () => { addHeader(); addFooter(); },
+        didParseCell: (h: any) => { if (h.section === "body" && h.column.index === 6 && h.cell.raw !== "Ongoing") h.cell.styles.textColor = [136, 136, 136]; },
+      });
+      y = (doc as any).lastAutoTable.finalY + 4;
+    }
+  }
+
   // ===================== SECTION 3 — THIS INSPECTION =====================
   const renderBucket = async (title: string, subtitle: string, groups: CategoryGroup[], showChangeSummary: boolean) => {
     if (groups.length === 0) return;
@@ -843,7 +867,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   };
   if (tree.thisInspection.empty) {
     y = newSection();
-    y = sectionHeading("3. This Inspection", "", y);
+    y = sectionHeading(`${sectionNo(data, 3)}. This Inspection`, "", y);
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y);
   } else {
     await renderBucket("NEW THIS INSPECTION", "Items added during this inspection.", tree.thisInspection.new, false);
@@ -853,7 +877,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
 
   // ===================== SECTION 4 — CARRIED-FORWARD REGISTER =====================
   y = newSection();
-  y = sectionHeading("4. Carried-forward Register", "Open items not covered in this inspection's locations.", y);
+  y = sectionHeading(`${sectionNo(data, 4)}. Carried-forward Register`, "Open items not covered in this inspection's locations.", y);
   if (tree.carriedForward.empty) {
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.text("Nothing for this report.", margin, y);
   } else {
@@ -866,7 +890,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
 
   // ===================== SECTION 5 — APPENDICES =====================
   y = newSection();
-  y = sectionHeading("5. Appendices", "", y);
+  y = sectionHeading(`${sectionNo(data, 5)}. Appendices`, "", y);
   if (tree.appendixMode === "reference") {
     doc.setFontSize(12); doc.setFont("helvetica", "bold"); doc.setTextColor(...CAPTION_BLUE); doc.text("Technical Method Statements", margin, y); y += 6;
     doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(60);
@@ -888,7 +912,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   // inspection has notes, so reports without any are unchanged.
   if (tree.notes.length > 0) {
     y = newSection();
-    y = sectionHeading("6. Notes", "Observations recorded in this inspection that need no action. Notes are not carried forward.", y);
+    y = sectionHeading(`${sectionNo(data, 6)}. Notes`, "Observations recorded in this inspection that need no action. Notes are not carried forward.", y);
     for (const n of tree.notes) await renderDefectPage(n, { note: true });
   }
 
