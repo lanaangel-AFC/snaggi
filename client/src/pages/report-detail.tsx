@@ -36,6 +36,7 @@ import { renderDocx } from "@/lib/render-docx";
 import { renderPdf } from "@/lib/render-pdf";
 import { formatDefectLocation, formatReportDate } from "@/lib/render-helpers";
 import { useState, useMemo } from "react";
+import { recordWords, typeWords } from "@/lib/wording";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -75,6 +76,7 @@ export default function ReportDetail() {
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
   });
+  const rw = recordWords(project as any); // WP2: "record" in new projects
 
   const { data: report, isLoading: reportLoading } = useQuery<Report>({
     queryKey: ["/api/reports", reportId],
@@ -167,7 +169,7 @@ export default function ReportDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/reports/${reportId}/defects`] });
-      toast({ title: "Defect deleted" });
+      toast({ title: `${rw.One} deleted` });
     },
   });
 
@@ -820,7 +822,7 @@ export default function ReportDetail() {
             variant="outline"
             disabled={regenAllLoading}
             onClick={runBulkRegenerate}
-            title="Regenerate AI action summaries for defects whose underlying observation/action/category/work-type changed since the summary was last generated."
+            title={`Regenerate AI action summaries for ${rw.many} whose underlying observation/action/category/work-type changed since the summary was last generated.`}
           >
             {regenAllLoading ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Regenerating...</>
@@ -953,6 +955,7 @@ export default function ReportDetail() {
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
                     hideLegacyAliases={hideLegacyAliases}
+                    wordingProject={project as any}
                     isActionSummaryStale={staleDefectIds.has(defect.id)}
                   />
                 ))}
@@ -980,6 +983,7 @@ export default function ReportDetail() {
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
                     hideLegacyAliases={hideLegacyAliases}
+                    wordingProject={project as any}
                     isActionSummaryStale={staleDefectIds.has(defect.id)}
                   />
                 ))}
@@ -1007,6 +1011,7 @@ export default function ReportDetail() {
                     changeSummary={defectEventsMap.get(defect.id)?.summary}
                     dims={cardDims}
                     hideLegacyAliases={hideLegacyAliases}
+                    wordingProject={project as any}
                     isActionSummaryStale={staleDefectIds.has(defect.id)}
                   />
                 ))}
@@ -1019,7 +1024,7 @@ export default function ReportDetail() {
   );
 }
 
-function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims, hideLegacyAliases, isActionSummaryStale }: { defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[]; hideLegacyAliases?: boolean; isActionSummaryStale?: boolean }) {
+function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSummary, dims, hideLegacyAliases, isActionSummaryStale, wordingProject }: { wordingProject?: { featureVersion?: number | null }; defect: Defect; projectId: string; reportId: string; onDelete: () => void; changeTag?: "NEW" | "AMENDED" | "COMPLETED"; changeSummary?: string; dims?: string[]; hideLegacyAliases?: boolean; isActionSummaryStale?: boolean }) {
   const isComplete = defect.status === "complete";
   const locationText = formatDefectLocation(defect, dims || getLocationDimensions(undefined));
   // SVR Stage 2 — show "(prev. {legacy_id})" alias when the UID was migrated and aliases
@@ -1069,7 +1074,7 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
                 <Badge
                   variant="secondary"
                   className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border border-amber-300"
-                  title="Action summary is out of date or missing. Open the defect and Regenerate, or use the bulk button above."
+                  title={`Action summary is out of date or missing. Open the ${typeWords(wordingProject, defect.recordType).one} and Regenerate, or use the bulk button above.`}
                 >
                   <AlertCircle className="w-3 h-3 mr-0.5" /> Stale summary
                 </Badge>
@@ -1099,7 +1104,7 @@ function DefectCard({ defect, projectId, reportId, onDelete, changeTag, changeSu
       <button
         onClick={(e) => {
           e.stopPropagation();
-          if (confirm("Delete this defect and all its photos?")) {
+          if (confirm(`Delete this ${typeWords(wordingProject, defect.recordType).one} and all its photos?`)) {
             onDelete();
           }
         }}
