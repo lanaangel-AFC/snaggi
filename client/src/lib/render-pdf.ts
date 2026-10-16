@@ -20,8 +20,11 @@ import {
 } from "./render-helpers";
 import { usesRecordWording } from "./wording";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, hasInstructionSection, instructionRows, sectionNo } from "./project-instructions";
+import { renderPdfV2 } from "./render-pdf-v2";
 
 export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
+  // WP8: new projects use the restructured layout. Older projects continue below, unchanged.
+  if (usesRecordWording(tree.project) && tree.v2) return renderPdfV2(tree);
   const data = { project: tree.project, report: tree.report, projectInstructions: tree.projectInstructions };
   const pdfDims = getLocationDimensions(tree.project?.locationDimensions);
 

@@ -8,6 +8,7 @@
 // All text content is wrapped in safeText() per the DOCX rendering constraint.
 // ============================================================================
 
+import { renderDocxV2 } from "./render-docx-v2";
 import type { ReportTree, CategoryGroup } from "./report-tree";
 import {
   safeText, loadImageBlob, blobToArrayBuffer, compressImageForExport, loadAfcLogo,
@@ -21,6 +22,7 @@ import { usesRecordWording } from "./wording";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, hasInstructionSection, instructionRows, sectionNo } from "./project-instructions";
 
 export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor" | "client" }): Promise<Blob> {
+  if (usesRecordWording(tree.project) && tree.v2) return renderDocxV2(tree);
   const data = { project: tree.project, report: tree.report, projectInstructions: tree.projectInstructions };
   const wordDims = getLocationDimensions(tree.project?.locationDimensions);
 

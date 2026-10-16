@@ -17,6 +17,8 @@
 
 import { formatLocation, getLocationDimensions } from "@shared/location";
 import { sortByUid } from "./render-helpers";
+import { usesRecordWording } from "./wording";
+import { isInActionList } from "./action-list";
 
 export type ProfileKey = "contractor" | "client";
 
@@ -163,7 +165,7 @@ export function parseExportProfiles(raw: unknown): ExportProfiles {
 }
 
 // Parse the project's category list (label lookup by code).
-export type CategoryDef = { code: string; label: string; isDefault?: boolean };
+export type CategoryDef = { code: string; label: string; isDefault?: boolean; inActionList?: boolean };
 export function parseCategories(raw: unknown): CategoryDef[] {
   if (Array.isArray(raw)) return raw as CategoryDef[];
   if (typeof raw === "string" && raw.trim()) {
@@ -258,6 +260,33 @@ export type ReportTree = {
 
   // Section 6: appendix behaviour.
   appendixMode: AppendixMode;
+
+  // WP8: the restructured layout for new projects (featureVersion >= 2). null for older
+  // projects, whose renderers never read it.
+  v2: ReportTreeV2 | null;
+};
+
+// WP8 layout. Every group list follows the 2.2 order: Action List categories first (in
+// the profile's order), then the other categories, then uncategorised defects, then
+// uncategorised observations. Empty categories never appear.
+export type ReportTreeV2 = {
+  // 2.2 Action List: only categories ticked "Appears in Action List" (uncategorised
+  // records are kept so no action item disappears).
+  actionList: CategoryGroup[];
+  // 4. New This Inspection: open records first raised in this inspection.
+  newThisInspection: CategoryGroup[];
+  // Notes raised this inspection, last in section 4.
+  notes: any[];
+  // 5. Closed This Inspection: records closed in this inspection (new or earlier).
+  closedThisInspection: CategoryGroup[];
+  // 6. Running list of all open items: open records carried in from earlier inspections,
+  // whatever today's coverage. Always itemised.
+  runningOpen: CategoryGroup[];
+  // Record ids that have a full entry in section 4 or 5 (UIDs in 2.2 link to these).
+  detailIds: number[];
+  // Every record (notes included) this audience sees on this report. Section 7 shows the
+  // elevations with a pin for one of these, and only those pins.
+  elevationRecordIds: number[];
 };
 
 // ---------------------------------------------------------------------------
@@ -608,6 +637,45 @@ export function buildReportTree(
   // ---- Appendix mode ----
   const appendixMode: AppendixMode = profile === "client" ? "reference" : "full";
 
+  // ---- WP8 layout (new projects only) ----
+  let v2: ReportTreeV2 | null = null;
+  if (usesRecordWording(data?.project)) {
+    const catByCode = new Map(cats.map((c) => [c.code, c]));
+    const inList = (code: string) => isInActionList(catByCode.get(code) ?? { code });
+    // Action List categories first, then the rest, each keeping the profile's order.
+    const orderV2 = [...categoryOrder.filter(inList), ...categoryOrder.filter((c) => !inList(c))];
+    const codeOf = (d: any) => (d.categoryCode && String(d.categoryCode).trim() ? String(d.categoryCode) : "");
+    const groupsV2 = (records: any[], ignoreTreatment: boolean, actionListMode = false): CategoryGroup[] => {
+      const isUncatObs = (d: any) => !codeOf(d) && d.recordType === "observation";
+      const main = buildGroups(records.filter((d) => !isUncatObs(d)), orderV2, treatmentMap, labelMap, profile, ignoreTreatment, actionListMode)
+        .map((g) => (g.categoryCode === UNCATEGORISED ? { ...g, label: "Uncategorised" } : g));
+      const obs = buildGroups(records.filter(isUncatObs), orderV2, treatmentMap, labelMap, profile, true, actionListMode)
+        .map((g) => ({ ...g, categoryCode: "__obs__", label: "Observations" }));
+      return [...main, ...obs];
+    };
+    // Carried in from an earlier inspection (server lineage check). Older servers do not
+    // send the flag; fall back to the creation-window test.
+    const carried = (d: any) => (typeof d.events?.carriedIn === "boolean" ? d.events.carriedIn : !d.events?.isNew);
+    const isOpen = (d: any) => d.status !== "complete" && d.status !== "archived";
+    const actionRecords = includedDefects.filter((d) => !codeOf(d) || inList(codeOf(d)));
+    const newOpen = includedDefects.filter((d) => isOpen(d) && !carried(d));
+    const closedThis = includedDefects.filter((d) => d.status === "complete");
+    const runningOpen = includedDefects.filter((d) => isOpen(d) && carried(d));
+    const newThisInspection = groupsV2(newOpen, false);
+    const closedThisInspection = groupsV2(closedThis, false);
+    const detailIds: number[] = [];
+    for (const g of [...newThisInspection, ...closedThisInspection]) if (g.kind === "itemise") for (const d of g.defects) detailIds.push(d.id);
+    v2 = {
+      actionList: groupsV2(actionRecords, false, true),
+      newThisInspection,
+      notes: notes.filter((n) => !carried(n)),
+      closedThisInspection,
+      runningOpen: groupsV2(runningOpen, true),
+      detailIds,
+      elevationRecordIds: audienceDefects.map((d) => d.id),
+    };
+  }
+
   return {
     profile,
     filenameSuffix,
@@ -623,5 +691,6 @@ export function buildReportTree(
     notes,
     projectInstructions: Array.isArray(data?.projectInstructions) ? data.projectInstructions : [],
     appendixMode,
+    v2,
   };
 }
