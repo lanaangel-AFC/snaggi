@@ -280,12 +280,14 @@ export async function registerRoutes(
     if (!project) return res.status(404).json({ message: "Project not found" });
     const incoming = req.body;
     if (!Array.isArray(incoming)) return res.status(400).json({ message: "Body must be an array of categories" });
-    // Sanitise: keep code/label/isDefault only; require code+label.
+    // Sanitise: keep code/label/isDefault/inActionList only; require code+label.
     const categories = incoming
       .map((c: any) => ({
         code: String(c.code || "").trim(),
         label: String(c.label || "").trim(),
         ...(c.isDefault ? { isDefault: true } : {}),
+        // WP8: explicit Action List choice (new projects). Absent = rule default.
+        ...(typeof c.inActionList === "boolean" ? { inActionList: c.inActionList } : {}),
       }))
       .filter((c: any) => c.code && c.label);
 
@@ -1446,6 +1448,7 @@ export async function registerRoutes(
       : new Date("2099-12-31T23:59:59Z").toISOString();
 
     const reportDefects = await storage.getDefectsByReport(report.id);
+    const projectRowsForLineage = await storage.getDefectsByProject(project.id);
     const defectsWithPhotos = await Promise.all(
       reportDefects.map(async (d) => {
         const defectPhotos = await storage.getPhotosByDefect(d.id);
@@ -1502,7 +1505,13 @@ export async function registerRoutes(
             : (p.originReportId ?? p.reportId) === report.id,
         }));
 
-        return { ...d, photos: photosWithFlag, locations, observationHistory: obsHistory, actionHistory: actHistory, statusHistory: statHistory, events };
+        // WP8: was this record carried in from an earlier inspection? Clones are stamped
+        // with the clone time, so events.isNew cannot tell; an earlier row in the same
+        // lineage (same UID or a former UID) can.
+        const lineageUids = new Set<string>([d.uid, ...storage.resolveUidAliases(d.projectId, d.uid)]);
+        const carriedIn = projectRowsForLineage.some((x) => x.id !== d.id && x.reportId != null && x.reportId < report.id && lineageUids.has(x.uid));
+
+        return { ...d, photos: photosWithFlag, locations, observationHistory: obsHistory, actionHistory: actHistory, statusHistory: statHistory, events: { ...events, carriedIn } };
       })
     );
     // Include all project defects for the cumulative summary section

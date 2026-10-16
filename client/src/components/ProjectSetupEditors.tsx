@@ -10,8 +10,10 @@ import { useToast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Trash2, ArrowUp, ArrowDown, Star, BookmarkPlus, X } from "lucide-react";
 import { useState, useEffect } from "react";
+import { usesRecordWording } from "@/lib/wording";
+import { isInActionList } from "@/lib/action-list";
 
-type Category = { code: string; label: string; isDefault?: boolean };
+type Category = { code: string; label: string; isDefault?: boolean; inActionList?: boolean };
 type Treatment = { code: string; treatment: string };
 type Profiles = {
   contractor: { filenameSuffix: string; categoryTreatments: Treatment[] };
@@ -36,6 +38,9 @@ export default function ProjectSetupEditors({ projectId }: { projectId: string }
 
   const { data: serverCategories } = useQuery<Category[]>({ queryKey: [`/api/projects/${projectId}/categories`] });
   const { data: serverProfiles } = useQuery<Profiles>({ queryKey: [`/api/projects/${projectId}/export-profiles`] });
+  // WP8: the Action List tick-box only affects the new report layout (new projects).
+  const { data: project } = useQuery<{ featureVersion?: number | null }>({ queryKey: [`/api/projects/${projectId}`] });
+  const showActionListToggle = usesRecordWording(project);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [profiles, setProfiles] = useState<Profiles>(emptyProfiles);
@@ -189,6 +194,7 @@ export default function ProjectSetupEditors({ projectId }: { projectId: string }
         <Label className="mb-2 block">Categories</Label>
         <p className="text-xs text-muted-foreground mb-2">
           Follow-up action groups. Codes are fixed once created; labels and order can change. Adding a category appends it to both export profiles (itemise).
+          {showActionListToggle && " Tick Action List for categories whose records belong in the report's 2.2 Action List."}
         </p>
 
         {/* Generic library: tick to use in this project */}
@@ -240,6 +246,19 @@ export default function ProjectSetupEditors({ projectId }: { projectId: string }
                 value={c.label}
                 onChange={(e) => { const next = [...categories]; next[idx] = { ...next[idx], label: e.target.value }; setCategories(next); }}
               />
+              {showActionListToggle && (
+                <label
+                  className="flex items-center gap-1 text-xs text-muted-foreground shrink-0 cursor-pointer"
+                  title="List this category's records in the 2.2 Action List"
+                >
+                  <Checkbox
+                    checked={isInActionList(c)}
+                    onCheckedChange={(v) => { const next = [...categories]; next[idx] = { ...next[idx], inActionList: v === true }; setCategories(next); }}
+                    data-testid={`action-list-toggle-${c.code}`}
+                  />
+                  Action List
+                </label>
+              )}
               <button
                 type="button"
                 title="Mark as default"
