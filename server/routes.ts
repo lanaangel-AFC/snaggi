@@ -1,4 +1,6 @@
 import type { Express } from "express";
+import express from "express";
+import { registerDictationRoutes } from "./word-library";
 import { createServer, type Server } from "http";
 import { storage, dataDir, sqlite, getGlobalSettings, addGlobalWorkType, cleanupCustomWorkTypes, addToCategoryLibrary, removeFromCategoryLibrary, isNoteRecord, nextNoteRef, hasEarlierCopies } from "./storage";
 import {
@@ -171,6 +173,14 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // WP7: dictation with the shared AFC word library (github.com/lanaangel-AFC/afc-word-library).
+  registerDictationRoutes(app, {
+    dataDir,
+    getOpenAIKey: () => process.env.OPENAI_API_KEY,
+    rawBodyParser: express.raw,
+    appContext: "A façade consultant dictating construction-phase site inspection notes (defects, observations, actions required and photo captions) about building envelopes, in Australian English.",
+  });
 
   // Serve static public assets (logo etc.)
   app.use("/api/public", (req, res, next) => {
