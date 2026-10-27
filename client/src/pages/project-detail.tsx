@@ -278,6 +278,11 @@ export default function ProjectDetail() {
               }}
               className="space-y-4 min-w-0"
             >
+              {/* Same order as the report title page: address, project, report title. */}
+              <div>
+                <Label>Site Address</Label>
+                <Input value={editForm.address || ""} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} required />
+              </div>
               <div>
                 <Label>Project Name</Label>
                 <Input value={editForm.name || ""} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} required />
@@ -290,10 +295,6 @@ export default function ProjectDetail() {
                   placeholder="e.g. Remedial Works — East Elevation, Stage 2"
                 />
                 <p className="text-xs text-muted-foreground mt-1">Used on the report title page (full text, no truncation).</p>
-              </div>
-              <div>
-                <Label>Site Address</Label>
-                <Input value={editForm.address || ""} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} required />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -475,13 +476,13 @@ export default function ProjectDetail() {
                   <Input value={newReportForm.inspectionNumber} onChange={(e) => setNewReportForm({ ...newReportForm, inspectionNumber: e.target.value })} placeholder="e.g. 01" />
                 </div>
                 <div>
-                  <Label>Inspection Date</Label>
-                  <Input type="date" value={newReportForm.inspectionDate} onChange={(e) => setNewReportForm({ ...newReportForm, inspectionDate: e.target.value })} />
+                  <Label>Revision</Label>
+                  <Input value={newReportForm.revision} onChange={(e) => setNewReportForm({ ...newReportForm, revision: e.target.value })} placeholder="01" />
                 </div>
               </div>
               <div>
-                <Label>Revision</Label>
-                <Input value={newReportForm.revision} onChange={(e) => setNewReportForm({ ...newReportForm, revision: e.target.value })} placeholder="01" />
+                <Label>Inspection Date</Label>
+                <Input type="date" value={newReportForm.inspectionDate} onChange={(e) => setNewReportForm({ ...newReportForm, inspectionDate: e.target.value })} />
               </div>
               <div>
                 <Label>Locations Covered</Label>

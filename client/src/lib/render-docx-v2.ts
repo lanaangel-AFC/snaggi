@@ -19,7 +19,7 @@ import {
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
-import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, type OutlineEntry } from "./report-outline-v2";
+import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, titlePageLinesV2, type OutlineEntry } from "./report-outline-v2";
 import { loadReportElevations, PIN_COLOURS, type PrintedElevation } from "./elevation-print";
 import { LIMITATIONS_V2 } from "./render-pdf-v2";
 
@@ -203,10 +203,12 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       c.push(new Paragraph({ alignment: AlignmentType.RIGHT, spacing: { after: 600 }, children: [new ImageRun({ data: buf, transformation: { width: 180, height: 58 }, type: "jpg" })] }));
     }
     c.push(new Paragraph({ spacing: { before: 1200, after: 0 } }));
-    c.push(new Paragraph({ spacing: { after: 120 }, children: [run(safeText(projAddress).toUpperCase(), { bold: true, size: 56, color: DARK_BLUE })] }));
-    if (projReportTitle) c.push(new Paragraph({ spacing: { after: 120 }, children: [run(projReportTitle, { size: 36, color: DARK_BLUE })] }));
-    c.push(new Paragraph({ spacing: { after: 100 }, children: [run(inspNum ? `SITE VISIT REPORT ${inspNum}` : "SITE VISIT REPORT", { size: 44, color: DARK_BLUE, smallCaps: true })] }));
-    c.push(new Paragraph({ spacing: { after: 600 }, children: [run(`Revision ${safeText(data.report.revision || "01")}`, { size: 28, color: DARK_TEXT })] }));
+    // Top to bottom: address, project, report title, inspection and revision, then date.
+    const tp = titlePageLinesV2({ projectName: projName, reportTitle: projReportTitle, inspectionNumber: inspNum, revision: data.report.revision });
+    c.push(new Paragraph({ spacing: { after: 160 }, children: [run(safeText(projAddress).toUpperCase(), { bold: true, size: 56, color: DARK_BLUE })] }));
+    if (tp.project) c.push(new Paragraph({ spacing: { after: 120 }, children: [run(tp.project, { size: 40, color: DARK_BLUE })] }));
+    c.push(new Paragraph({ spacing: { after: 160 }, children: [run(tp.reportTitle, { size: 32, color: DARK_BLUE })] }));
+    c.push(new Paragraph({ spacing: { after: 600 }, children: [run(tp.revisionLine, { size: 28, color: DARK_TEXT })] }));
     c.push(new Paragraph({ spacing: { after: 400 }, children: [run(formatReportDate(new Date().toISOString()), { size: 24, color: DARK_TEXT })] }));
     c.push(new Paragraph({ spacing: { after: 40 }, children: [run("Angel Fa\u00e7ade Consulting", { size: 22, color: DARK_TEXT })] }));
     c.push(new Paragraph({ spacing: { after: 40 }, children: [run(`${safeText(projInspector)} | 0407 759 590`, { size: 22, color: DARK_TEXT })] }));

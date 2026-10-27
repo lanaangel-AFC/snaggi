@@ -149,6 +149,11 @@ export default function ProjectList() {
               }}
               className="space-y-4"
             >
+              {/* Same order as the report title page: address, project, report title. */}
+              <div>
+                <Label htmlFor="address">Site Address</Label>
+                <Input id="address" placeholder="32-36 York Street, Sydney" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} required data-testid="input-project-address" />
+              </div>
               <div>
                 <Label htmlFor="name">Project Name</Label>
                 <Input id="name" placeholder="e.g. 32-36 York Street — Facade Repair" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required data-testid="input-project-name" />
@@ -157,10 +162,6 @@ export default function ProjectList() {
                 <Label htmlFor="reportTitle">Report Title</Label>
                 <Input id="reportTitle" placeholder="e.g. East Elevation Repairs" value={form.reportTitle} onChange={(e) => setForm({ ...form, reportTitle: e.target.value })} data-testid="input-report-title" />
                 <p className="text-xs text-muted-foreground mt-1">Renders on the cover page; not truncated.</p>
-              </div>
-              <div>
-                <Label htmlFor="address">Site Address</Label>
-                <Input id="address" placeholder="32-36 York Street, Sydney" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} required data-testid="input-project-address" />
               </div>
               <div>
                 <Label htmlFor="client">Client (Principal)</Label>

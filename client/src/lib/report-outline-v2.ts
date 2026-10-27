@@ -85,6 +85,19 @@ export function buildOutlineV2(tree: ReportTree, elevations: Array<{ id: number;
   return out;
 }
 
+// Title page lines below the address, top to bottom: project name, report title, then
+// "Inspection AA | Revision 01". The report title falls back to "Site Visit Report"; a
+// report title identical to the project name is shown once.
+export function titlePageLinesV2(o: { projectName?: string; reportTitle?: string; inspectionNumber?: string; revision?: string }): { project: string; reportTitle: string; revisionLine: string } {
+  const t = (v: any) => (v == null ? "" : String(v).replace(/\s+/g, " ").trim());
+  const project = t(o.projectName);
+  let reportTitle = t(o.reportTitle) || "Site Visit Report";
+  if (project && reportTitle.toLowerCase() === project.toLowerCase()) reportTitle = "Site Visit Report";
+  const rev = `Revision ${t(o.revision) || "01"}`;
+  const insp = t(o.inspectionNumber);
+  return { project, reportTitle, revisionLine: insp ? `Inspection ${insp} | ${rev}` : rev };
+}
+
 // Harvard-style reference for a background document:
 //   Originator (Year) Title. Doc. no. X, Rev. Y.
 // The title is the italic part. "n.d." stands in for a missing year. The document type

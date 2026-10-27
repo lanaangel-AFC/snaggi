@@ -21,7 +21,7 @@ import {
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
-import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, type OutlineEntry } from "./report-outline-v2";
+import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, titlePageLinesV2, type OutlineEntry } from "./report-outline-v2";
 import { loadReportElevations, PIN_COLOURS, type PrintedElevation } from "./elevation-print";
 
 export const LIMITATIONS_V2: string[] = [
@@ -215,15 +215,19 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     doc.setFontSize(32); doc.setFont(FONT, "bold"); doc.setTextColor(...DARK_BLUE);
     const addr: string[] = doc.splitTextToSize(String(projAddress || "").toUpperCase(), cw() - 25);
     doc.text(addr, x, ty); ty += addr.length * 12 + 4;
-    if (projReportTitle) {
-      doc.setFontSize(18); doc.setFont(FONT, "normal");
-      const t: string[] = doc.splitTextToSize(String(projReportTitle), cw() - 25);
-      doc.text(t, x, ty); ty += t.length * 7 + 4;
+    // Top to bottom: address, project, report title, inspection and revision, then date.
+    const tp = titlePageLinesV2({ projectName: projName, reportTitle: projReportTitle, inspectionNumber: inspNum, revision: data.report.revision });
+    doc.setFont(FONT, "normal");
+    if (tp.project) {
+      doc.setFontSize(20);
+      const t: string[] = doc.splitTextToSize(tp.project, cw() - 25);
+      doc.text(t, x, ty); ty += t.length * 8 + 3;
     }
-    doc.setFontSize(22); doc.setFont(FONT, "normal");
-    doc.text(inspNum ? `SITE VISIT REPORT ${inspNum}` : "SITE VISIT REPORT", x, ty); ty += 12;
+    doc.setFontSize(16);
+    const rt: string[] = doc.splitTextToSize(tp.reportTitle, cw() - 25);
+    doc.text(rt, x, ty); ty += rt.length * 6.5 + 6;
     doc.setFontSize(14); doc.setTextColor(...DARK_TEXT);
-    doc.text(`Revision ${data.report.revision || "01"}`, x, ty); ty += 18;
+    doc.text(tp.revisionLine, x, ty); ty += 18;
     doc.setFontSize(12); doc.setTextColor(100);
     doc.text(formatReportDate(new Date().toISOString()), x, ty); ty += 14;
     doc.setFontSize(11); doc.setTextColor(...DARK_TEXT);

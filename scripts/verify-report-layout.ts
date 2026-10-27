@@ -6,7 +6,7 @@ import { createServer } from "http";
 import { registerRoutes } from "../server/routes";
 import { buildReportTree } from "../client/src/lib/report-tree";
 import { isInActionList } from "../client/src/lib/action-list";
-import { buildOutlineV2, harvardReference } from "../client/src/lib/report-outline-v2";
+import { buildOutlineV2, harvardReference, titlePageLinesV2 } from "../client/src/lib/report-outline-v2";
 
 const now = new Date().toISOString();
 const checks: Array<[string, boolean, string]> = [];
@@ -142,6 +142,10 @@ async function main() {
     check("Harvard reference: Originator (Year) Title. Doc. no., Rev.", `${r1.lead}${r1.title}${r1.tail}` === "Micos (2026) Method Statement. Doc. no. MS-01, Rev. 02.", `${r1.lead}${r1.title}${r1.tail}`);
     check("Harvard reference: document type not shown", !/\[|manual/.test(`${r1.lead}${r1.title}${r1.tail}`));
     const r2 = harvardReference({ type: "report", originator: "Micos", title: "Check List", docNumbers: "", revision: "", date: "" })!;
+    const tpA = titlePageLinesV2({ projectName: "GRC Fin Rectification", reportTitle: "Fin bracket alterations", inspectionNumber: "AA", revision: "01" });
+    check("title page: project, report title, inspection | revision", tpA.project === "GRC Fin Rectification" && tpA.reportTitle === "Fin bracket alterations" && tpA.revisionLine === "Inspection AA | Revision 01", JSON.stringify(tpA));
+    const tpB = titlePageLinesV2({ projectName: "GRC Fin Rectification", reportTitle: "GRC Fin Rectification", inspectionNumber: "", revision: "" });
+    check("title page: blank or repeated report title falls back to Site Visit Report", tpB.reportTitle === "Site Visit Report" && tpB.revisionLine === "Revision 01", JSON.stringify(tpB));
     check("Harvard reference: n.d. when undated", `${r2.lead}${r2.title}${r2.tail}` === "Micos (n.d.) Check List.", `${r2.lead}${r2.title}${r2.tail}`);
   }
 
