@@ -19,7 +19,7 @@ import {
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
-import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, type OutlineEntry } from "./report-outline-v2";
+import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, type OutlineEntry } from "./report-outline-v2";
 import { loadReportElevations, PIN_COLOURS, type PrintedElevation } from "./elevation-print";
 import { LIMITATIONS_V2 } from "./render-pdf-v2";
 
@@ -82,6 +82,13 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
   const h2 = (key: string) => {
     const h = outlineHeading(outline, key);
     return new Paragraph({ text: `${h.no}\t${h.title}`, heading: HeadingLevel.HEADING_2 });
+  };
+  // Numbered level 3 heading (2.3.1 …): Heading 3 style, number and title set out on the
+  // same 1.27 cm hanging indent as level 2.
+  const h3n = (key: string) => {
+    const h = outlineHeading(outline, key);
+    return new Paragraph({ text: `${h.no}\t${h.title}`, heading: HeadingLevel.HEADING_3,
+      indent: { left: 720, hanging: 720 }, tabStops: [{ type: TabStopType.LEFT, position: 720 }] });
   };
   // Unnumbered sub-heading (category groups, "Unique identifier", "Notes").
   const h3 = (label: string) => new Paragraph({ text: safeText(label), heading: HeadingLevel.HEADING_3 });
@@ -251,16 +258,12 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     if (bg.length > 0) {
       c.push(h2("1.background"));
       c.push(para("The following documents have been reviewed and form the basis of this inspection."));
-      const yearOf = (d?: string) => { if (!d) return ""; const m = String(d).match(/\b(19|20)\d{2}\b/); return m ? m[0] : String(d); };
+      // Harvard style: Originator (Year) Title. Doc. no. X, Rev. Y. (title in italics).
       for (const b of bg) {
-        const originator = safeText(b.originator); const year = yearOf(b.date); const title = safeText(b.title);
-        const tail = [safeText(b.type) ? `[${safeText(b.type)}]` : "", safeText(b.docNumbers) ? `Doc no. ${safeText(b.docNumbers)}` : "", safeText(b.revision) ? `Rev. ${safeText(b.revision)}` : ""].filter(Boolean);
-        const head = originator ? (year ? `${originator} (${year}). ` : `${originator}. `) : (year ? `(${year}). ` : "");
-        const titleText = title ? `${title}.` : "";
-        const tailText = tail.length ? ` ${tail.join(", ")}.` : "";
-        if (!`${head}${titleText}${tailText}`.trim()) continue;
+        const ref = harvardReference(b);
+        if (!ref) continue;
         c.push(new Paragraph({ indent: { left: 360, hanging: 360 }, children: [
-          ...(head ? [run(head, { bold: true })] : []), ...(titleText ? [run(titleText, { italics: true })] : []), ...(tailText ? [run(tailText)] : []),
+          ...(ref.lead ? [run(ref.lead)] : []), ...(ref.title ? [run(ref.title, { italics: true })] : []), ...(ref.tail ? [run(ref.tail)] : []),
         ] }));
       }
     }
@@ -304,8 +307,9 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       try { buf = await compressImageForExport(blob, 1000, 0.7); } catch { buf = await blobToArrayBuffer(blob); }
       return new Paragraph({ children: [new ImageRun({ data: buf, transformation: { width: 600, height: 336 }, type: "jpg" })] });
     };
+    if (tree.projectStatus.narratives.length > 0) c.push(h2("2.narratives"));
     tree.projectStatus.narratives.forEach((n: any, i: number) => {
-      c.push(h2(`2.narrative.${i}`));
+      c.push(h3n(`2.narrative.${i}`));
       if (n.status) c.push(para(`Status: ${safeText(n.status)}`));
       if (n.body) String(n.body).split(/\n\s*\n/).forEach((p) => c.push(para(p.trim())));
     });

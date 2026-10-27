@@ -6,7 +6,7 @@ import { createServer } from "http";
 import { registerRoutes } from "../server/routes";
 import { buildReportTree } from "../client/src/lib/report-tree";
 import { isInActionList } from "../client/src/lib/action-list";
-import { buildOutlineV2 } from "../client/src/lib/report-outline-v2";
+import { buildOutlineV2, harvardReference } from "../client/src/lib/report-outline-v2";
 
 const now = new Date().toISOString();
 const checks: Array<[string, boolean, string]> = [];
@@ -125,6 +125,24 @@ async function main() {
     check("level 2 numbered consecutively", sec2.every((n, i) => n === `2.${i + 1}`), sec2.join(","));
     const sec7 = outline.filter((e) => e.level === 2 && e.no.startsWith("7.")).map((e) => e.title);
     check("one section 7 entry per elevation", sec7.join("|") === "North|South", sec7.join("|"));
+
+    // Narratives and holds: one level 2 heading, each narrative a numbered level 3 below it.
+    const fakeTree: any = { ...tree, projectStatus: { ...tree.projectStatus, narratives: [{ title: "Start up" }, { title: "Hold A" }, { title: "" }] } };
+    const o2 = buildOutlineV2(fakeTree, []);
+    const nh = o2.find((e) => e.key === "2.narratives");
+    check("narratives sit under one level 2 'Project Narratives and Holds'", nh?.level === 2 && nh.title === "Project Narratives and Holds", JSON.stringify(nh));
+    const n3 = o2.filter((e) => e.key.startsWith("2.narrative."));
+    check("each narrative is a numbered level 3 heading", n3.every((e) => e.level === 3) && n3.map((e) => e.no).join(",") === `${nh?.no}.1,${nh?.no}.2,${nh?.no}.3`, n3.map((e) => `${e.no}:${e.title}`).join(" | "));
+    check("no narrative heading when there are none", !buildOutlineV2({ ...tree, projectStatus: { ...tree.projectStatus, narratives: [] } } as any, []).some((e) => e.key === "2.narratives"));
+    const s2b = o2.filter((e) => e.level === 2 && e.no.startsWith("2.")).map((e) => e.no);
+    check("level 2 still consecutive with narratives", s2b.every((n, i) => n === `2.${i + 1}`), s2b.join(","));
+
+    // Background references: Harvard style, no [type].
+    const r1 = harvardReference({ type: "manual", originator: "Micos", title: "Method Statement", docNumbers: "MS-01", revision: "02", date: "08/10/2026" })!;
+    check("Harvard reference: Originator (Year) Title. Doc. no., Rev.", `${r1.lead}${r1.title}${r1.tail}` === "Micos (2026) Method Statement. Doc. no. MS-01, Rev. 02.", `${r1.lead}${r1.title}${r1.tail}`);
+    check("Harvard reference: document type not shown", !/\[|manual/.test(`${r1.lead}${r1.title}${r1.tail}`));
+    const r2 = harvardReference({ type: "report", originator: "Micos", title: "Check List", docNumbers: "", revision: "", date: "" })!;
+    check("Harvard reference: n.d. when undated", `${r2.lead}${r2.title}${r2.tail}` === "Micos (n.d.) Check List.", `${r2.lead}${r2.title}${r2.tail}`);
   }
 
   // ------------------------------------------------------------- old project
