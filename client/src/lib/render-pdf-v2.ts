@@ -195,6 +195,14 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     lines.forEach((ln, i) => doc.text(ln, margin + HANG, y + i * 5));
     y += (lines.length - 1) * 5 + 5;
   };
+  // AFC numbered points: teal "1." at the margin, text on a 6.3 mm hanging indent (the
+  // Word list uses 0.63 cm). numMark draws the number at the current line.
+  const NUM_IND = 6.3;
+  const numMark = (n: number) => {
+    doc.setFont(FONT, "normal"); doc.setTextColor(...ACCENT_BLUE);
+    doc.text(`${n}.`, margin, y);
+    body();
+  };
   // Unnumbered sub-heading (category groups, "Unique identifier", "Notes").
   const h3 = (label: string, keepWith = 30) => {
     ensure(keepWith);
@@ -310,12 +318,14 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     h2("1.background");
     para("The following documents have been reviewed and form the basis of this inspection.");
     // Harvard style: Originator (Year) Title. Doc. no. X, Rev. Y. The title is italic;
-    // words are wrapped across the three styles, with a hanging indent on later lines.
-    const IND = 6;
+    // words are wrapped across the three styles. AFC numbered list (teal numbers).
+    const IND = NUM_IND;
+    let refNo = 0;
     for (const b of bg) {
       const ref = harvardReference(b);
       if (!ref) continue;
       body();
+      refNo++;
       const words: Array<{ w: string; style: "normal" | "italic" }> = [];
       ([[ref.lead, "normal"], [ref.title, "italic"], [ref.tail, "normal"]] as Array<[string, "normal" | "italic"]>).forEach(([t, st]) => {
         for (const w of t.split(/\s+/).filter(Boolean)) words.push({ w, style: st });
@@ -326,16 +336,17 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
       for (const wd of words) {
         doc.setFont(FONT, wd.style);
         const ww = doc.getTextWidth(wd.w);
-        const max = cw() - (lines.length === 1 ? 0 : IND);
+        const max = cw() - IND;
         const cur = lines[lines.length - 1];
         const add = cur.length ? space() + ww : ww;
         if (cur.length && lineW + add > max) { lines.push([wd]); lineW = ww; }
         else { cur.push(wd); lineW += add; }
       }
       ensure(lines.length * LINE);
+      numMark(refNo);
       lines.forEach((ln, li) => {
         if (li > 0) ensure(LINE);
-        let x = margin + (li === 0 ? 0 : IND);
+        let x = margin + IND;
         ln.forEach((wd, wi) => {
           if (wi > 0) x += space();
           doc.setFont(FONT, wd.style); doc.text(wd.w, x, y); x += doc.getTextWidth(wd.w);
@@ -354,14 +365,14 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   para("The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.");
 
   h2("1.limitations");
-  for (const b of LIMITATIONS_V2) {
+  LIMITATIONS_V2.forEach((b, i) => {
     body();
-    const wrapped: string[] = doc.splitTextToSize(b, cw() - 5);
+    const wrapped: string[] = doc.splitTextToSize(b, cw() - NUM_IND);
     ensure(wrapped.length * LINE);
-    doc.text("\u2022", margin, y);
-    wrapped.forEach((ln) => { doc.text(ln, margin + 5, y); y += LINE; });
+    numMark(i + 1);
+    wrapped.forEach((ln) => { doc.text(ln, margin + NUM_IND, y); y += LINE; });
     y += PARA_GAP;
-  }
+  });
 
   // ===================== SHARED: tables =====================
   const tableStyles: any = { font: FONT, fontSize: 7.5, cellPadding: 1.5, overflow: "linebreak", valign: "top", textColor: 0 };

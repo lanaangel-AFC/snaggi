@@ -41,7 +41,7 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
     AlignmentType, WidthType, BorderStyle, ShadingType, TableLayoutType,
     Header, Footer, PageNumber, TabStopType, TableOfContents, BookmarkStart, BookmarkEnd, InternalHyperlink,
-    PageOrientation, HeadingLevel,
+    PageOrientation, HeadingLevel, LevelFormat,
   } = docxLib as any;
 
   const FONT = "Aptos";
@@ -89,6 +89,13 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     const h = outlineHeading(outline, key);
     return new Paragraph({ text: `${h.no}\t${h.title}`, heading: HeadingLevel.HEADING_3,
       indent: { left: 720, hanging: 720 }, tabStops: [{ type: TabStopType.LEFT, position: 720 }] });
+  };
+  // AFC numbered list: real Word numbering ("afc-numbered"), numbers in the report teal,
+  // "1." then "a." at level 2. Each list gets its own instance so it restarts at 1.
+  let listInstance = 0;
+  const numberedList = (items: any[][]) => {
+    const inst = ++listInstance;
+    return items.map((children, i) => new Paragraph({ numbering: { reference: "afc-numbered", level: 0, instance: inst }, spacing: { after: i === items.length - 1 ? 200 : 120 }, children }));
   };
   // Unnumbered sub-heading (category groups, "Unique identifier", "Notes").
   const h3 = (label: string) => new Paragraph({ text: safeText(label), heading: HeadingLevel.HEADING_3 });
@@ -260,21 +267,19 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     if (bg.length > 0) {
       c.push(h2("1.background"));
       c.push(para("The following documents have been reviewed and form the basis of this inspection."));
-      // Harvard style: Originator (Year) Title. Doc. no. X, Rev. Y. (title in italics).
-      for (const b of bg) {
-        const ref = harvardReference(b);
-        if (!ref) continue;
-        c.push(new Paragraph({ indent: { left: 360, hanging: 360 }, children: [
-          ...(ref.lead ? [run(ref.lead)] : []), ...(ref.title ? [run(ref.title, { italics: true })] : []), ...(ref.tail ? [run(ref.tail)] : []),
-        ] }));
-      }
+      // Harvard style: Originator (Year) Title. Doc. no. X, Rev. Y. (title in italics),
+      // as an AFC numbered list.
+      const refs = bg.map((b: any) => harvardReference(b)).filter(Boolean) as any[];
+      c.push(...numberedList(refs.map((ref) => [
+        ...(ref.lead ? [run(ref.lead)] : []), ...(ref.title ? [run(ref.title, { italics: true })] : []), ...(ref.tail ? [run(ref.tail)] : []),
+      ])));
     }
     c.push(h2("1.uid"));
     c.push(h3("Unique identifier"));
     c.push(para("Throughout the document, each record (observation or defect) is referred to by its unique identifier (UID)."));
     c.push(para("The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier."));
     c.push(h2("1.limitations"));
-    for (const b of LIMITATIONS_V2) c.push(new Paragraph({ indent: { left: 284, hanging: 284 }, tabStops: [{ type: TabStopType.LEFT, position: 284 }], children: [run(`\u2022\t${b}`)] }));
+    c.push(...numberedList(LIMITATIONS_V2.map((b) => [run(b)])));
     sections.push({ properties: portrait, ...portraitHF, children: c });
   }
 
@@ -518,6 +523,18 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     creator: "Angel Fa\u00e7ade Consulting",
     title: `${safeText(data.project.name)} \u2014 Site Visit Report`,
     features: { updateFields: true },
+    // AFC numbered points: teal numbers, 0.63 cm hanging indent; level 2 a., b. at 1.9 cm.
+    numbering: {
+      config: [{
+        reference: "afc-numbered",
+        levels: [
+          { level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT,
+            style: { run: { color: ACCENT_BLUE }, paragraph: { indent: { left: 360, hanging: 360 } } } },
+          { level: 1, format: LevelFormat.LOWER_LETTER, text: "%2.", alignment: AlignmentType.LEFT,
+            style: { run: { color: ACCENT_BLUE }, paragraph: { indent: { left: 1080, hanging: 360 } } } },
+        ],
+      }],
+    },
     styles: {
       default: {
         document: { run: { font: FONT, size: 20, color: AUTO }, paragraph: { spacing: { before: 0, after: 200, line: 240 } } },
