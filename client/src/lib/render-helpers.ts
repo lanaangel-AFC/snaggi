@@ -244,6 +244,33 @@ export async function compressImageForPdfExport(blob: Blob, maxWidth = 800, qual
   });
 }
 
+// Compress an image for export and report its pixel size, so the caller can place it
+// at its true proportions (charts such as the Program must never be stretched).
+export async function compressImageWithSize(blob: Blob, maxWidth = 2400, quality = 0.9): Promise<{ dataUrl: string; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d")!;
+      // White under transparent PNG areas (JPEG has no transparency).
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve({ dataUrl: canvas.toDataURL("image/jpeg", quality), width: canvas.width, height: canvas.height });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Image load failed"));
+    };
+    img.src = url;
+  });
+}
+
 // Load the AFC logo (both data URL for PDF and ArrayBuffer for DOCX).
 export async function loadAfcLogo(): Promise<{ dataUrl: string; buffer: ArrayBuffer } | null> {
   try {
