@@ -55,6 +55,8 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+
 export default function ReportDetail() {
   const { projectId, reportId } = useParams<{ projectId: string; reportId: string }>();
   const [, navigate] = useLocation();
@@ -294,6 +296,40 @@ export default function ReportDetail() {
 
   // `audienceSuffix` is the filename audience word: "" for the default unified
   // Report, "Contractor"/"Client" for the split-by-audience exports.
+  // Export Images (.zip). Fetched in-app rather than window.open so it also works in the
+  // installed PWA, and so "no photos" shows as a message instead of a blank JSON page.
+  const [zipBusy, setZipBusy] = useState(false);
+  const downloadPhotosZip = async (scope: "current" | "all") => {
+    if (zipBusy) return;
+    setZipBusy(true);
+    toast({ title: "Preparing images…", description: "This can take a moment for large projects." });
+    try {
+      const res = await fetch(`${API_BASE}/api/reports/${reportId}/photos-zip?scope=${scope}`);
+      if (!res.ok) {
+        let msg = "Could not export images";
+        try { msg = (await res.json())?.message || msg; } catch { /* not JSON */ }
+        toast({ title: msg, variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const name = /filename="([^"]+)"/.exec(cd)?.[1] || `photos-${scope}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast({ title: "Images exported", description: name });
+    } catch {
+      toast({ title: "Could not export images", description: "Check your connection and try again.", variant: "destructive" });
+    } finally {
+      setZipBusy(false);
+    }
+  };
+
   const handleGenerate = (profile: ProfileKey, format: "word" | "pdf", audienceSuffix: string = "") => {
     const afcRef = ((project as any)?.afcReference || "").trim();
     if (!afcRef) {
@@ -901,15 +937,11 @@ export default function ReportDetail() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => {
-              window.open(`${API_BASE}/api/reports/${reportId}/photos-zip?scope=current`, "_blank");
-            }}>
+            <DropdownMenuItem onClick={() => downloadPhotosZip("current")}>
               <ImageDown className="w-4 h-4 mr-2" />
               Export Images — {report?.inspectionNumber ? `Insp-${report.inspectionNumber} only` : "this inspection"} (.zip)
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => {
-              window.open(`${API_BASE}/api/reports/${reportId}/photos-zip?scope=all`, "_blank");
-            }}>
+            <DropdownMenuItem onClick={() => downloadPhotosZip("all")}>
               <ImageDown className="w-4 h-4 mr-2" />
               Export Images — all photos (.zip)
             </DropdownMenuItem>
