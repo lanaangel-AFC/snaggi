@@ -10,7 +10,8 @@ import {
   type ActionSummaryInputs,
 } from "./action-summary";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
-import { getLocationDimensions } from "@shared/location";
+import { getLocationDimensions, parseLocationStructured } from "@shared/location";
+import { parseUidFormat, renderUid, describeUidFormat, type UidFormat } from "@shared/uid-format";
 import {
   listInstructions, getInstruction, createInstruction, updateInstruction, deleteInstruction,
   getInstructionHistory, setInstructionPhotos, validateInstruction, instructionsForReport,
@@ -92,6 +93,25 @@ function computeDisplayStatus(status: string): "Open" | "Closed" | "Archived" {
   if (status === "complete") return "Closed";
   if (status === "archived") return "Archived";
   return "Open";
+}
+
+// Project UID format (shared/uid-format.ts). In a formatted project the location parts
+// live in location_structured and the server builds the UID from them, so the form
+// can never store a UID that disagrees with its own location.
+function uidFormatParts(fmt: UidFormat, raw: unknown): Record<string, string> {
+  const loc = parseLocationStructured(raw);
+  const out: Record<string, string> = {};
+  for (const p of fmt.parts) {
+    const v = String(loc[p.key] ?? "").trim();
+    if (v) out[p.key] = v;
+  }
+  return out;
+}
+function uidFormatMissingMessage(fmt: UidFormat): string {
+  return `Enter the ${fmt.parts.map((p) => p.label).join(", ")} so the record can be given a UID (${describeUidFormat(fmt)})`;
+}
+function uidFormatDuplicateMessage(uid: string): string {
+  return `${uid} already has a record in this inspection. Open that record and add to it instead.`;
 }
 
 // Assemble a defect's proposed UID from its structured columns, honoring the project's
@@ -263,6 +283,13 @@ export async function registerRoutes(
   app.patch("/api/projects/:id", async (req, res) => {
     // The wording/feature version is fixed when a project is created (WP2).
     const { featureVersion: _ignored, ...patch } = req.body ?? {};
+    // A project UID format's parts are the project's location dimensions.
+    if (patch.uidFormat !== undefined) {
+      const before = await storage.getProject(Number(req.params.id));
+      const fmt = parseUidFormat(patch.uidFormat);
+      if (fmt) patch.locationDimensions = JSON.stringify(fmt.parts.map((p) => p.key));
+      else if (parseUidFormat((before as any)?.uidFormat)) patch.locationDimensions = JSON.stringify(["elevation", "drop", "level"]);
+    }
     const project = await storage.updateProject(Number(req.params.id), patch);
     if (!project) return res.status(404).json({ message: "Project not found" });
     res.json(project);
@@ -706,8 +733,9 @@ export async function registerRoutes(
   app.post("/api/projects/:projectId/defects", async (req, res) => {
     try {
       const projectId = Number(req.params.projectId);
+      const uidFmt = parseUidFormat((await storage.getProject(projectId) as any)?.uidFormat);
       const uidPrefix = req.body.uidPrefix;
-      if (!uidPrefix) return res.status(400).json({ message: "UID prefix (drop-level-worktype) is required" });
+      if (!uidPrefix && !uidFmt) return res.status(400).json({ message: "UID prefix (drop-level-worktype) is required" });
       const reportIdVal = req.body.reportId ? Number(req.body.reportId) : null;
 
       // WP5: an observation with no action needed is a note. It gets a Note-{insp}-{nn}
@@ -722,16 +750,32 @@ export async function registerRoutes(
       }
       req.body.actionNeeded = !wantsNote;
 
+      // Formatted project: the UID is the rendered pattern of the location parts.
+      let fmtUid = "";
+      if (uidFmt) {
+        const parts = uidFormatParts(uidFmt, req.body.locationStructured);
+        req.body.locationStructured = JSON.stringify(parts);
+        req.body.elevationCode = null;
+        req.body.dropCode = null;
+        req.body.levelCode = null;
+        req.body.seqNumber = null;
+        if (!wantsNote) {
+          fmtUid = renderUid(uidFmt, parts);
+          if (!fmtUid) return res.status(400).json({ message: uidFormatMissingMessage(uidFmt) });
+        }
+      }
+
       // Use the client-provided UID if they set a custom number, otherwise auto-generate
       const uid = wantsNote
         ? nextNoteRef(reportIdVal!)
-        : (req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix));
+        : fmtUid || (req.body.uidOverride || await storage.getNextDefectUid(projectId, uidPrefix));
 
       // Check for duplicate UID within the same report (not project-wide, since copies share UIDs)
       if (reportIdVal && !wantsNote) {
         const existingInReport = await storage.getDefectsByReport(reportIdVal);
         const duplicate = existingInReport.find((d) => d.uid === uid);
         if (duplicate) {
+          if (uidFmt) return res.status(400).json({ message: uidFormatDuplicateMessage(uid) });
           return res.status(400).json({ message: `UID "${uid}" is already in use in this report. Please change the Number field.` });
         }
       }
@@ -784,6 +828,19 @@ export async function registerRoutes(
     const existing = await storage.getDefect(defectId);
     if (!existing) return res.status(404).json({ message: "Defect not found" });
 
+    // Formatted project: keep location parts tidy and rebuild the UID from them.
+    const patchFmt = parseUidFormat((await storage.getProject(existing.projectId) as any)?.uidFormat);
+    if (patchFmt && (updates.locationStructured !== undefined || updates.uid !== undefined)) {
+      const parts = uidFormatParts(patchFmt, updates.locationStructured !== undefined ? updates.locationStructured : existing.locationStructured);
+      updates.locationStructured = JSON.stringify(parts);
+      updates.elevationCode = null;
+      updates.dropCode = null;
+      updates.levelCode = null;
+      updates.seqNumber = null;
+      const rendered = renderUid(patchFmt, parts);
+      if (rendered) updates.uid = rendered; else delete updates.uid;
+    }
+
     // WP5: work out whether the record is (or becomes) a note, and give it the right reference.
     // The server owns the reference so the form can never overwrite a Note-12-03 with a UID.
     {
@@ -807,6 +864,16 @@ export async function registerRoutes(
         delete updates.uid; // keep the note's reference
       } else if (!willBeNote && wasNote) {
         // No -> Yes: assign a full UID from the record's location parts.
+        if (patchFmt) {
+          const parts = uidFormatParts(patchFmt, updates.locationStructured !== undefined ? updates.locationStructured : existing.locationStructured);
+          const fuid = renderUid(patchFmt, parts);
+          if (!fuid) return res.status(400).json({ message: uidFormatMissingMessage(patchFmt) });
+          const inRep = existing.reportId ? await storage.getDefectsByReport(existing.reportId) : [];
+          if (inRep.some((d) => d.id !== existing.id && d.uid === fuid)) {
+            return res.status(400).json({ message: uidFormatDuplicateMessage(fuid) });
+          }
+          updates.uid = fuid;
+        } else {
         const part = (k: string) => (updates[k] !== undefined ? updates[k] : (existing as any)[k]) || "";
         const prefix = [part("elevationCode"), part("dropCode"), part("levelCode"), part("workTypeCode")].filter(Boolean).join("-");
         const inReport = existing.reportId ? await storage.getDefectsByReport(existing.reportId) : [];
@@ -819,6 +886,13 @@ export async function registerRoutes(
           do { uid = `${prefix}-${String(n).padStart(2, "0")}`; n++; } while (taken(uid));
         }
         updates.uid = uid;
+        }
+      } else if (patchFmt && !willBeNote && typeof updates.uid === "string" && updates.uid !== existing.uid && existing.reportId) {
+        // Moving a formatted record onto a place that already has a record in this inspection.
+        const inRep = await storage.getDefectsByReport(existing.reportId);
+        if (inRep.some((d) => d.id !== existing.id && d.uid === updates.uid)) {
+          return res.status(400).json({ message: uidFormatDuplicateMessage(updates.uid) });
+        }
       }
       if (updates.actionNeeded !== undefined || nextType !== existing.recordType || wasNote !== willBeNote) {
         updates.actionNeeded = !willBeNote;
@@ -2669,6 +2743,12 @@ export async function registerRoutes(
       const projectId = Number(req.body?.projectId);
       const confirm = req.body?.confirm;
       if (!projectId) return res.status(400).json({ message: "projectId required in body" });
+      {
+        const pr = sqlite.prepare(`SELECT uid_format FROM projects WHERE id = ?`).get(projectId) as any;
+        if (parseUidFormat(pr?.uid_format)) {
+          return res.status(400).json({ message: "This project uses its own UID format; the standard UID migration does not apply" });
+        }
+      }
       if (confirm !== true) return res.status(400).json({ message: "confirm:true required in body" });
 
       const appliedKey = `uid_migration_applied_project_${projectId}`;

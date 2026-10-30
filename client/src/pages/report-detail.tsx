@@ -262,6 +262,8 @@ export default function ReportDetail() {
   const sortByUid = (a: Defect, b: Defect): number => {
     const ap = parseUidParts(a.uid);
     const bp = parseUidParts(b.uid);
+    const noWt = (d: any, pp: { work: string }) => { const c = String(d?.workTypeCode || ""); return c ? !String(d?.uid || "").split("-").includes(c) : !pp.work; };
+    if (noWt(a, ap) && noWt(b, bp)) return String(a.uid || "").localeCompare(String(b.uid || ""), undefined, { numeric: true });
     if (ap.elev !== bp.elev) return ap.elev.localeCompare(bp.elev);
     if (ap.drop !== bp.drop) return ap.drop - bp.drop;
     if (ap.level !== bp.level) return bp.level - ap.level;

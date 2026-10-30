@@ -351,6 +351,7 @@ safeAddColumn("projects", "scope_of_works", "TEXT DEFAULT '[]'");
 safeAddColumn("projects", "background_docs", "TEXT DEFAULT '[]'");
 // §1.5.1 Area Ref template (NEW projects only). Empty/NULL = legacy 5-part UID.
 safeAddColumn("projects", "area_ref_template", "TEXT DEFAULT ''");
+safeAddColumn("projects", "uid_format", "TEXT DEFAULT ''");
 
 // §2.3 spec — frozen snapshot of project-setup data captured at report creation,
 // preserved across revisions. NULL for legacy reports (renderers fall back to the

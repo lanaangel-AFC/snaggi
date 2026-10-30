@@ -28,6 +28,8 @@ export const projects = sqliteTable("projects", {
   // Final UID becomes: <AreaRef>-<workItem>-<seq#>. Legacy projects leave this
   // empty/null and continue to render the original 5-part UID assembly.
   areaRefTemplate: text("area_ref_template").default(""),
+  // Optional project UID format (JSON, see shared/uid-format.ts). Empty = standard UID.
+  uidFormat: text("uid_format").default(""),
   elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
   customDrops: text("custom_drops").default("[]"), // JSON array of strings
   customLevels: text("custom_levels").default("[]"), // JSON array of strings

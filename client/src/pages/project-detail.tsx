@@ -19,7 +19,7 @@ import { useState, useMemo } from "react";
 import { recordWords } from "@/lib/wording";
 import ProjectStatusSection from "@/components/ProjectStatusSection";
 import ProjectSetupEditors from "@/components/ProjectSetupEditors";
-import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor } from "@/components/ProjectSetupExtraEditors";
+import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor, UidFormatEditor } from "@/components/ProjectSetupExtraEditors";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -94,6 +94,7 @@ export default function ProjectDetail() {
       scopeOfWorks: (project as any).scopeOfWorks || "[]",
       backgroundDocs: (project as any).backgroundDocs || "[]",
       areaRefTemplate: (project as any).areaRefTemplate || "",
+      uidFormat: (project as any).uidFormat || "",
     });
     setEditHideLegacyAliases(Boolean((project as any).hideLegacyAliases));
     setCustomElevation("");
@@ -416,6 +417,13 @@ export default function ProjectDetail() {
                 value={editForm.areaRefTemplate || ""}
                 onChange={(v) => setEditForm({ ...editForm, areaRefTemplate: v })}
               />
+
+              {Number((project as any)?.featureVersion ?? 1) >= 2 && (
+                <UidFormatEditor
+                  value={editForm.uidFormat || ""}
+                  onChange={(v) => setEditForm({ ...editForm, uidFormat: v })}
+                />
+              )}
 
               <RolesEditor
                 value={editForm.roles || "[]"}
