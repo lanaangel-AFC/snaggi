@@ -16,7 +16,7 @@ import {
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField, deriveAreaRef,
+  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -311,9 +311,12 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     const picture = async (filename: string) => {
       const blob = await loadImageBlob(filename);
       if (!blob) return null;
-      let buf: ArrayBuffer;
-      try { buf = await compressImageForExport(blob, 1000, 0.7); } catch { buf = await blobToArrayBuffer(blob); }
-      return new Paragraph({ children: [new ImageRun({ data: buf, transformation: { width: 600, height: 336 }, type: "jpg" })] });
+      // Program / Stage Map at the image's true proportions (never stretched).
+      let im: { dataUrl: string; width: number; height: number };
+      try { im = await compressImageWithSize(blob, 2400, 0.9); } catch { return null; }
+      let w = 600; let h = Math.round(w * im.height / im.width);
+      if (h > 820) { w = Math.round(w * 820 / h); h = 820; }
+      return new Paragraph({ children: [new ImageRun({ data: dataUrlToBuffer(im.dataUrl), transformation: { width: w, height: h }, type: "jpg" })] });
     };
     if (tree.projectStatus.narratives.length > 0) c.push(h2("2.narratives"));
     tree.projectStatus.narratives.forEach((n: any, i: number) => {

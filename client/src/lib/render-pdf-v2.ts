@@ -18,7 +18,7 @@ import {
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField, deriveAreaRef,
+  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -504,11 +504,22 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   const addPicture = async (filename: string) => {
     const blob = await loadImageBlob(filename);
     if (!blob) return;
-    let url: string;
-    try { url = await compressImageForPdfExport(blob, 1000, 0.7); } catch { url = await blobToDataUrl(blob); }
-    const h = cw() * 0.56;
+    // Program / Stage Map: full page width at the image's true proportions (never
+    // stretched), shrunk only if it would be taller than a page.
+    let url: string; let ratio: number; let fmt = "JPEG";
+    try {
+      const im = await compressImageWithSize(blob, 2400, 0.9);
+      url = im.dataUrl; ratio = im.height / im.width;
+    } catch {
+      url = await blobToDataUrl(blob);
+      const props = doc.getImageProperties(url);
+      ratio = props.height / props.width; fmt = props.fileType || "JPEG";
+    }
+    let w = cw(); let h = w * ratio;
+    const maxH = limit() - TOP - 4;
+    if (h > maxH) { h = maxH; w = h / ratio; }
     ensure(h + 4);
-    doc.addImage(url, "JPEG", margin, y, cw(), h);
+    doc.addImage(url, fmt, margin, y, w, h);
     y += h + PARA_GAP;
   };
   if (tree.projectStatus.program) {
