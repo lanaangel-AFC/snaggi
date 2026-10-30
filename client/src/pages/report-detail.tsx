@@ -506,13 +506,13 @@ export default function ReportDetail() {
                   <Input value={editForm.inspectionNumber || ""} onChange={(e) => setEditForm({ ...editForm, inspectionNumber: e.target.value })} />
                 </div>
                 <div>
-                  <Label>Inspection Date</Label>
-                  <Input type="date" value={editForm.inspectionDate || ""} onChange={(e) => setEditForm({ ...editForm, inspectionDate: e.target.value })} />
+                  <Label>Revision</Label>
+                  <Input value={editForm.revision || ""} onChange={(e) => setEditForm({ ...editForm, revision: e.target.value })} />
                 </div>
               </div>
               <div>
-                <Label>Revision</Label>
-                <Input value={editForm.revision || ""} onChange={(e) => setEditForm({ ...editForm, revision: e.target.value })} />
+                <Label>Inspection Date</Label>
+                <Input type="date" value={editForm.inspectionDate || ""} onChange={(e) => setEditForm({ ...editForm, inspectionDate: e.target.value })} />
               </div>
               <div>
                 <Label>Locations Covered</Label>

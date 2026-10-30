@@ -19,7 +19,7 @@ import {
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
-import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, type OutlineEntry } from "./report-outline-v2";
+import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, titlePageLinesV2, type OutlineEntry } from "./report-outline-v2";
 import { loadReportElevations, PIN_COLOURS, type PrintedElevation } from "./elevation-print";
 import { LIMITATIONS_V2 } from "./render-pdf-v2";
 
@@ -41,7 +41,7 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
     AlignmentType, WidthType, BorderStyle, ShadingType, TableLayoutType,
     Header, Footer, PageNumber, TabStopType, TableOfContents, BookmarkStart, BookmarkEnd, InternalHyperlink,
-    PageOrientation, HeadingLevel,
+    PageOrientation, HeadingLevel, LevelFormat,
   } = docxLib as any;
 
   const FONT = "Aptos";
@@ -82,6 +82,20 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
   const h2 = (key: string) => {
     const h = outlineHeading(outline, key);
     return new Paragraph({ text: `${h.no}\t${h.title}`, heading: HeadingLevel.HEADING_2 });
+  };
+  // Numbered level 3 heading (2.3.1 …): Heading 3 style, number and title set out on the
+  // same 1.27 cm hanging indent as level 2.
+  const h3n = (key: string) => {
+    const h = outlineHeading(outline, key);
+    return new Paragraph({ text: `${h.no}\t${h.title}`, heading: HeadingLevel.HEADING_3,
+      indent: { left: 720, hanging: 720 }, tabStops: [{ type: TabStopType.LEFT, position: 720 }] });
+  };
+  // AFC numbered list: real Word numbering ("afc-numbered"), numbers in the report teal,
+  // "1." then "a." at level 2. Each list gets its own instance so it restarts at 1.
+  let listInstance = 0;
+  const numberedList = (items: any[][]) => {
+    const inst = ++listInstance;
+    return items.map((children, i) => new Paragraph({ numbering: { reference: "afc-numbered", level: 0, instance: inst }, spacing: { after: i === items.length - 1 ? 200 : 120 }, children }));
   };
   // Unnumbered sub-heading (category groups, "Unique identifier", "Notes").
   const h3 = (label: string) => new Paragraph({ text: safeText(label), heading: HeadingLevel.HEADING_3 });
@@ -196,10 +210,12 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       c.push(new Paragraph({ alignment: AlignmentType.RIGHT, spacing: { after: 600 }, children: [new ImageRun({ data: buf, transformation: { width: 180, height: 58 }, type: "jpg" })] }));
     }
     c.push(new Paragraph({ spacing: { before: 1200, after: 0 } }));
-    c.push(new Paragraph({ spacing: { after: 120 }, children: [run(safeText(projAddress).toUpperCase(), { bold: true, size: 56, color: DARK_BLUE })] }));
-    if (projReportTitle) c.push(new Paragraph({ spacing: { after: 120 }, children: [run(projReportTitle, { size: 36, color: DARK_BLUE })] }));
-    c.push(new Paragraph({ spacing: { after: 100 }, children: [run(inspNum ? `SITE VISIT REPORT ${inspNum}` : "SITE VISIT REPORT", { size: 44, color: DARK_BLUE, smallCaps: true })] }));
-    c.push(new Paragraph({ spacing: { after: 600 }, children: [run(`Revision ${safeText(data.report.revision || "01")}`, { size: 28, color: DARK_TEXT })] }));
+    // Top to bottom: address, project, report title, inspection and revision, then date.
+    const tp = titlePageLinesV2({ projectName: projName, reportTitle: projReportTitle, inspectionNumber: inspNum, revision: data.report.revision });
+    c.push(new Paragraph({ spacing: { after: 160 }, children: [run(safeText(projAddress).toUpperCase(), { bold: true, size: 56, color: DARK_BLUE })] }));
+    if (tp.project) c.push(new Paragraph({ spacing: { after: 120 }, children: [run(tp.project, { size: 40, color: DARK_BLUE })] }));
+    c.push(new Paragraph({ spacing: { after: 160 }, children: [run(tp.reportTitle, { size: 32, color: DARK_BLUE })] }));
+    c.push(new Paragraph({ spacing: { after: 600 }, children: [run(tp.revisionLine, { size: 28, color: DARK_TEXT })] }));
     c.push(new Paragraph({ spacing: { after: 400 }, children: [run(formatReportDate(new Date().toISOString()), { size: 24, color: DARK_TEXT })] }));
     c.push(new Paragraph({ spacing: { after: 40 }, children: [run("Angel Fa\u00e7ade Consulting", { size: 22, color: DARK_TEXT })] }));
     c.push(new Paragraph({ spacing: { after: 40 }, children: [run(`${safeText(projInspector)} | 0407 759 590`, { size: 22, color: DARK_TEXT })] }));
@@ -251,25 +267,19 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     if (bg.length > 0) {
       c.push(h2("1.background"));
       c.push(para("The following documents have been reviewed and form the basis of this inspection."));
-      const yearOf = (d?: string) => { if (!d) return ""; const m = String(d).match(/\b(19|20)\d{2}\b/); return m ? m[0] : String(d); };
-      for (const b of bg) {
-        const originator = safeText(b.originator); const year = yearOf(b.date); const title = safeText(b.title);
-        const tail = [safeText(b.type) ? `[${safeText(b.type)}]` : "", safeText(b.docNumbers) ? `Doc no. ${safeText(b.docNumbers)}` : "", safeText(b.revision) ? `Rev. ${safeText(b.revision)}` : ""].filter(Boolean);
-        const head = originator ? (year ? `${originator} (${year}). ` : `${originator}. `) : (year ? `(${year}). ` : "");
-        const titleText = title ? `${title}.` : "";
-        const tailText = tail.length ? ` ${tail.join(", ")}.` : "";
-        if (!`${head}${titleText}${tailText}`.trim()) continue;
-        c.push(new Paragraph({ indent: { left: 360, hanging: 360 }, children: [
-          ...(head ? [run(head, { bold: true })] : []), ...(titleText ? [run(titleText, { italics: true })] : []), ...(tailText ? [run(tailText)] : []),
-        ] }));
-      }
+      // Harvard style: Originator (Year) Title. Doc. no. X, Rev. Y. (title in italics),
+      // as an AFC numbered list.
+      const refs = bg.map((b: any) => harvardReference(b)).filter(Boolean) as any[];
+      c.push(...numberedList(refs.map((ref) => [
+        ...(ref.lead ? [run(ref.lead)] : []), ...(ref.title ? [run(ref.title, { italics: true })] : []), ...(ref.tail ? [run(ref.tail)] : []),
+      ])));
     }
     c.push(h2("1.uid"));
     c.push(h3("Unique identifier"));
     c.push(para("Throughout the document, each record (observation or defect) is referred to by its unique identifier (UID)."));
     c.push(para("The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier."));
     c.push(h2("1.limitations"));
-    for (const b of LIMITATIONS_V2) c.push(new Paragraph({ indent: { left: 284, hanging: 284 }, tabStops: [{ type: TabStopType.LEFT, position: 284 }], children: [run(`\u2022\t${b}`)] }));
+    c.push(...numberedList(LIMITATIONS_V2.map((b) => [run(b)])));
     sections.push({ properties: portrait, ...portraitHF, children: c });
   }
 
@@ -304,8 +314,9 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       try { buf = await compressImageForExport(blob, 1000, 0.7); } catch { buf = await blobToArrayBuffer(blob); }
       return new Paragraph({ children: [new ImageRun({ data: buf, transformation: { width: 600, height: 336 }, type: "jpg" })] });
     };
+    if (tree.projectStatus.narratives.length > 0) c.push(h2("2.narratives"));
     tree.projectStatus.narratives.forEach((n: any, i: number) => {
-      c.push(h2(`2.narrative.${i}`));
+      c.push(h3n(`2.narrative.${i}`));
       if (n.status) c.push(para(`Status: ${safeText(n.status)}`));
       if (n.body) String(n.body).split(/\n\s*\n/).forEach((p) => c.push(para(p.trim())));
     });
@@ -512,6 +523,18 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     creator: "Angel Fa\u00e7ade Consulting",
     title: `${safeText(data.project.name)} \u2014 Site Visit Report`,
     features: { updateFields: true },
+    // AFC numbered points: teal numbers, 0.63 cm hanging indent; level 2 a., b. at 1.9 cm.
+    numbering: {
+      config: [{
+        reference: "afc-numbered",
+        levels: [
+          { level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT,
+            style: { run: { color: ACCENT_BLUE }, paragraph: { indent: { left: 360, hanging: 360 } } } },
+          { level: 1, format: LevelFormat.LOWER_LETTER, text: "%2.", alignment: AlignmentType.LEFT,
+            style: { run: { color: ACCENT_BLUE }, paragraph: { indent: { left: 1080, hanging: 360 } } } },
+        ],
+      }],
+    },
     styles: {
       default: {
         document: { run: { font: FONT, size: 20, color: AUTO }, paragraph: { spacing: { before: 0, after: 200, line: 240 } } },

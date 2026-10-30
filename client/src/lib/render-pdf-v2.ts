@@ -21,7 +21,7 @@ import {
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
-import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, type OutlineEntry } from "./report-outline-v2";
+import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, titlePageLinesV2, type OutlineEntry } from "./report-outline-v2";
 import { loadReportElevations, PIN_COLOURS, type PrintedElevation } from "./elevation-print";
 
 export const LIMITATIONS_V2: string[] = [
@@ -170,6 +170,9 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     doc.setFont(FONT, "bold"); doc.setFontSize(14);
     const lines: string[] = doc.splitTextToSize(h.title, cw() - HANG);
     ensure(0.7 + lines.length * 6 + 14);
+    // Set the heading font after ensure(): a page break draws the running header, which
+    // leaves a small font behind (this is what shrank 1.4 at the top of a page).
+    doc.setFont(FONT, "bold"); doc.setFontSize(14);
     y += 0.7; // 2 pt before
     y += 4.5;
     dests.set(key, { page: pageNo(), top: y - 6 });
@@ -177,6 +180,28 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     doc.text(h.no, margin, y);
     lines.forEach((ln, i) => doc.text(ln, margin + HANG, y + i * 6));
     y += (lines.length - 1) * 6 + 2.1 + 3.5; // 6 pt after
+  };
+  // Numbered level 3 heading (2.3.1 …): level 3 type, number and title on the level 2
+  // hanging indent.
+  const h3n = (key: string, keepWith = 24) => {
+    const h = outlineHeading(outline, key);
+    doc.setFont(FONT, "bold"); doc.setFontSize(12);
+    const lines: string[] = doc.splitTextToSize(h.title, cw() - HANG);
+    ensure(1 + lines.length * 5 + keepWith);
+    doc.setFont(FONT, "bold"); doc.setFontSize(12); doc.setTextColor(...CAPTION_BLUE);
+    y += 1;
+    dests.set(key, { page: pageNo(), top: y - 5 });
+    doc.text(h.no, margin, y);
+    lines.forEach((ln, i) => doc.text(ln, margin + HANG, y + i * 5));
+    y += (lines.length - 1) * 5 + 5;
+  };
+  // AFC numbered points: teal "1." at the margin, text on a 6.3 mm hanging indent (the
+  // Word list uses 0.63 cm). numMark draws the number at the current line.
+  const NUM_IND = 6.3;
+  const numMark = (n: number) => {
+    doc.setFont(FONT, "normal"); doc.setTextColor(...ACCENT_BLUE);
+    doc.text(`${n}.`, margin, y);
+    body();
   };
   // Unnumbered sub-heading (category groups, "Unique identifier", "Notes").
   const h3 = (label: string, keepWith = 30) => {
@@ -198,15 +223,19 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     doc.setFontSize(32); doc.setFont(FONT, "bold"); doc.setTextColor(...DARK_BLUE);
     const addr: string[] = doc.splitTextToSize(String(projAddress || "").toUpperCase(), cw() - 25);
     doc.text(addr, x, ty); ty += addr.length * 12 + 4;
-    if (projReportTitle) {
-      doc.setFontSize(18); doc.setFont(FONT, "normal");
-      const t: string[] = doc.splitTextToSize(String(projReportTitle), cw() - 25);
-      doc.text(t, x, ty); ty += t.length * 7 + 4;
+    // Top to bottom: address, project, report title, inspection and revision, then date.
+    const tp = titlePageLinesV2({ projectName: projName, reportTitle: projReportTitle, inspectionNumber: inspNum, revision: data.report.revision });
+    doc.setFont(FONT, "normal");
+    if (tp.project) {
+      doc.setFontSize(20);
+      const t: string[] = doc.splitTextToSize(tp.project, cw() - 25);
+      doc.text(t, x, ty); ty += t.length * 8 + 3;
     }
-    doc.setFontSize(22); doc.setFont(FONT, "normal");
-    doc.text(inspNum ? `SITE VISIT REPORT ${inspNum}` : "SITE VISIT REPORT", x, ty); ty += 12;
+    doc.setFontSize(16);
+    const rt: string[] = doc.splitTextToSize(tp.reportTitle, cw() - 25);
+    doc.text(rt, x, ty); ty += rt.length * 6.5 + 6;
     doc.setFontSize(14); doc.setTextColor(...DARK_TEXT);
-    doc.text(`Revision ${data.report.revision || "01"}`, x, ty); ty += 18;
+    doc.text(tp.revisionLine, x, ty); ty += 18;
     doc.setFontSize(12); doc.setTextColor(100);
     doc.text(formatReportDate(new Date().toISOString()), x, ty); ty += 14;
     doc.setFontSize(11); doc.setTextColor(...DARK_TEXT);
@@ -218,7 +247,8 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   // ===================== CONTENTS (filled in at the end) =====================
   const TOC_ROW = 6.2;
   const tocRowsPerPage = Math.floor((ph() - 18 - TOP - 14) / TOC_ROW);
-  const tocPageCount = Math.max(1, Math.ceil(outline.length / tocRowsPerPage));
+  const tocEntries = outline.filter((e) => e.level <= 2); // same levels as the Word contents
+  const tocPageCount = Math.max(1, Math.ceil(tocEntries.length / tocRowsPerPage));
   const tocFirstPage = 2;
   for (let i = 0; i < tocPageCount; i++) newPage();
 
@@ -287,34 +317,43 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   if (bg.length > 0) {
     h2("1.background");
     para("The following documents have been reviewed and form the basis of this inspection.");
-    const yearOf = (d?: string) => { if (!d) return ""; const m = String(d).match(/\b(19|20)\d{2}\b/); return m ? m[0] : String(d); };
-    const s = (v: any) => (v == null ? "" : String(v).trim());
+    // Harvard style: Originator (Year) Title. Doc. no. X, Rev. Y. The title is italic;
+    // words are wrapped across the three styles. AFC numbered list (teal numbers).
+    const IND = NUM_IND;
+    let refNo = 0;
     for (const b of bg) {
-      const originator = s(b.originator); const year = yearOf(b.date).trim(); const title = s(b.title);
-      const tail = [s(b.type) ? `[${s(b.type)}]` : "", s(b.docNumbers) ? `Doc no. ${s(b.docNumbers)}` : "", s(b.revision) ? `Rev. ${s(b.revision)}` : ""].filter(Boolean);
-      const head = originator ? (year ? `${originator} (${year}). ` : `${originator}. `) : (year ? `(${year}). ` : "");
-      const titleText = title ? `${title}.` : "";
-      const tailText = tail.length ? ` ${tail.join(", ")}.` : "";
-      const full = `${head}${titleText}${tailText}`;
-      if (!full.trim()) continue;
+      const ref = harvardReference(b);
+      if (!ref) continue;
       body();
-      const wrapped: string[] = doc.splitTextToSize(full, cw() - 6);
-      ensure(wrapped.length * LINE);
-      if (wrapped.length === 1) {
-        let x = margin;
-        if (head) { doc.setFont(FONT, "bold"); doc.text(head, x, y); x += doc.getTextWidth(head); }
-        if (titleText) { doc.setFont(FONT, "italic"); doc.text(titleText, x, y); x += doc.getTextWidth(titleText); }
-        if (tailText) { doc.setFont(FONT, "normal"); doc.text(tailText, x, y); }
-        y += LINE;
-      } else {
-        if (head && wrapped[0].startsWith(head)) {
-          doc.setFont(FONT, "bold"); doc.text(head, margin, y);
-          const w = doc.getTextWidth(head); doc.setFont(FONT, "normal"); doc.text(wrapped[0].slice(head.length), margin + w, y);
-        } else { doc.text(wrapped[0], margin, y); }
-        y += LINE;
-        doc.setFont(FONT, "normal");
-        for (let i = 1; i < wrapped.length; i++) { ensure(LINE); doc.text(wrapped[i], margin + 6, y); y += LINE; }
+      refNo++;
+      const words: Array<{ w: string; style: "normal" | "italic" }> = [];
+      ([[ref.lead, "normal"], [ref.title, "italic"], [ref.tail, "normal"]] as Array<[string, "normal" | "italic"]>).forEach(([t, st]) => {
+        for (const w of t.split(/\s+/).filter(Boolean)) words.push({ w, style: st });
+      });
+      const lines: Array<typeof words> = [[]];
+      let lineW = 0;
+      const space = () => { doc.setFont(FONT, "normal"); return doc.getTextWidth(" "); };
+      for (const wd of words) {
+        doc.setFont(FONT, wd.style);
+        const ww = doc.getTextWidth(wd.w);
+        const max = cw() - IND;
+        const cur = lines[lines.length - 1];
+        const add = cur.length ? space() + ww : ww;
+        if (cur.length && lineW + add > max) { lines.push([wd]); lineW = ww; }
+        else { cur.push(wd); lineW += add; }
       }
+      ensure(lines.length * LINE);
+      numMark(refNo);
+      lines.forEach((ln, li) => {
+        if (li > 0) ensure(LINE);
+        let x = margin + IND;
+        ln.forEach((wd, wi) => {
+          if (wi > 0) x += space();
+          doc.setFont(FONT, wd.style); doc.text(wd.w, x, y); x += doc.getTextWidth(wd.w);
+        });
+        y += LINE;
+      });
+      doc.setFont(FONT, "normal");
       y += PARA_GAP;
     }
   }
@@ -326,14 +365,14 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   para("The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.");
 
   h2("1.limitations");
-  for (const b of LIMITATIONS_V2) {
+  LIMITATIONS_V2.forEach((b, i) => {
     body();
-    const wrapped: string[] = doc.splitTextToSize(b, cw() - 5);
+    const wrapped: string[] = doc.splitTextToSize(b, cw() - NUM_IND);
     ensure(wrapped.length * LINE);
-    doc.text("\u2022", margin, y);
-    wrapped.forEach((ln) => { doc.text(ln, margin + 5, y); y += LINE; });
+    numMark(i + 1);
+    wrapped.forEach((ln) => { doc.text(ln, margin + NUM_IND, y); y += LINE; });
     y += PARA_GAP;
-  }
+  });
 
   // ===================== SHARED: tables =====================
   const tableStyles: any = { font: FONT, fontSize: 7.5, cellPadding: 1.5, overflow: "linebreak", valign: "top", textColor: 0 };
@@ -438,8 +477,9 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     h3(g.label, 24);
     actionTable(g.defects);
   }
+  if (tree.projectStatus.narratives.length > 0) h2("2.narratives");
   tree.projectStatus.narratives.forEach((n: any, i: number) => {
-    h2(`2.narrative.${i}`);
+    h3n(`2.narrative.${i}`);
     if (n.status) para(`Status: ${n.status}`);
     if (n.body) String(n.body).split(/\n\s*\n/).forEach((p) => para(p.trim()));
   });
@@ -724,7 +764,7 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
       doc.setFont(FONT, "bold"); doc.setFontSize(18); doc.setTextColor(...DARK_TEXT);
       ty += 2; doc.text("Contents", margin, ty); ty += 12;
     }
-    for (const e of outline.slice(p * tocRowsPerPage, (p + 1) * tocRowsPerPage)) {
+    for (const e of tocEntries.slice(p * tocRowsPerPage, (p + 1) * tocRowsPerPage)) {
       const dest = dests.get(e.key);
       const top = e.level === 1;
       const x = margin + (top ? 0 : HANG);
@@ -759,15 +799,16 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   }
   // PDF bookmarks mirror the contents page.
   try {
-    let parent: any = null;
+    let parent: any = null; let parent2: any = null;
     const tocDest = { pageNumber: tocFirstPage };
     doc.outline.add(null, "Contents", tocDest);
     for (const e of outline) {
       const dest = dests.get(e.key);
       if (!dest) continue;
       const text = outlineHeading(outline, e.key).text;
-      if (e.level === 1) parent = doc.outline.add(null, text, { pageNumber: dest.page });
-      else doc.outline.add(parent, text, { pageNumber: dest.page });
+      if (e.level === 1) { parent = doc.outline.add(null, text, { pageNumber: dest.page }); parent2 = null; }
+      else if (e.level === 2) parent2 = doc.outline.add(parent, text, { pageNumber: dest.page });
+      else doc.outline.add(parent2 || parent, text, { pageNumber: dest.page });
     }
   } catch (err) {
     console.warn("[render-pdf-v2] bookmarks skipped", err);
