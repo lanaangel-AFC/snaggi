@@ -289,7 +289,6 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     afterTable();
   }
 
-  h2("1.particulars");
   {
     const rows: string[][] = [];
     rows.push(["Date", data.report.inspectionDate ? formatReportDate(data.report.inspectionDate) : formatReportDate(new Date().toISOString())]);
@@ -304,6 +303,22 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
         if (lines.length) rows.push(["Attendees", lines.join("\n")]);
       }
     } catch { /* malformed attendees: omit the row */ }
+    // Keep 1.3 together: if the heading and the whole particulars table won't fit in
+    // the space left, start 1.3 on a new page rather than splitting it.
+    {
+      doc.setFont(FONT, "normal"); doc.setFontSize(BODY_PT);
+      const lineH = (BODY_PT * doc.getLineHeightFactor()) / doc.internal.scaleFactor;
+      let tableH = 0;
+      for (const [label, value] of rows) {
+        doc.setFont(FONT, "bold");
+        const a = doc.splitTextToSize(label, 40 - 2).length;
+        doc.setFont(FONT, "normal");
+        const b = doc.splitTextToSize(value, cw() - 40 - 2).length;
+        tableH += Math.max(a, b) * lineH + 1; // 0.5 mm padding top and bottom
+      }
+      ensure(11 + tableH + 2); // heading block + table + small allowance
+    }
+    h2("1.particulars");
     // Tighter rows than the old layout (change 2).
     autoTable(doc, {
       startY: y, body: rows, margin: { left: margin, right: margin, top: TOP },
