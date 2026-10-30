@@ -14,10 +14,13 @@
 //   5. Closed This Inspection
 //   6. Running List of Open Items
 //   7. Elevations              7.1, 7.2 … one per elevation drawing with pins.
-//   Appendix A                 Technical Guidance & Method Statements (unnumbered, last).
+//   Appendix A, B …            Project appendices (unnumbered, last): "Appendix A" as a
+//                              level 1 heading and the appendix name as a level 2 heading.
+//                              Default list: A – Technical Guidance & Method Statements.
 
 import type { ReportTree } from "./report-tree";
 import { parseProjectSnapshot, resolveProjectField } from "./render-helpers";
+import { parseAppendices, appendixLetter } from "@shared/appendices";
 
 export const NARRATIVES_HEADING = "Project Narratives and Holds";
 
@@ -81,8 +84,17 @@ export function buildOutlineV2(tree: ReportTree, elevations: Array<{ id: number;
   section(6, "6", "Running List of Open Items", []);
   section(7, "7", "Elevations", elevations.map((e): Sub => [`7.elevation.${e.id}`, e.name]));
 
-  out.push({ key: "appendixA", level: 1, no: "Appendix A", title: "Technical Guidance & Method Statements" });
+  appendicesV2(tree).forEach((a, i) => {
+    out.push({ key: `appendix.${i}`, level: 1, no: `Appendix ${appendixLetter(i)}`, title: "" });
+    out.push({ key: `appendix.${i}.name`, level: 2, no: "", title: a.name || "Untitled" });
+  });
   return out;
+}
+
+// The project's appendices (live project setup). Blank names are kept so the
+// lettering matches the setup screen.
+export function appendicesV2(tree: ReportTree): Array<{ name: string }> {
+  return parseAppendices((tree.project as any)?.appendices);
 }
 
 // Title page lines below the address, top to bottom: project name, report title, then
@@ -122,7 +134,8 @@ export function harvardReference(b: any): HarvardParts | null {
 export function outlineHeading(outline: OutlineEntry[], key: string): { no: string; title: string; text: string } {
   const e = outline.find((x) => x.key === key);
   if (!e) return { no: "", title: key, text: key };
-  if (e.no.startsWith("Appendix")) return { no: e.no, title: e.title, text: `${e.no} \u2013 ${e.title}` };
+  if (e.no.startsWith("Appendix")) return { no: e.no, title: e.title, text: e.title ? `${e.no} \u2013 ${e.title}` : e.no };
+  if (!e.no) return { no: "", title: e.title, text: e.title };
   const no = e.level === 1 ? `${e.no}.` : e.no;
   return { no, title: e.title, text: `${no} ${e.title}` };
 }

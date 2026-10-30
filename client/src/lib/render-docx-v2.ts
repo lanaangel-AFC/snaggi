@@ -512,13 +512,15 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     sections.push({ properties: landscape, ...landscapeHF, children: c });
   });
 
-  // ===================== APPENDIX A (last; no section number) =====================
-  sections.push({ properties: portrait, ...portraitHF, children: [
-    h1("appendixA"),
-    para(tree.appendixMode === "reference"
-      ? "Refer to the contractor report for full technical method statements."
-      : "Technical guidance, Technical Data Sheets (TDS) and method statements applicable to the works are included with this report."),
-  ] });
+  // ===================== APPENDICES (last; no section number) =====================
+  // Divider page per appendix: "Appendix A" (Heading 1) then its name (Heading 2).
+  for (const e of outline) {
+    if (!/^appendix\.\d+$/.test(e.key)) continue;
+    sections.push({ properties: portrait, ...portraitHF, children: [
+      h1(e.key),
+      new Paragraph({ text: outlineHeading(outline, `${e.key}.name`).title, heading: HeadingLevel.HEADING_2 }),
+    ] });
+  }
 
   const wordDoc = new Document({
     creator: "Angel Fa\u00e7ade Consulting",

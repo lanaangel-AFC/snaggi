@@ -30,6 +30,10 @@ export const projects = sqliteTable("projects", {
   areaRefTemplate: text("area_ref_template").default(""),
   // Optional project UID format (JSON, see shared/uid-format.ts). Empty = standard UID.
   uidFormat: text("uid_format").default(""),
+  // Report appendices (new layout), JSON [{name}], lettered A, B, C… in order.
+  // NULL = never set: the report shows the standard "Technical Guidance & Method
+  // Statements" as Appendix A. "[]" = no appendices.
+  appendices: text("appendices"),
   elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
   customDrops: text("custom_drops").default("[]"), // JSON array of strings
   customLevels: text("custom_levels").default("[]"), // JSON array of strings
