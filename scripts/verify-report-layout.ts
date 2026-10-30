@@ -6,7 +6,7 @@ import { createServer } from "http";
 import { registerRoutes } from "../server/routes";
 import { buildReportTree } from "../client/src/lib/report-tree";
 import { isInActionList } from "../client/src/lib/action-list";
-import { buildOutlineV2, harvardReference, titlePageLinesV2 } from "../client/src/lib/report-outline-v2";
+import { buildOutlineV2, outlineHeading, harvardReference, titlePageLinesV2 } from "../client/src/lib/report-outline-v2";
 
 const now = new Date().toISOString();
 const checks: Array<[string, boolean, string]> = [];
@@ -119,8 +119,17 @@ async function main() {
     const outline = buildOutlineV2(tree, [{ id: 7, name: "North" }, { id: 8, name: "South" }]);
     const l1 = outline.filter((e) => e.level === 1);
     check("level 1 numbered 1-7, then Appendix A", l1.map((e) => e.no).join(",") === "1,2,3,4,5,6,7,Appendix A", l1.map((e) => `${e.no}:${e.title}`).join(" | "));
-    check("Appendix A is last, with no section number", outline.at(-1)?.no === "Appendix A" && !/^\d/.test(outline.at(-1)!.no) && outline.at(-1)!.level === 1, JSON.stringify(outline.at(-1)));
-    check("no numbered heading after Appendix A", outline.findIndex((e) => e.key === "appendixA") === outline.length - 1);
+    const apx = outline.findIndex((e) => e.key === "appendix.0");
+    check("default Appendix A: level 1 'Appendix A', then its name at level 2",
+      outline[apx]?.no === "Appendix A" && outline[apx]?.level === 1 && outline[apx + 1]?.key === "appendix.0.name" && outline[apx + 1]?.level === 2 && outline[apx + 1]?.title === "Technical Guidance & Method Statements", JSON.stringify(outline.slice(apx)));
+    check("no numbered heading after the appendices", outline.slice(apx).every((e) => !/^\d/.test(e.no)));
+    const withApx = (raw: any) => buildOutlineV2({ ...tree, project: { ...tree.project, appendices: raw } } as any, []);
+    const custom = withApx(JSON.stringify([{ name: "Concrete Repair Detail" }, { name: "Bracket Schedule" }, { name: "Photos" }]))
+      .filter((e) => e.key.startsWith("appendix."));
+    check("custom appendices lettered A, B, C with names", custom.map((e) => e.no || e.title).join("|") === "Appendix A|Concrete Repair Detail|Appendix B|Bracket Schedule|Appendix C|Photos", custom.map((e) => e.no || e.title).join("|"));
+    check("appendix headings text", outlineHeading(custom, "appendix.0").text === "Appendix A" && outlineHeading(custom, "appendix.0.name").text === "Concrete Repair Detail");
+    check("empty list = no appendices", !withApx("[]").some((e) => e.key.startsWith("appendix.")));
+    check("never set = default Appendix A", withApx(null).filter((e) => e.key.startsWith("appendix.")).length === 2);
     const sec2 = outline.filter((e) => e.level === 2 && e.no.startsWith("2.")).map((e) => e.no);
     check("level 2 numbered consecutively", sec2.every((n, i) => n === `2.${i + 1}`), sec2.join(","));
     const sec7 = outline.filter((e) => e.level === 2 && e.no.startsWith("7.")).map((e) => e.title);

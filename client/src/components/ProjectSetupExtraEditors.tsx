@@ -17,7 +17,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import { parseAppendices, appendixLetter } from "@shared/appendices";
 import { parseUidFormat, describeUidFormat, exampleUid, partKeyFromLabel } from "@shared/uid-format";
 import { useMemo } from "react";
 
@@ -432,6 +433,62 @@ export function UidFormatEditor({ value, onChange }: { value: string; onChange: 
           ) : null}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Report appendices (NEW projects only) ---------------------------------
+// JSON [{name}] on projects.appendices. Lettered A, B, C… in list order; each becomes a
+// divider page in the report ("Appendix A" heading 1, name heading 2) with a contents link.
+
+export function AppendicesEditor({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const list = parseAppendices(value);
+  const write = (next: Array<{ name: string }>) => onChange(JSON.stringify(next));
+  // Keep the typed text as-is while editing (parseAppendices tidies spaces for the report).
+  let raw: Array<{ name: string }> = list;
+  try { const v = JSON.parse(value || ""); if (Array.isArray(v)) raw = v.map((a: any) => ({ name: String(a?.name ?? "") })); } catch { /* default list */ }
+  const move = (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= raw.length) return;
+    const next = [...raw];
+    [next[i], next[j]] = [next[j], next[i]];
+    write(next);
+  };
+  return (
+    <div data-testid="appendices-editor">
+      <Label className="mb-2 block">Appendices</Label>
+      <p className="text-xs text-muted-foreground mb-2">
+        Each appendix gets its own divider page at the end of the report, lettered in this
+        order, with a link from the contents page.
+      </p>
+      <div className="space-y-2">
+        {raw.map((a, i) => (
+          <div key={i} className="grid grid-cols-[6.5rem_1fr_auto] gap-2 items-center">
+            <span className="text-sm font-medium">Appendix {appendixLetter(i)}</span>
+            <Input
+              placeholder="Name (e.g. Concrete Repair Detail)"
+              value={a.name}
+              onChange={(e) => write(raw.map((x, j) => (j === i ? { name: e.target.value } : x)))}
+              data-testid={`input-appendix-name-${i}`}
+            />
+            <div className="flex">
+              <Button type="button" variant="ghost" size="icon" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up">
+                <ArrowUp className="w-4 h-4" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" disabled={i === raw.length - 1} onClick={() => move(i, 1)} aria-label="Move down">
+                <ArrowDown className="w-4 h-4" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" onClick={() => write(raw.filter((_, j) => j !== i))} aria-label="Remove appendix">
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        ))}
+        {raw.length === 0 && <p className="text-xs text-muted-foreground">No appendices. The report will end after Elevations.</p>}
+        <Button type="button" variant="outline" size="sm" onClick={() => write([...raw, { name: "" }])} data-testid="button-add-appendix">
+          <Plus className="w-4 h-4 mr-1" /> Add appendix
+        </Button>
+      </div>
     </div>
   );
 }

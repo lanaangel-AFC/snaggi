@@ -168,8 +168,10 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   };
   const h2 = (key: string) => {
     const h = outlineHeading(outline, key);
+    // No number (an appendix name): the title starts at the margin.
+    const ind = h.no ? HANG : 0;
     doc.setFont(FONT, "bold"); doc.setFontSize(14);
-    const lines: string[] = doc.splitTextToSize(h.title, cw() - HANG);
+    const lines: string[] = doc.splitTextToSize(h.title, cw() - ind);
     ensure(0.7 + lines.length * 6 + 14);
     // Set the heading font after ensure(): a page break draws the running header, which
     // leaves a small font behind (this is what shrank 1.4 at the top of a page).
@@ -178,8 +180,8 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     y += 4.5;
     dests.set(key, { page: pageNo(), top: y - 6 });
     doc.setTextColor(...DARK_TEXT);
-    doc.text(h.no, margin, y);
-    lines.forEach((ln, i) => doc.text(ln, margin + HANG, y + i * 6));
+    if (h.no) doc.text(h.no, margin, y);
+    lines.forEach((ln, i) => doc.text(ln, margin + ind, y + i * 6));
     y += (lines.length - 1) * 6 + 2.1 + 3.5; // 6 pt after
   };
   // Numbered level 3 heading (2.3.1 …): level 3 type, number and title on the level 2
@@ -765,12 +767,14 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     doc.text(`${el.pins.length} pin${el.pins.length === 1 ? "" : "s"}`, pw() - margin, ly, { align: "right" });
   });
 
-  // ===================== APPENDIX A (last; no section number) =====================
-  newPage();
-  h1("appendixA");
-  para(tree.appendixMode === "reference"
-    ? "Refer to the contractor report for full technical method statements."
-    : "Technical guidance, Technical Data Sheets (TDS) and method statements applicable to the works are included with this report.");
+  // ===================== APPENDICES (last; no section number) =====================
+  // Divider page per appendix: "Appendix A" (heading 1) then its name (heading 2).
+  for (const e of outline) {
+    if (!/^appendix\.\d+$/.test(e.key)) continue;
+    newPage();
+    h1(e.key);
+    h2(`${e.key}.name`);
+  }
 
   // ===================== Fill in contents, links and bookmarks =====================
   for (let p = 0; p < tocPageCount; p++) {
@@ -785,8 +789,8 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
       const top = e.level === 1;
       const x = margin + (top ? 0 : HANG);
       doc.setFont(FONT, top ? "bold" : "normal"); doc.setFontSize(10); doc.setTextColor(0, 0, 0);
-      const label = e.no.startsWith("Appendix") ? `${e.no} \u2013 ${e.title}` : e.no;
-      const titleX = e.no.startsWith("Appendix") ? x : x + HANG;
+      const label = e.no.startsWith("Appendix") ? (e.title ? `${e.no} \u2013 ${e.title}` : e.no) : e.no;
+      const titleX = e.no.startsWith("Appendix") || !e.no ? x : x + HANG;
       if (top && ty > TOP + 14) ty += 1.5;
       doc.text(e.no.startsWith("Appendix") ? label : e.no, x, ty);
       const title = e.no.startsWith("Appendix") ? "" : e.title;

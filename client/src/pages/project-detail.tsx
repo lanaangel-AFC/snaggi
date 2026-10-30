@@ -1,3 +1,4 @@
+import { parseAppendices } from "@shared/appendices";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
@@ -19,7 +20,7 @@ import { useState, useMemo } from "react";
 import { recordWords } from "@/lib/wording";
 import ProjectStatusSection from "@/components/ProjectStatusSection";
 import ProjectSetupEditors from "@/components/ProjectSetupEditors";
-import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor, UidFormatEditor } from "@/components/ProjectSetupExtraEditors";
+import { RolesEditor, ScopeOfWorksEditor, BackgroundDocsEditor, AreaRefTemplateEditor, UidFormatEditor, AppendicesEditor } from "@/components/ProjectSetupExtraEditors";
 
 const STANDARD_ELEVATIONS = [
   "North", "North East", "East", "South East",
@@ -95,6 +96,7 @@ export default function ProjectDetail() {
       backgroundDocs: (project as any).backgroundDocs || "[]",
       areaRefTemplate: (project as any).areaRefTemplate || "",
       uidFormat: (project as any).uidFormat || "",
+      appendices: (project as any).appendices ?? JSON.stringify(parseAppendices(null)),
     });
     setEditHideLegacyAliases(Boolean((project as any).hideLegacyAliases));
     setCustomElevation("");
@@ -422,6 +424,12 @@ export default function ProjectDetail() {
                 <UidFormatEditor
                   value={editForm.uidFormat || ""}
                   onChange={(v) => setEditForm({ ...editForm, uidFormat: v })}
+                />
+              )}
+              {Number((project as any)?.featureVersion ?? 1) >= 2 && (
+                <AppendicesEditor
+                  value={editForm.appendices ?? ""}
+                  onChange={(v) => setEditForm({ ...editForm, appendices: v })}
                 />
               )}
 
