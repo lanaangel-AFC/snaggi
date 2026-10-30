@@ -17,6 +17,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
+  workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
 import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, titlePageLinesV2, type OutlineEntry } from "./report-outline-v2";
@@ -166,9 +167,9 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
   const actionTable = (defects: any[]) => {
     const rows: Cell[][] = [];
     for (const d of defects) {
-      const area = deriveAreaRef(d, areaRefTemplate) || "";
-      rows.push([uidCell(safeText(d.uid), d), area, getWorkTypeLabel(safeText(d.uid)), resolveActionSummary(d), safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
-      for (const loc of d.locations || []) rows.push([uidCell(safeText(loc.uid), d), area, getWorkTypeLabel(safeText(d.uid)), "", safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
+      const area = areaRefFor(d, areaRefTemplate, data.project, dims) || "";
+      rows.push([uidCell(safeText(d.uid), d), area, workTypeLabelFor(d), resolveActionSummary(d), safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
+      for (const loc of d.locations || []) rows.push([uidCell(safeText(loc.uid), d), area, workTypeLabelFor(d), "", safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
     }
     return gridTable(["ID", "Location", "Work Type", "Action", "Responsible", "By Date", "Status"], ACTION_W, rows);
   };
@@ -177,8 +178,8 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     const rows: Cell[][] = [];
     for (const d of defects) {
       const type = d.recordType === "observation" ? "Obs" : "Defect";
-      rows.push([safeText(d.uid), type, formatDefectLocation(d, dims), getWorkTypeLabel(safeText(d.uid)), safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
-      for (const loc of d.locations || []) rows.push([safeText(loc.uid), type, loc.uid ? deriveLocation(safeText(loc.uid)) : "", getWorkTypeLabel(safeText(d.uid)), safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
+      rows.push([safeText(d.uid), type, formatDefectLocation(d, dims), workTypeLabelFor(d), safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
+      for (const loc of d.locations || []) rows.push([safeText(loc.uid), type, loc.uid ? deriveLocation(safeText(loc.uid)) : "", workTypeLabelFor(d), safeText(d.assignedTo) || "\u2014", safeText(d.dueDate) || "\u2014", statusRuns(d)]);
     }
     return gridTable(["ID", "Type", "Location", "Work Type", "Responsible", "By Date", "Status"], REGISTER_W, rows);
   };
@@ -277,7 +278,7 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     c.push(h2("1.uid"));
     c.push(h3("Unique identifier"));
     c.push(para("Throughout the document, each record (observation or defect) is referred to by its unique identifier (UID)."));
-    c.push(para("The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier."));
+    c.push(para(uidNomenclatureSentence(data.project, [...v2.newThisInspection, ...v2.closedThisInspection, ...v2.runningOpen].flatMap((g: any) => g.defects || []).concat(v2.notes || []))));
     c.push(h2("1.limitations"));
     c.push(...numberedList(LIMITATIONS_V2.map((b) => [run(b)])));
     sections.push({ properties: portrait, ...portraitHF, children: c });
@@ -408,7 +409,7 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       new TextRun({ text: "  " }),
       // Bookmark parts built by hand: the library's Bookmark gives every bookmark id 1.
       new BookmarkStart(anchorFor(d.id), d.id),
-      run(multi ? `Multiple Entries for ${getWorkTypeLabel(safeText(d.uid))}` : safeText(d.uid), { bold: true, size: 28, color: CAPTION_BLUE }),
+      run(multi ? `Multiple Entries for ${workTypeLabelFor(d)}` : safeText(d.uid), { bold: true, size: 28, color: CAPTION_BLUE }),
       new BookmarkEnd(d.id),
       ...(asNote ? [] : [new TextRun({ text: "    " }), run(d.status === "complete" ? "COMPLETE" : "OPEN", { bold: true, size: 20, color: d.status === "complete" ? "228B22" : "C89600" })]),
     ] }));

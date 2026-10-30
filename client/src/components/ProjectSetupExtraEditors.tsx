@@ -18,6 +18,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Plus, Trash2 } from "lucide-react";
+import { parseUidFormat, describeUidFormat, exampleUid, partKeyFromLabel } from "@shared/uid-format";
 import { useMemo } from "react";
 
 // ---- helpers ---------------------------------------------------------------
@@ -309,6 +310,128 @@ export function AreaRefTemplateEditor({ value, onChange }: { value: string; onCh
           least one placeholder like <code>{"{elevation}"}</code>.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+// ---- Record UID format (NEW projects only) --------------------------------
+// Optional. When set, records in this project are identified by the project's own
+// parts and pattern (e.g. Level, Fin, Bracket → "{level}.{fin}-{bracket}" → 9.14-B)
+// instead of Elevation-Drop-Level-WorkType-Number. Stored as JSON, see shared/uid-format.ts.
+
+type UidPartDraft = { label: string; options: string };
+
+function readUidFormatDraft(value: string): { pattern: string; parts: UidPartDraft[] } {
+  try {
+    const obj = value ? JSON.parse(value) : null;
+    if (obj && typeof obj === "object") {
+      return {
+        pattern: String(obj.pattern || ""),
+        parts: (Array.isArray(obj.parts) ? obj.parts : []).map((p: any) => ({
+          label: String(p?.label || p?.key || ""),
+          options: typeof p?.optionsText === "string" ? p.optionsText : (Array.isArray(p?.options) ? p.options.join(", ") : ""),
+        })),
+      };
+    }
+  } catch { /* fall through */ }
+  return { pattern: "", parts: [] };
+}
+
+function writeUidFormatDraft(pattern: string, parts: UidPartDraft[]): string {
+  if (!pattern.trim() && parts.every((p) => !p.label.trim())) return "";
+  return JSON.stringify({
+    pattern,
+    parts: parts.map((p) => ({
+      key: partKeyFromLabel(p.label),
+      label: p.label,
+      options: p.options.split(",").map((o) => o.trim()).filter(Boolean),
+      optionsText: p.options, // raw text so typing "A, " isn't tidied away mid-edit
+    })),
+  });
+}
+
+export function UidFormatEditor({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const draft = readUidFormatDraft(value || "");
+  const fmt = parseUidFormat(value || "");
+  const update = (pattern: string, parts: UidPartDraft[]) => onChange(writeUidFormatDraft(pattern, parts));
+  const setPart = (i: number, patch: Partial<UidPartDraft>) => {
+    const parts = draft.parts.map((p, j) => (j === i ? { ...p, ...patch } : p));
+    update(draft.pattern, parts);
+  };
+  const tokens = draft.parts.map((p) => partKeyFromLabel(p.label)).filter(Boolean);
+  const unused = tokens.filter((k) => !draft.pattern.includes(`{${k}}`));
+  return (
+    <div data-testid="uid-format-editor">
+      <Label className="mb-2 block">Record UID format</Label>
+      <p className="text-xs text-muted-foreground mb-2">
+        Optional. Set your own UID parts and how they join, instead of
+        Elevation-Drop-Level-Work type-Number. Each part becomes the record's location;
+        the pick list is optional and you can always type a new value. Example: parts
+        Level, Fin, Bracket with pattern <code>{"{level}.{fin}-{bracket}"}</code> gives{" "}
+        <code>9.14-B</code>. Leave empty to keep the standard UID.
+      </p>
+      <div className="space-y-2">
+        {draft.parts.map((p, i) => (
+          <div key={i} className="grid grid-cols-[7rem_1fr_auto] gap-2 items-center">
+            <Input
+              placeholder="Part (e.g. Fin)"
+              value={p.label}
+              onChange={(e) => setPart(i, { label: e.target.value })}
+              data-testid={`input-uid-part-label-${i}`}
+            />
+            <Input
+              placeholder="Optional list, e.g. A, B, C"
+              value={p.options}
+              onChange={(e) => setPart(i, { options: e.target.value })}
+              data-testid={`input-uid-part-options-${i}`}
+            />
+            <Button type="button" variant="ghost" size="icon"
+              onClick={() => update(draft.pattern, draft.parts.filter((_, j) => j !== i))}
+              aria-label="Remove part">
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm"
+          onClick={() => update(draft.pattern, [...draft.parts, { label: "", options: "" }])}
+          data-testid="button-add-uid-part">
+          <Plus className="w-4 h-4 mr-1" /> Add part
+        </Button>
+      </div>
+      {draft.parts.length > 0 && (
+        <div className="mt-3">
+          <Label className="text-xs mb-1 block">Pattern</Label>
+          <div className="flex gap-2">
+            <Input
+              className="font-mono"
+              placeholder={tokens.map((k) => `{${k}}`).join("-") || "{level}.{fin}-{bracket}"}
+              value={draft.pattern}
+              onChange={(e) => update(e.target.value, draft.parts)}
+              data-testid="input-uid-pattern"
+            />
+            <Button type="button" variant="outline" size="sm"
+              onClick={() => update(tokens.map((k) => `{${k}}`).join("-"), draft.parts)}>
+              Fill
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Placeholders: {tokens.map((k) => <code key={k} className="mr-1">{`{${k}}`}</code>)}
+            Anything else is typed as-is, e.g. <code>.</code> or <code>-</code>.
+          </p>
+          {fmt ? (
+            <p className="mt-1 text-xs">
+              <span className="text-muted-foreground">Format:</span> {describeUidFormat(fmt)}{" "}
+              <span className="text-muted-foreground">e.g.</span>{" "}
+              <code className="font-mono">{exampleUid(fmt)}</code>
+            </p>
+          ) : null}
+          {unused.length > 0 ? (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              Not in the pattern yet: {unused.map((k) => `{${k}}`).join(", ")}
+            </p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

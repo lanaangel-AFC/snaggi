@@ -9,7 +9,8 @@
 // and asset-loading utilities only.
 // ============================================================================
 
-import { formatLocation, getLocationDimensions } from "@shared/location";
+import { formatLocation, getLocationDimensions, parseLocationStructured } from "@shared/location";
+import { parseUidFormat, describeUidFormat, renderUid, isUidComplete } from "@shared/uid-format";
 
 // API base — mirrors the convention used elsewhere in the client.
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -277,6 +278,14 @@ export function getWorkTypeLabel(uid: string): string {
   return WORK_TYPE_LABELS[code] || code;
 }
 
+// Work type label for a record. Prefers the stored work type code, because a
+// project with its own UID format (e.g. 9.14-B) has no work type in the UID.
+export function workTypeLabelFor(d: any): string {
+  const code = String(d?.workTypeCode || "").trim();
+  if (code) return WORK_TYPE_LABELS[code] || code;
+  return getWorkTypeLabel(String(d?.uid || ""));
+}
+
 // ---------------------------------------------------------------------------
 // Location
 // ---------------------------------------------------------------------------
@@ -418,9 +427,43 @@ export function photoSlotLabel(slot: string): string {
 export function sortByUid(a: any, b: any): number {
   const ap = parseUidParts(a.uid);
   const bp = parseUidParts(b.uid);
+  // UIDs without a work-type group (project UID formats such as 9.14-B) sort naturally.
+  const noWt = (d: any, pp: { work: string }) => { const c = String(d?.workTypeCode || ""); return c ? !String(d?.uid || "").split("-").includes(c) : !pp.work; };
+  if (noWt(a, ap) && noWt(b, bp)) return String(a.uid || "").localeCompare(String(b.uid || ""), undefined, { numeric: true });
   if (ap.elev !== bp.elev) return ap.elev.localeCompare(bp.elev);
   if (ap.drop !== bp.drop) return ap.drop - bp.drop;
   if (ap.level !== bp.level) return bp.level - ap.level;
   if (ap.work !== bp.work) return ap.work.localeCompare(bp.work);
   return ap.num - bp.num;
+}
+
+// ---------------------------------------------------------------------------
+// Project UID format (shared/uid-format.ts)
+// ---------------------------------------------------------------------------
+
+// §1.5 wording. Standard projects keep the fixed sentence; a project with its own
+// UID format describes it and, where it can, gives a worked example from a real record.
+export function uidNomenclatureSentence(project: any, records: any[] = []): string {
+  const fmt = parseUidFormat(project?.uidFormat);
+  if (!fmt) return "The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.";
+  let sentence = `The UID comprises the following components: ${describeUidFormat(fmt)}.`;
+  let sample: Record<string, any> | null = null;
+  for (const r of records || []) {
+    const loc = parseLocationStructured(r?.locationStructured);
+    if (isUidComplete(fmt, loc)) { sample = loc; break; }
+  }
+  if (!sample && fmt.parts.every((p) => p.options.length > 0)) {
+    sample = Object.fromEntries(fmt.parts.map((p) => [p.key, p.options[0]]));
+  }
+  if (sample) {
+    const parts = fmt.parts.map((p) => `${p.label} ${String(sample![p.key]).trim()}`).join(", ");
+    sentence += ` For example, ${renderUid(fmt, sample)} refers to ${parts}.`;
+  }
+  return sentence;
+}
+
+// Action List "Area Ref" cell: a formatted project shows the record's location parts.
+export function areaRefFor(d: any, areaRefTemplate: string, project: any, dims: string[]): string {
+  if (parseUidFormat(project?.uidFormat)) return formatDefectLocation(d, dims);
+  return deriveAreaRef(d, areaRefTemplate);
 }

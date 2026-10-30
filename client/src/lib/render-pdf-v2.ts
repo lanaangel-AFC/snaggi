@@ -19,6 +19,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef,
+  workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
 import { buildOutlineV2, outlineHeading, scopeRowsV2, backgroundDocsV2, harvardReference, titlePageLinesV2, type OutlineEntry } from "./report-outline-v2";
@@ -362,7 +363,7 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   h3("Unique identifier", 20);
   y += 0.5;
   para("Throughout the document, each record (observation or defect) is referred to by its unique identifier (UID).");
-  para("The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.");
+  para(uidNomenclatureSentence(data.project, [...v2.newThisInspection, ...v2.closedThisInspection, ...v2.runningOpen].flatMap((g: any) => g.defects || []).concat(v2.notes || [])));
 
   h2("1.limitations");
   LIMITATIONS_V2.forEach((b, i) => {
@@ -385,12 +386,12 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   const actionTable = (defects: any[]) => {
     const rows: string[][] = []; const overdue: boolean[] = []; const ids: Array<number | null> = [];
     for (const d of defects) {
-      const area = deriveAreaRef(d, areaRefTemplate) || "";
+      const area = areaRefFor(d, areaRefTemplate, data.project, dims) || "";
       const od = isDefectOverdue(d);
-      rows.push([d.uid, area, getWorkTypeLabel(d.uid), resolveActionSummary(d), d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
+      rows.push([d.uid, area, workTypeLabelFor(d), resolveActionSummary(d), d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
       overdue.push(od); ids.push(detailIds.has(d.id) ? d.id : null);
       for (const loc of d.locations || []) {
-        rows.push([loc.uid || "", area, getWorkTypeLabel(d.uid), "", d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
+        rows.push([loc.uid || "", area, workTypeLabelFor(d), "", d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
         overdue.push(od); ids.push(detailIds.has(d.id) ? d.id : null);
       }
     }
@@ -424,10 +425,10 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     const rows: string[][] = []; const overdue: boolean[] = [];
     for (const d of defects) {
       const type = d.recordType === "observation" ? "Obs" : "Defect";
-      rows.push([d.uid, type, formatDefectLocation(d, dims), getWorkTypeLabel(d.uid), d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
+      rows.push([d.uid, type, formatDefectLocation(d, dims), workTypeLabelFor(d), d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
       overdue.push(isDefectOverdue(d));
       for (const loc of d.locations || []) {
-        rows.push([loc.uid || "", type, loc.uid ? deriveLocation(loc.uid) : "", getWorkTypeLabel(d.uid), d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
+        rows.push([loc.uid || "", type, loc.uid ? deriveLocation(loc.uid) : "", workTypeLabelFor(d), d.assignedTo || "\u2014", d.dueDate || "\u2014", statusText(d)]);
         overdue.push(isDefectOverdue(d));
       }
     }
@@ -634,7 +635,7 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     doc.setTextColor(255, 255, 255);
     doc.text(typeLabel, margin + 3, y);
     doc.setFontSize(14); doc.setTextColor(...DARK_TEXT);
-    doc.text(multi ? `Multiple Entries for ${getWorkTypeLabel(d.uid)}` : d.uid, margin + badgeW + 4, y);
+    doc.text(multi ? `Multiple Entries for ${workTypeLabelFor(d)}` : d.uid, margin + badgeW + 4, y);
     if (!asNote) {
       const st = d.status === "complete" ? "COMPLETE" : "OPEN";
       doc.setFontSize(10);

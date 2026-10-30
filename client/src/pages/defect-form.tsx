@@ -17,6 +17,8 @@ import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo, Project, Elevation, DefectLocation } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { typeWords, usesRecordWording } from "@/lib/wording";
+import { parseUidFormat, renderUid, parseUidWithFormat } from "@shared/uid-format";
+import { parseLocationStructured } from "@shared/location";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -289,6 +291,8 @@ export default function DefectForm() {
   const [level, setLevel] = useState("");
   const [workType, setWorkType] = useState("");
   const [seqNumber, setSeqNumber] = useState("01");
+  // Project UID format (e.g. GRC: Level.Fin-Bracket). Values keyed by part key.
+  const [uidPartValues, setUidPartValues] = useState<Record<string, string>>({});
 
   // Export-profiles (Pass 1): follow-up category + audience tag on the record.
   const projectCategories = useMemo(() => {
@@ -501,6 +505,11 @@ export default function DefectForm() {
     if (actionNeeded !== !(ed.actionNeeded === false || ed.actionNeeded === 0)) return true;
     const parts: Array<[string, string]> = [[elevation, "elevationCode"], [drop, "dropCode"], [level, "levelCode"],
       [workType, "workTypeCode"], [seqNumber, "seqNumber"]];
+    if (uidFmt) {
+      const loc = parseLocationStructured(ed.locationStructured);
+      if (uidFmt.parts.some((p) => norm(uidPartValues[p.key]).trim() !== norm(loc[p.key]).trim())) return true;
+      return workType !== "" && norm(workType) !== norm(ed.workTypeCode);
+    }
     return parts.some(([v, k]) => v !== "" && norm(v) !== norm(ed[k]));
   };
 
@@ -579,6 +588,7 @@ export default function DefectForm() {
   const textSuggestions = useMemo(() => {
     if (!allProjectDefects || !workType) return { comments: [], actions: [] };
     const matching = allProjectDefects.filter((d) => {
+      if ((d as any).workTypeCode === workType) return true;
       const parts = d.uid.split("-");
       return parts.some((p) => p === workType);
     });
@@ -631,7 +641,9 @@ export default function DefectForm() {
   // Flexible UID builder — only includes present segments.
   // New convention (template set): AreaRef - WorkItem  (server adds -Seq#)
   // Legacy (no template):          Elevation - Drop - Level - WorkType
+  const uidFmt = useMemo(() => parseUidFormat((project as any)?.uidFormat), [(project as any)?.uidFormat]);
   const uidPrefix = useMemo(() => {
+    if (uidFmt) return renderUid(uidFmt, uidPartValues);
     if (areaRefTemplate) {
       const segments = [areaRef, workType || ""].filter((s) => s !== "");
       return segments.join("-");
@@ -643,11 +655,12 @@ export default function DefectForm() {
       workType || "",
     ].filter((s) => s !== "");
     return segments.join("-");
-  }, [areaRefTemplate, areaRef, elevation, drop, level, workType]);
+  }, [uidFmt, uidPartValues, areaRefTemplate, areaRef, elevation, drop, level, workType]);
 
   // Full assembled UID — includes seq number if present.
   // New convention: {AreaRef}-{WorkItem}-{Seq#}.  Legacy: 5-part.
   const assembledUid = useMemo(() => {
+    if (uidFmt) return renderUid(uidFmt, uidPartValues);
     if (areaRefTemplate) {
       const segments = [
         areaRef,
@@ -664,7 +677,7 @@ export default function DefectForm() {
       seqNumber ? seqNumber.padStart(2, "0") : "",
     ].filter((s) => s !== "");
     return segments.join("-");
-  }, [areaRefTemplate, areaRef, elevation, drop, level, workType, seqNumber]);
+  }, [uidFmt, uidPartValues, areaRefTemplate, areaRef, elevation, drop, level, workType, seqNumber]);
 
   // Fetch all defects in this report to check for duplicate UIDs
   const { data: reportDefects } = useQuery<Defect[]>({
@@ -774,6 +787,18 @@ export default function DefectForm() {
       // A record counts as "structured" if ANY of the part columns is populated; this is
       // true for all records after the uid_parts_backfill_v1 migration.
       const ed = existingDefect as any;
+      const fmtNow = parseUidFormat((project as any)?.uidFormat);
+      if (fmtNow) {
+        // Project UID format: the parts are the stored location; older rows fall back to the UID.
+        const loc = parseLocationStructured(ed.locationStructured);
+        const seeded: Record<string, string> = {};
+        for (const p of fmtNow.parts) if (loc[p.key] != null && String(loc[p.key]).trim()) seeded[p.key] = String(loc[p.key]).trim();
+        const fromUid = Object.keys(seeded).length === 0 ? parseUidWithFormat(fmtNow, existingDefect.uid) : null;
+        setUidPartValues(fromUid || seeded);
+        setWorkType(ed.workTypeCode || "");
+        setFormStep("form");
+        return;
+      }
       const hasStructured = ed.elevationCode != null || ed.dropCode != null ||
         ed.levelCode != null || ed.workTypeCode != null || ed.seqNumber != null;
       if (hasStructured) {
@@ -888,6 +913,23 @@ export default function DefectForm() {
         workTypeCode: workType || null,
         seqNumber: seqNumber || null,
       };
+      if (uidFmt) {
+        // Project UID format: the server builds the UID from the location parts.
+        const fmtBody = {
+          locationStructured: JSON.stringify(uidPartValues),
+          workTypeCode: workType || (isEdit ? (existingDefect as any)?.workTypeCode ?? null : null),
+          categoryCode: isNote ? null : (categoryCode || null),
+          audience,
+          ...(notesEnabled ? { actionNeeded: !isNote } : {}),
+        };
+        if (isEdit) {
+          return await patchDefect({ ...form, uid: isNote ? uid : (assembledUid || uid), ...fmtBody });
+        }
+        const res = await apiRequest("POST", `/api/projects/${projectId}/defects`, {
+          ...form, reportId: Number(reportId), uidPrefix: assembledUid, recordType, ...fmtBody,
+        });
+        return res.json();
+      }
       if (isEdit) {
         // A save must never silently empty part of a record's identity. If a part is blank in
         // the form but present on the stored record the field was not edited, it simply had not
@@ -1223,7 +1265,7 @@ export default function DefectForm() {
     } catch { toast({ title: "Failed to add custom level", variant: "destructive" }); }
   };
 
-  const canSave = isEdit || !!assembledUid;
+  const canSave = isEdit || !!assembledUid || (!!uidFmt && isNote);
   const isComplete = form.status === "complete";
 
   return (
@@ -1523,6 +1565,54 @@ export default function DefectForm() {
               </span>
             )}
           </div>
+          {uidFmt ? (<>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="uid-format-parts">
+            {uidFmt.parts.map((p) => {
+              // Pick list from project setup plus anything already used in this project.
+              const used = (allProjectDefects || [])
+                .map((d) => String(parseLocationStructured((d as any).locationStructured)[p.key] ?? "").trim())
+                .filter(Boolean);
+              const opts = Array.from(new Set([...p.options, ...used]))
+                .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+              const listId = `uid-part-options-${p.key}`;
+              return (
+                <div key={p.key}>
+                  <Label htmlFor={`uid-part-${p.key}`} className="text-xs">{p.label}</Label>
+                  <Input
+                    id={`uid-part-${p.key}`}
+                    list={listId}
+                    value={uidPartValues[p.key] || ""}
+                    onChange={(e) => setUidPartValues((prev) => ({ ...prev, [p.key]: e.target.value.replace(/\s+/g, "") }))}
+                    className="font-mono text-center"
+                    autoComplete="off"
+                    data-testid={`input-uid-part-${p.key}`}
+                  />
+                  <datalist id={listId}>
+                    {opts.map((o) => <option key={o} value={o} />)}
+                  </datalist>
+                </div>
+              );
+            })}
+            {enabledUidParts.workType !== false && (
+            <div>
+              <Label className="text-xs">Work Type</Label>
+              <button
+                type="button"
+                onClick={() => setFormStep("workType")}
+                className="w-full h-9 px-3 rounded-md border bg-background text-left font-mono text-sm hover:bg-accent/40 transition-colors"
+                data-testid="select-work-type"
+              >
+                {workType || "\u2014"}
+              </button>
+            </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {isNote
+              ? "Location of this note. The note keeps its own reference."
+              : "Pick from the list or type a value. The UID is built from these parts; work type is recorded but isn't part of the UID."}
+          </p>
+          </>) : (<>
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
             {enabledUidParts.elevation !== false && (
             <div>
@@ -1625,6 +1715,7 @@ export default function DefectForm() {
           <p className="text-xs text-muted-foreground">
             All fields optional — empty segments are skipped. The number auto-suggests but you can change it.
           </p>
+          </>)}
         </Card>
 
         {/* WP5: Action required? (observations in new projects only) */}
@@ -2229,8 +2320,8 @@ export default function DefectForm() {
         </Card>
         </>}
 
-        {/* Additional Locations */}
-        {isEdit && (
+        {/* Additional Locations (not used with a project UID format: one record per place) */}
+        {isEdit && !uidFmt && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">Additional Locations</h3>
