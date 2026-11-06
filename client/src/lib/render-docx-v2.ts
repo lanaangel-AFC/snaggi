@@ -16,7 +16,7 @@ import {
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize,
+  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
   bracketActionUid, isBracketActionOverdue, BRACKET_STATUS_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
@@ -342,11 +342,36 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       return new Paragraph({ children: [new ImageRun({ data: dataUrlToBuffer(im.dataUrl), transformation: { width: w, height: h }, type: "jpg" })] });
     };
     if (tree.projectStatus.narratives.length > 0) c.push(h2("2.narratives"));
-    tree.projectStatus.narratives.forEach((n: any, i: number) => {
+    for (let i = 0; i < tree.projectStatus.narratives.length; i++) {
+      const n: any = tree.projectStatus.narratives[i];
       c.push(h3n(`2.narrative.${i}`));
       if (n.status) c.push(para(`Status: ${safeText(n.status)}`));
       if (n.body) String(n.body).split(/\n\s*\n/).forEach((p) => c.push(para(p.trim())));
-    });
+      // Figures: two per row, fitted inside 320 x 240 at their true proportions, caption below.
+      const figs = narrativeFigures(n);
+      const half = Math.floor(CONTENT_W / 2);
+      for (let k = 0; k < figs.length; k += 2) {
+        const cells: any[] = [];
+        for (let j = 0; j < 2; j++) {
+          const f = figs[k + j];
+          const kids: any[] = [];
+          if (f) {
+            const blob = await loadImageBlob(f.filename);
+            let im: { dataUrl: string; width: number; height: number } | null = null;
+            if (blob) { try { im = await compressImageWithSize(blob, 1400, 0.85); } catch { im = null; } }
+            if (im) {
+              let w = 320; let h = Math.round(w * im.height / im.width);
+              if (h > 240) { w = Math.round(320 * 240 / h); h = 240; }
+              kids.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0 }, children: [new ImageRun({ data: dataUrlToBuffer(im.dataUrl), transformation: { width: w, height: h }, type: "jpg" })] }));
+            } else kids.push(para("[Figure unavailable]"));
+            if (f.caption) kids.push(new Paragraph({ spacing: { before: 40, after: 120 }, children: [run(safeText(f.caption), { size: 16, color: "5A5A5A" })] }));
+            else kids.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
+          } else kids.push(new Paragraph({ children: [] }));
+          cells.push(new TableCell({ width: { size: half, type: WidthType.DXA }, borders: noBorders, children: kids }));
+        }
+        c.push(new Table({ width: { size: half * 2, type: WidthType.DXA }, columnWidths: [half, half], layout: TableLayoutType.FIXED, rows: [new TableRow({ cantSplit: true, children: cells })] }));
+      }
+    }
     if (tree.projectStatus.program) {
       const p = tree.projectStatus.program;
       c.push(h2("2.program"));

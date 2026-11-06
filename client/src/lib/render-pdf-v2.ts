@@ -18,7 +18,7 @@ import {
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize,
+  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
   bracketActionUid, isBracketActionOverdue, BRACKET_STATUS_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
@@ -524,11 +524,52 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     actionTable(g.defects);
   }
   if (tree.projectStatus.narratives.length > 0) h2("2.narratives");
-  tree.projectStatus.narratives.forEach((n: any, i: number) => {
+  // Narrative figures: two per row, each fitted inside its box at its true proportions
+  // (never stretched), with the caption underneath when one is given.
+  const narrativeFigureGrid = async (figs: Array<{ filename: string; caption: string }>) => {
+    if (!figs.length) return;
+    const gap = 6; const w = (cw() - gap) / 2; const boxH = w * 0.75; const capLH = 3.3;
+    y += 2;
+    for (let i = 0; i < figs.length; i += 2) {
+      const row = figs.slice(i, i + 2);
+      const loaded = await Promise.all(row.map(async (f) => {
+        const blob = await loadImageBlob(f.filename);
+        if (!blob) return null;
+        try { return await compressImageWithSize(blob, 1400, 0.85); } catch { return null; }
+      }));
+      doc.setFont(FONT, "normal"); doc.setFontSize(8);
+      const caps = row.map((f) => (f.caption ? (doc.splitTextToSize(f.caption, w) as string[]) : []));
+      const capH = Math.max(0, ...caps.map((c) => c.length)) * capLH;
+      const rowH = boxH + (capH ? capH + 2 : 0) + 5;
+      ensure(rowH);
+      row.forEach((f, j) => {
+        const x = margin + j * (w + gap);
+        const im = loaded[j];
+        if (im) {
+          const r = im.height / im.width;
+          let iw = w; let ih = iw * r;
+          if (ih > boxH) { ih = boxH; iw = ih / r; }
+          doc.addImage(im.dataUrl, "JPEG", x + (w - iw) / 2, y + (boxH - ih) / 2, iw, ih);
+        } else {
+          doc.setDrawColor(180); doc.rect(x, y, w, boxH); doc.setFontSize(7); doc.setTextColor(100);
+          doc.text("[Figure unavailable]", x + 4, y + boxH / 2); doc.setTextColor(0);
+        }
+        if (caps[j].length) {
+          doc.setFont(FONT, "normal"); doc.setFontSize(8); doc.setTextColor(90);
+          caps[j].forEach((ln, k) => doc.text(ln, x, y + boxH + 3.5 + k * capLH));
+          doc.setTextColor(0);
+        }
+      });
+      y += rowH;
+    }
+  };
+  for (let i = 0; i < tree.projectStatus.narratives.length; i++) {
+    const n: any = tree.projectStatus.narratives[i];
     h3n(`2.narrative.${i}`);
     if (n.status) para(`Status: ${n.status}`);
     if (n.body) String(n.body).split(/\n\s*\n/).forEach((p) => para(p.trim()));
-  });
+    await narrativeFigureGrid(narrativeFigures(n));
+  }
   const addPicture = async (filename: string) => {
     const blob = await loadImageBlob(filename);
     if (!blob) return;
