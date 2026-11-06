@@ -494,3 +494,25 @@ export function areaRefFor(d: any, areaRefTemplate: string, project: any, dims: 
   if (parseUidFormat(project?.uidFormat)) return formatDefectLocation(d, dims);
   return deriveAreaRef(d, areaRefTemplate);
 }
+
+// ---------------------------------------------------------------------------
+// 2.2 Bracket Action List (GRC)
+// ---------------------------------------------------------------------------
+
+// Row ID from the project's UID format (GRC: Level.Fin-Bracket → 9.14-B).
+export function bracketActionUid(project: any, r: any): string {
+  const fmt = parseUidFormat(project?.uidFormat);
+  const vals = { level: r?.level, fin: r?.fin, bracket: r?.bracket };
+  return fmt ? renderUid(fmt, vals) : [r?.level, r?.fin, r?.bracket].filter(Boolean).join(".");
+}
+
+export function isBracketActionOverdue(r: any): boolean {
+  if (!r?.dateBy || r?.status === "Closed") return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(`${r.dateBy}T00:00:00`);
+  return !Number.isNaN(due.getTime()) && due < today;
+}
+
+export const BRACKET_STATUS_COLOURS: Record<string, [number, number, number]> = {
+  Open: [200, 150, 0], Pending: [37, 99, 235], Closed: [34, 139, 34],
+};

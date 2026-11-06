@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, Upload, ArrowUp, ArrowDown } from "lucide-react";
 import { useState } from "react";
 import type { NarrativeHold, ProgramSchedule, StageProgressMap } from "@shared/schema";
+import BracketActionList from "@/components/BracketActionList";
 
 const AUDIENCES = [
   { value: "both", label: "Both" },
@@ -52,6 +53,7 @@ export default function ProjectStatusSection({ projectId }: { projectId: string 
   const { toast } = useToast();
 
   const { data: holds = [] } = useQuery<NarrativeHold[]>({ queryKey: [`/api/projects/${projectId}/narrative-holds`] });
+  const { data: project } = useQuery<any>({ queryKey: [`/api/projects/${projectId}`] });
   const { data: program } = useQuery<ProgramSchedule | null>({ queryKey: [`/api/projects/${projectId}/program-schedule`] });
   const { data: stageMap } = useQuery<StageProgressMap | null>({ queryKey: [`/api/projects/${projectId}/stage-progress-map`] });
 
@@ -176,6 +178,9 @@ export default function ProjectStatusSection({ projectId }: { projectId: string 
   return (
     <div className="mt-10">
       <h2 className="text-lg font-semibold mb-4">Project Status</h2>
+
+      {/* ===== 2.2 Bracket Action List (GRC only) ===== */}
+      {project?.bracketActions ? <BracketActionList projectId={projectId} project={project} /> : null}
 
       {/* ===== Narratives / Holds ===== */}
       <div className="mb-8">

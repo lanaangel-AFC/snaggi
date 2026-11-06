@@ -34,6 +34,8 @@ export const projects = sqliteTable("projects", {
   // NULL = never set: the report shows the standard "Technical Guidance & Method
   // Statements" as Appendix A. "[]" = no appendices.
   appendices: text("appendices"),
+  // Bracket Action List in 2.2 (switched on per project; GRC Fin Rectification only).
+  bracketActions: integer("bracket_actions").default(0),
   elevations: text("elevations").default("[]"), // JSON array of strings: selected elevation labels for this project
   customDrops: text("custom_drops").default("[]"), // JSON array of strings
   customLevels: text("custom_levels").default("[]"), // JSON array of strings
@@ -311,6 +313,24 @@ export const stageProgressMap = sqliteTable("stage_progress_map", {
   audience: text("audience").notNull().default("both"),
   updatedAt: text("updated_at"),
 });
+
+// 2.2 Bracket Action List rows (project-level, carried across inspections).
+// ID = the project's UID format applied to level/fin/bracket (GRC: 9.14-B).
+export const bracketActions = sqliteTable("bracket_actions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  level: text("level").notNull().default(""),
+  fin: text("fin").notNull().default(""),
+  bracket: text("bracket").notNull().default(""),
+  workType: text("work_type").notNull().default("SLT"),
+  condition: text("condition").notNull().default(""),
+  consultantInspection: integer("consultant_inspection").notNull().default(0), // 1 = Y
+  status: text("status").notNull().default("Open"), // Open | Pending | Closed
+  dateBy: text("date_by").default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
+});
+export type BracketAction = typeof bracketActions.$inferSelect;
 
 export const insertNarrativeHoldSchema = createInsertSchema(narrativeHolds).omit({ id: true });
 export const insertProgramScheduleSchema = createInsertSchema(programSchedule).omit({ id: true });

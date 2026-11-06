@@ -19,6 +19,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize,
+  bracketActionUid, isBracketActionOverdue, BRACKET_STATUS_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -489,7 +490,33 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   }
   h2("2.action");
   para("Based on our observations, we recommend the following actions.");
-  if (v2.actionList.length === 0) para("Nothing for this report.");
+  const brackets: any[] = tree.projectStatus.bracketActions || [];
+  if (brackets.length > 0) {
+    // Bracket Action List (GRC). 20 + 30 + 52.6 + 24 + 20 + 38 = 184.6 mm
+    h3("Bracket Action List", 24);
+    const wt = "SLT \u2013 Slot Lengthening";
+    const rows = brackets.map((r) => [bracketActionUid(data.project, r), r.workType === "SLT" ? wt : (r.workType || ""), r.condition || "\u2014", r.consultantInspection ? "Y" : "N", r.status || "Open", r.dateBy || "\u2014"]);
+    autoTable(doc, {
+      startY: y, head: [["ID", "Work Type", "Observed Condition", "Consultant Inspection", "Status", "Date By"]], body: rows,
+      margin: { left: margin, right: margin, top: TOP }, styles: tableStyles, headStyles: tableHead,
+      columnStyles: { 0: { cellWidth: 20, fontStyle: "bold" }, 1: { cellWidth: 30 }, 2: { cellWidth: 52.6 }, 3: { cellWidth: 24, halign: "center" }, 4: { cellWidth: 20 }, 5: { cellWidth: 38 } },
+      ...tableHook,
+      didParseCell: (h: any) => {
+        if (h.section === "head" && h.column.index === 3) h.cell.styles.halign = "center";
+        if (h.section === "body" && h.column.index === 4) h.cell.styles.textColor = BRACKET_STATUS_COLOURS[brackets[h.row.index]?.status] || 0;
+      },
+      didDrawCell: (h: any) => {
+        if (h.section !== "body" || h.column.index !== 5 || !isBracketActionOverdue(brackets[h.row.index])) return;
+        const base = Array.isArray(h.cell.text) ? h.cell.text.join("") : String(h.cell.text ?? "");
+        const pos = h.cell.getTextPos();
+        doc.setTextColor(...OVERDUE_RED);
+        doc.text(" - Overdue", pos.x + doc.getTextWidth(base), pos.y, { baseline: "top" });
+        doc.setTextColor(0);
+      },
+    });
+    afterTable();
+  }
+  if (v2.actionList.length === 0 && brackets.length === 0) para("Nothing for this report.");
   for (const g of v2.actionList) {
     if (g.kind === "summary") { summaryLine(g); continue; }
     h3(g.label, 24);

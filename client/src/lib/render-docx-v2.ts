@@ -17,6 +17,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize,
+  bracketActionUid, isBracketActionOverdue, BRACKET_STATUS_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -301,7 +302,28 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
     }
     c.push(h2("2.action"));
     c.push(para("Based on our observations, we recommend the following actions."));
-    if (v2.actionList.length === 0) c.push(para("Nothing for this report."));
+    const brackets: any[] = tree.projectStatus.bracketActions || [];
+    if (brackets.length > 0) {
+      // Bracket Action List (GRC), at the header/footer width.
+      c.push(h3("Bracket Action List"));
+      const wt = "SLT \u2013 Slot Lengthening";
+      const hex = (rgb: [number, number, number]) => rgb.map((n) => n.toString(16).padStart(2, "0")).join("").toUpperCase();
+      const W = [1134, 1701, 2982, 1361, 1134, 2154];
+      const rows: Cell[][] = brackets.map((r) => {
+        const date: any[] = [run(safeText(r.dateBy) || "\u2014", { size: 15 })];
+        if (isBracketActionOverdue(r)) date.push(run(" - Overdue", { size: 15, color: OVERDUE_RED }));
+        return [
+          bracketActionUid(data.project, r),
+          r.workType === "SLT" ? wt : safeText(r.workType),
+          safeText(r.condition) || "\u2014",
+          r.consultantInspection ? "Y" : "N",
+          [run(safeText(r.status) || "Open", { size: 15, color: hex(BRACKET_STATUS_COLOURS[r.status] || [0, 0, 0]) })],
+          date,
+        ];
+      });
+      c.push(gridTable(["ID", "Work Type", "Observed Condition", "Consultant Inspection", "Status", "Date By"], W, rows));
+    }
+    if (v2.actionList.length === 0 && brackets.length === 0) c.push(para("Nothing for this report."));
     for (const g of v2.actionList) {
       if (g.kind === "summary") { c.push(summaryLine(g)); continue; }
       c.push(h3(g.label));
