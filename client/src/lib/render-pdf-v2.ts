@@ -482,9 +482,10 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
     h2("2.progress");
     autoTable(doc, {
       startY: y,
-      body: [["Total", String(ps.total)], ["Open", String(ps.open)], ["Closed this period", String(ps.closedThisPeriod)], ["Overdue", String(ps.overdue)]],
+      body: [["Total", String(ps.total)], ["Open", String(ps.open)], ["Closed this period", String(ps.closedThisPeriod)], ["Overdue", String(ps.overdue)],
+        ...(ps.brackets ? [["Contractor records (open / pending / closed)", `${ps.brackets.open} / ${ps.brackets.pending} / ${ps.brackets.closed}`]] : [])],
       margin: { left: margin, right: margin, top: TOP }, styles: { font: FONT, fontSize: 9, cellPadding: 2, textColor: 0 },
-      columnStyles: { 0: { fontStyle: "bold", cellWidth: 60 }, 1: { cellWidth: 30 } }, theme: "grid", ...tableHook,
+      columnStyles: { 0: { fontStyle: "bold", cellWidth: ps.brackets ? 80 : 60 }, 1: { cellWidth: 30 } }, theme: "grid", ...tableHook,
     });
     afterTable(8); // space after the 2.1 table (change 5)
   }

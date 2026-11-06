@@ -368,6 +368,8 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS bracket_actions (
   created_at TEXT NOT NULL,
   updated_at TEXT
 )`);
+safeAddColumn("bracket_actions", "closed_at", "TEXT");
+try { sqlite.exec(`UPDATE bracket_actions SET closed_at = COALESCE(updated_at, created_at) WHERE status = 'Closed' AND closed_at IS NULL`); } catch { /* ignore */ }
 // Switch the Bracket Action List on for GRC Fin Rectification only (once).
 try {
   const k = "bracket_actions_enabled_grc";

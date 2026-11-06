@@ -442,7 +442,7 @@ export async function registerRoutes(
   const bracketRow = (r: any) => ({
     id: r.id, projectId: r.project_id, level: r.level, fin: r.fin, bracket: r.bracket,
     workType: r.work_type, condition: r.condition, consultantInspection: !!r.consultant_inspection,
-    status: r.status, dateBy: r.date_by || "", createdAt: r.created_at, updatedAt: r.updated_at,
+    status: r.status, dateBy: r.date_by || "", closedAt: r.closed_at || null, createdAt: r.created_at, updatedAt: r.updated_at,
   });
   const listBracketActions = (projectId: number) =>
     (sqlite.prepare(`SELECT * FROM bracket_actions WHERE project_id = ?`).all(projectId) as any[])
@@ -474,9 +474,9 @@ export async function registerRoutes(
     const err = validateBracket(projectId, b);
     if (err) return res.status(400).json({ message: err });
     const now = new Date().toISOString();
-    const info = sqlite.prepare(`INSERT INTO bracket_actions (project_id, level, fin, bracket, work_type, condition, consultant_inspection, status, date_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'SLT', ?, ?, ?, ?, ?, ?)`)
-      .run(projectId, b.level, b.fin, b.bracket, b.condition, body.consultantInspection ? 1 : 0, b.status, String(body.dateBy ?? ""), now, now);
+    const info = sqlite.prepare(`INSERT INTO bracket_actions (project_id, level, fin, bracket, work_type, condition, consultant_inspection, status, date_by, closed_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'SLT', ?, ?, ?, ?, ?, ?, ?)`)
+      .run(projectId, b.level, b.fin, b.bracket, b.condition, body.consultantInspection ? 1 : 0, b.status, String(body.dateBy ?? ""), b.status === "Closed" ? now : null, now, now);
     res.status(201).json(bracketRow(sqlite.prepare(`SELECT * FROM bracket_actions WHERE id = ?`).get(info.lastInsertRowid)));
   });
 
@@ -496,8 +496,10 @@ export async function registerRoutes(
     };
     const err = validateBracket(cur.project_id, next, id);
     if (err) return res.status(400).json({ message: err });
-    sqlite.prepare(`UPDATE bracket_actions SET level = ?, fin = ?, bracket = ?, condition = ?, status = ?, consultant_inspection = ?, date_by = ?, updated_at = ? WHERE id = ?`)
-      .run(next.level, next.fin, next.bracket, next.condition, next.status, next.consultant, next.dateBy, new Date().toISOString(), id);
+    const nowIso = new Date().toISOString();
+    const closedAt = next.status === "Closed" ? (cur.status === "Closed" ? (cur.closed_at || nowIso) : nowIso) : null;
+    sqlite.prepare(`UPDATE bracket_actions SET level = ?, fin = ?, bracket = ?, condition = ?, status = ?, consultant_inspection = ?, date_by = ?, closed_at = ?, updated_at = ? WHERE id = ?`)
+      .run(next.level, next.fin, next.bracket, next.condition, next.status, next.consultant, next.dateBy, closedAt, nowIso, id);
     res.json(bracketRow(sqlite.prepare(`SELECT * FROM bracket_actions WHERE id = ?`).get(id)));
   });
 
@@ -688,14 +690,34 @@ export async function registerRoutes(
       };
     });
 
+    // Bracket Action List rows (GRC): open items from the desktop review of contractor
+    // records. Live, not part of the snapshot: Open/Pending are outstanding, Closed is done.
+    const project: any = await storage.getProject(report.projectId);
+    const bracketItems = project?.bracketActions
+      ? listBracketActions(report.projectId).map((b) => {
+          const fmt = parseUidFormat(project.uidFormat);
+          const uid = fmt ? renderUid(fmt, { level: b.level, fin: b.fin, bracket: b.bracket }) : `${b.level}.${b.fin}-${b.bracket}`;
+          return {
+            id: -b.id, reportId, defectId: 0, bracketActionId: b.id, uid, groupKey: "records",
+            recordType: "bracket", comment: b.condition || "", actionText: "",
+            dueDate: b.dateBy || null, assignedTo: null, sourceReportId: null, sourceInspectionNumber: null,
+            doneAt: b.status === "Closed" ? (b.closedAt || b.updatedAt) : null,
+            doneReason: b.status === "Closed" ? "closed" : null,
+            liveStatus: null, linkReportId: reportId,
+            bracketStatus: b.status, consultantInspection: b.consultantInspection,
+          };
+        })
+      : [];
+    const all = [...items, ...bracketItems];
+
     res.json({
       reportId,
       inspectionNumber: report.inspectionNumber,
       inspectionDate: report.inspectionDate,
       generated: todos.length > 0,
-      total: items.length,
-      done: items.filter((i) => i.doneAt).length,
-      items,
+      total: all.length,
+      done: all.filter((i: any) => i.doneAt).length,
+      items: all,
     });
   });
 
@@ -1678,7 +1700,7 @@ export async function registerRoutes(
     const stageProgressMap = await storage.getStageProgressMap(project.id);
     res.json({
       project, report, defects: defectsWithPhotos, allProjectDefects,
-      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null, bracketActions: (project as any).bracketActions ? listBracketActions(project.id) : [] },
+      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null, bracketActions: (project as any).bracketActions ? listBracketActions(project.id) : [], bracketWindow: { start: windowStart, end: windowEnd } },
       // WP6: Project Instructions as they stood for this report (new projects only).
       projectInstructions: (project.featureVersion ?? 1) >= 2
         ? instructionsForReport(project.id, windowEnd).map((i) => ({ ...i, workTypeLabels: i.workTypes.map((c) => labelForWorkType(project, c)) }))
