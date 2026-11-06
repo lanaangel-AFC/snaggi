@@ -435,6 +435,77 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
+  // === 2.2 BRACKET ACTION LIST (projects with bracket_actions on; GRC only) ===
+  const BRACKET_CONDITIONS = ["Incomplete routing depth", "Required clearance not achieved", "Damage to bracket"];
+  const BRACKET_STATUSES = ["Open", "Pending", "Closed"];
+  const cleanPart = (v: unknown) => String(v ?? "").replace(/\s+/g, "").trim();
+  const bracketRow = (r: any) => ({
+    id: r.id, projectId: r.project_id, level: r.level, fin: r.fin, bracket: r.bracket,
+    workType: r.work_type, condition: r.condition, consultantInspection: !!r.consultant_inspection,
+    status: r.status, dateBy: r.date_by || "", createdAt: r.created_at, updatedAt: r.updated_at,
+  });
+  const listBracketActions = (projectId: number) =>
+    (sqlite.prepare(`SELECT * FROM bracket_actions WHERE project_id = ?`).all(projectId) as any[])
+      .map(bracketRow)
+      .sort((a, b) => [a.level, a.fin, a.bracket].join("|").localeCompare([b.level, b.fin, b.bracket].join("|"), undefined, { numeric: true }));
+  const validateBracket = (projectId: number, b: any, selfId?: number): string | null => {
+    if (!b.level || !b.fin || !b.bracket) return "Enter the Level, Fin and Bracket";
+    if (b.condition && !BRACKET_CONDITIONS.includes(b.condition)) return "Unknown observed condition";
+    if (b.status && !BRACKET_STATUSES.includes(b.status)) return "Status must be Open, Pending or Closed";
+    const dup = sqlite.prepare(`SELECT id FROM bracket_actions WHERE project_id = ? AND level = ? AND fin = ? AND bracket = ? AND id != ?`)
+      .get(projectId, b.level, b.fin, b.bracket, selfId ?? -1);
+    if (dup) return "That bracket is already in the Action List";
+    return null;
+  };
+
+  app.get("/api/projects/:id/bracket-actions", (req, res) => {
+    res.json(listBracketActions(Number(req.params.id)));
+  });
+
+  app.post("/api/projects/:id/bracket-actions", async (req, res) => {
+    const projectId = Number(req.params.id);
+    const project: any = await storage.getProject(projectId);
+    if (!project?.bracketActions) return res.status(400).json({ message: "The Bracket Action List isn't enabled for this project" });
+    const body = req.body || {};
+    const b = {
+      level: cleanPart(body.level), fin: cleanPart(body.fin), bracket: cleanPart(body.bracket).toUpperCase(),
+      condition: String(body.condition ?? ""), status: String(body.status ?? "Open"),
+    };
+    const err = validateBracket(projectId, b);
+    if (err) return res.status(400).json({ message: err });
+    const now = new Date().toISOString();
+    const info = sqlite.prepare(`INSERT INTO bracket_actions (project_id, level, fin, bracket, work_type, condition, consultant_inspection, status, date_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'SLT', ?, ?, ?, ?, ?, ?)`)
+      .run(projectId, b.level, b.fin, b.bracket, b.condition, body.consultantInspection ? 1 : 0, b.status, String(body.dateBy ?? ""), now, now);
+    res.status(201).json(bracketRow(sqlite.prepare(`SELECT * FROM bracket_actions WHERE id = ?`).get(info.lastInsertRowid)));
+  });
+
+  app.patch("/api/bracket-actions/:id", (req, res) => {
+    const id = Number(req.params.id);
+    const cur: any = sqlite.prepare(`SELECT * FROM bracket_actions WHERE id = ?`).get(id);
+    if (!cur) return res.status(404).json({ message: "Row not found" });
+    const body = req.body || {};
+    const next = {
+      level: body.level !== undefined ? cleanPart(body.level) : cur.level,
+      fin: body.fin !== undefined ? cleanPart(body.fin) : cur.fin,
+      bracket: body.bracket !== undefined ? cleanPart(body.bracket).toUpperCase() : cur.bracket,
+      condition: body.condition !== undefined ? String(body.condition ?? "") : cur.condition,
+      status: body.status !== undefined ? String(body.status) : cur.status,
+      consultant: body.consultantInspection !== undefined ? (body.consultantInspection ? 1 : 0) : cur.consultant_inspection,
+      dateBy: body.dateBy !== undefined ? String(body.dateBy ?? "") : cur.date_by,
+    };
+    const err = validateBracket(cur.project_id, next, id);
+    if (err) return res.status(400).json({ message: err });
+    sqlite.prepare(`UPDATE bracket_actions SET level = ?, fin = ?, bracket = ?, condition = ?, status = ?, consultant_inspection = ?, date_by = ?, updated_at = ? WHERE id = ?`)
+      .run(next.level, next.fin, next.bracket, next.condition, next.status, next.consultant, next.dateBy, new Date().toISOString(), id);
+    res.json(bracketRow(sqlite.prepare(`SELECT * FROM bracket_actions WHERE id = ?`).get(id)));
+  });
+
+  app.delete("/api/bracket-actions/:id", (req, res) => {
+    sqlite.prepare(`DELETE FROM bracket_actions WHERE id = ?`).run(Number(req.params.id));
+    res.status(204).end();
+  });
+
   // === PROJECT STATUS — Program/Schedule (single per project, upsert) ===
   app.get("/api/projects/:id/program-schedule", async (req, res) => {
     const prog = await storage.getProgramSchedule(Number(req.params.id));
@@ -1607,7 +1678,7 @@ export async function registerRoutes(
     const stageProgressMap = await storage.getStageProgressMap(project.id);
     res.json({
       project, report, defects: defectsWithPhotos, allProjectDefects,
-      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null },
+      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null, bracketActions: (project as any).bracketActions ? listBracketActions(project.id) : [] },
       // WP6: Project Instructions as they stood for this report (new projects only).
       projectInstructions: (project.featureVersion ?? 1) >= 2
         ? instructionsForReport(project.id, windowEnd).map((i) => ({ ...i, workTypeLabels: i.workTypes.map((c) => labelForWorkType(project, c)) }))

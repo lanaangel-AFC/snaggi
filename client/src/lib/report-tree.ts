@@ -238,6 +238,8 @@ export type ReportTree = {
     narratives: any[];
     program: any | null;
     stageMap: any | null;
+    // 2.2 Bracket Action List rows (GRC only; empty elsewhere). Shown to both audiences.
+    bracketActions?: any[];
     empty: boolean; // true => render header + "Nothing for this report"
   };
 
@@ -684,7 +686,7 @@ export function buildReportTree(
     project: data?.project,
     report: data?.report,
     actionList: { groups: actionGroups },
-    projectStatus: { narratives, program, stageMap, empty: projectStatusEmpty },
+    projectStatus: { narratives, program, stageMap, bracketActions: Array.isArray(ps.bracketActions) ? ps.bracketActions : [], empty: projectStatusEmpty },
     progressSummary,
     thisInspection: { new: tiNew, amended: tiAmended, completed: tiCompleted, empty: tiEmpty },
     carriedForward: { groups: carriedGroups, empty: carriedGroups.length === 0 },

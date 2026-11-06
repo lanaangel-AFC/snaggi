@@ -353,6 +353,31 @@ safeAddColumn("projects", "background_docs", "TEXT DEFAULT '[]'");
 safeAddColumn("projects", "area_ref_template", "TEXT DEFAULT ''");
 safeAddColumn("projects", "uid_format", "TEXT DEFAULT ''");
 safeAddColumn("projects", "appendices", "TEXT");
+safeAddColumn("projects", "bracket_actions", "INTEGER DEFAULT 0");
+sqlite.exec(`CREATE TABLE IF NOT EXISTS bracket_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  level TEXT NOT NULL DEFAULT '',
+  fin TEXT NOT NULL DEFAULT '',
+  bracket TEXT NOT NULL DEFAULT '',
+  work_type TEXT NOT NULL DEFAULT 'SLT',
+  condition TEXT NOT NULL DEFAULT '',
+  consultant_inspection INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'Open',
+  date_by TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+)`);
+// Switch the Bracket Action List on for GRC Fin Rectification only (once).
+try {
+  const k = "bracket_actions_enabled_grc";
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+  const done = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`).get(k) as any;
+  if (!done) {
+    sqlite.prepare(`UPDATE projects SET bracket_actions = 1 WHERE name = 'GRC Fin Rectification'`).run();
+    sqlite.prepare(`INSERT INTO meta (key, value) VALUES (?, '1')`).run(k);
+  }
+} catch (err) { console.warn("bracket_actions enable skipped:", err); }
 
 // §2.3 spec — frozen snapshot of project-setup data captured at report creation,
 // preserved across revisions. NULL for legacy reports (renderers fall back to the
