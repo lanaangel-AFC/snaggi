@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, CheckCircle2, Circle, AlertTriangle, ChevronRight,
-  ListChecks, Loader2, History, CalendarClock,
+  ListChecks, Loader2, History, CalendarClock, FileSearch,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import type { Report } from "@shared/schema";
@@ -17,7 +17,7 @@ type TodoItem = {
   reportId: number;
   defectId: number;
   uid: string;
-  groupKey: "due" | "open" | "stranded";
+  groupKey: "due" | "open" | "stranded" | "records";
   recordType: string;
   comment: string;
   actionText: string;
@@ -29,6 +29,10 @@ type TodoItem = {
   doneReason: string | null;
   liveStatus: string | null;
   linkReportId: number;
+  // Bracket Action List rows (GRC) only:
+  bracketActionId?: number;
+  bracketStatus?: string;
+  consultantInspection?: boolean;
 };
 
 type TodoResponse = {
@@ -59,6 +63,12 @@ const GROUPS: Array<{ key: TodoItem["groupKey"]; title: string; blurb: string; i
     title: "Carried over from earlier inspections",
     blurb: "Still open in an earlier inspection and never carried into this one.",
     icon: History,
+  },
+  {
+    key: "records",
+    title: "Contractor records review",
+    blurb: "Brackets from the desktop review of submitted contractor records. Set a bracket to Closed in the Bracket Action List to tick it off.",
+    icon: FileSearch,
   },
 ];
 
@@ -116,6 +126,7 @@ export default function InspectionTodos() {
   }, [visible, items]);
 
   const openForm = (item: TodoItem) => {
+    if (item.groupKey === "records") { navigate(`/projects/${projectId}`); return; }
     navigate(`/projects/${projectId}/reports/${item.linkReportId}/defects/${item.defectId}`);
   };
 
@@ -195,7 +206,7 @@ export default function InspectionTodos() {
           </div>
         )}
 
-        {!isLoading && total === 0 && (
+        {!isLoading && data && !data.generated && (
           <Card className="p-6 text-center">
             <ListChecks className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
             <p className="font-medium">No to-do list for this inspection yet</p>
@@ -265,6 +276,14 @@ export default function InspectionTodos() {
                             <span className={`font-mono text-sm font-semibold ${isDone ? "line-through" : ""}`}>
                               {item.uid}
                             </span>
+                            {item.bracketStatus && (
+                              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${item.bracketStatus === "Pending" ? "text-blue-600 border-blue-300" : item.bracketStatus === "Closed" ? "text-green-700 border-green-300" : "text-amber-600 border-amber-300"}`}>
+                                {item.bracketStatus}
+                              </Badge>
+                            )}
+                            {item.consultantInspection && (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Consultant inspection</Badge>
+                            )}
                             {item.recordType === "observation" && (
                               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Observation</Badge>
                             )}
@@ -301,7 +320,7 @@ export default function InspectionTodos() {
 
                           {isDone && (
                             <p className="text-xs text-green-700 dark:text-green-500 mt-1.5">
-                              {item.doneReason === "completed" ? "Closed out" : "Updated"} in this inspection
+                              {item.doneReason === "closed" ? "Closed in the Bracket Action List" : <>{item.doneReason === "completed" ? "Closed out" : "Updated"} in this inspection</>}
                               {item.liveStatus === "complete" ? " · record complete" : ""}
                             </p>
                           )}

@@ -212,6 +212,8 @@ export type ProgressSummary = {
   closedThisPeriod: number;
   overdue: number;
   total: number;
+  // Bracket Action List (GRC) breakdown, included in the counts above. Absent elsewhere.
+  brackets?: { open: number; pending: number; closed: number };
 };
 
 export type AppendixMode = "full" | "reference";
@@ -634,6 +636,29 @@ export function buildReportTree(
       if (ds === "Closed" && closedOnThisReport(d)) closedThisPeriod++;
     }
     progressSummary = { open, closedThisPeriod, overdue, total: includedDefects.length };
+
+    // Bracket Action List (GRC): open items from the desktop review of contractor records.
+    // Open and Pending count as open; Closed counts as closed this period when it was
+    // closed within this inspection's window (same window as the records above).
+    const bracketRows: any[] = Array.isArray(data?.projectStatus?.bracketActions) ? data.projectStatus.bracketActions : [];
+    if (bracketRows.length > 0) {
+      const win = data?.projectStatus?.bracketWindow || {};
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const b = { open: 0, pending: 0, closed: 0 };
+      for (const r of bracketRows) {
+        if (r.status === "Closed") {
+          b.closed++;
+          const at = String(r.closedAt || "");
+          if (at && (!win.start || at >= win.start) && (!win.end || at < win.end)) progressSummary.closedThisPeriod++;
+        } else {
+          if (r.status === "Pending") b.pending++; else b.open++;
+          progressSummary.open++;
+          if (r.dateBy && String(r.dateBy) < todayIso) progressSummary.overdue++;
+        }
+      }
+      progressSummary.total += bracketRows.length;
+      progressSummary.brackets = b;
+    }
   }
 
   // ---- Appendix mode ----

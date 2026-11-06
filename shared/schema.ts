@@ -327,6 +327,7 @@ export const bracketActions = sqliteTable("bracket_actions", {
   consultantInspection: integer("consultant_inspection").notNull().default(0), // 1 = Y
   status: text("status").notNull().default("Open"), // Open | Pending | Closed
   dateBy: text("date_by").default(""),
+  closedAt: text("closed_at"), // set when status becomes Closed, cleared if reopened
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at"),
 });

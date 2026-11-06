@@ -292,9 +292,10 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
       const ps = tree.progressSummary;
       c.push(h2("2.progress"));
       c.push(new Table({
-        width: { size: 4600, type: WidthType.DXA }, columnWidths: [3000, 1600], layout: TableLayoutType.FIXED,
-        rows: ([["Total", ps.total], ["Open", ps.open], ["Closed this period", ps.closedThisPeriod], ["Overdue", ps.overdue]] as Array<[string, number]>).map(([l, v]) => new TableRow({ children: [
-          new TableCell({ width: { size: 3000, type: WidthType.DXA }, borders: { ...noBorders, bottom: thinBorder }, children: [new Paragraph({ spacing: { before: 40, after: 40 }, children: [run(l, { bold: true, size: 18 })] })] }),
+        width: { size: ps.brackets ? 5600 : 4600, type: WidthType.DXA }, columnWidths: [ps.brackets ? 4000 : 3000, 1600], layout: TableLayoutType.FIXED,
+        rows: ([["Total", ps.total], ["Open", ps.open], ["Closed this period", ps.closedThisPeriod], ["Overdue", ps.overdue],
+          ...(ps.brackets ? [["Contractor records (open / pending / closed)", `${ps.brackets.open} / ${ps.brackets.pending} / ${ps.brackets.closed}`]] : [])] as Array<[string, number | string]>).map(([l, v]) => new TableRow({ children: [
+          new TableCell({ width: { size: ps.brackets ? 4000 : 3000, type: WidthType.DXA }, borders: { ...noBorders, bottom: thinBorder }, children: [new Paragraph({ spacing: { before: 40, after: 40 }, children: [run(l, { bold: true, size: 18 })] })] }),
           new TableCell({ width: { size: 1600, type: WidthType.DXA }, borders: { ...noBorders, bottom: thinBorder }, children: [new Paragraph({ spacing: { before: 40, after: 40 }, children: [run(String(v), { size: 18 })] })] }),
         ] })),
       }));
