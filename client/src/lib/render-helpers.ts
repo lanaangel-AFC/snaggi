@@ -516,3 +516,12 @@ export function isBracketActionOverdue(r: any): boolean {
 export const BRACKET_STATUS_COLOURS: Record<string, [number, number, number]> = {
   Open: [200, 150, 0], Pending: [37, 99, 235], Closed: [34, 139, 34],
 };
+
+// Project Narrative figures: JSON [{filename, caption}] → list with a filename.
+export function narrativeFigures(n: any): Array<{ filename: string; caption: string }> {
+  let v: any = n?.figures;
+  if (typeof v === "string") { try { v = JSON.parse(v || "[]"); } catch { v = []; } }
+  return (Array.isArray(v) ? v : [])
+    .map((f: any) => ({ filename: String(f?.filename || ""), caption: String(f?.caption || "").trim() }))
+    .filter((f) => f.filename);
+}
