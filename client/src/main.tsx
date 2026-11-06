@@ -10,7 +10,16 @@ createRoot(document.getElementById("root")!).render(<App />);
 
 // Register service worker for PWA
 if ('serviceWorker' in navigator) {
+  // When a new version's service worker takes over an already-controlled page, reload
+  // once so the new app code is used straight away (not on the following open).
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    window.location.reload();
+  });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js').then((reg) => reg.update()).catch(() => {});
   });
 }
