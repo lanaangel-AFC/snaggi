@@ -339,7 +339,10 @@ function readUidFormatDraft(value: string): { pattern: string; parts: UidPartDra
 }
 
 function writeUidFormatDraft(pattern: string, parts: UidPartDraft[]): string {
-  if (!pattern.trim() && parts.every((p) => !p.label.trim())) return "";
+  // Empty only when there is nothing at all. A freshly added part has a blank label, so
+  // treating "all labels blank" as empty threw the new row away and Add part did nothing.
+  // Blank parts are harmless when saved: parseUidFormat ignores them.
+  if (!pattern.trim() && parts.length === 0) return "";
   return JSON.stringify({
     pattern,
     parts: parts.map((p) => ({
