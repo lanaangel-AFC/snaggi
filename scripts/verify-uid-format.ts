@@ -1,6 +1,6 @@
 // Checks for project UID formats (shared/uid-format.ts) and their report wording.
 // Run: npx tsx scripts/verify-uid-format.ts
-import { parseUidFormat, renderUid, describeUidFormat, parseUidWithFormat, isUidComplete, exampleUid } from "../shared/uid-format";
+import { parseUidFormat, renderUid, describeUidFormat, parseUidWithFormat, isUidComplete, exampleUid, uidValues } from "../shared/uid-format";
 import { uidNomenclatureSentence, sortByUid, workTypeLabelFor, areaRefFor } from "../client/src/lib/render-helpers";
 import { formatLocation } from "../shared/location";
 
@@ -51,6 +51,22 @@ const sorted = [rec("10.2-A", {}), rec("9.14-B", {}), rec("9.2-C", {}), rec("9.1
 check("natural sort", sorted.join(",") === "9.2-C,9.14-A,9.14-B,10.2-A", sorted);
 const legacy = [{ uid: "E-05-07-OT-02", workTypeCode: "OT" }, { uid: "E-05-07-OT-01", workTypeCode: "OT" }].sort(sortByUid).map((r) => r.uid);
 check("standard sort unchanged", legacy.join(",") === "E-05-07-OT-01,E-05-07-OT-02", legacy);
+
+// Work type placeholder and default pattern (IGU-style: one part, then work type).
+const igu = parseUidFormat(JSON.stringify({ pattern: "", parts: [{ key: "windownumber", label: "Window Number", options: [] }] }))!;
+check("empty pattern defaults to parts + work type", !!igu && igu.pattern === "{windownumber}-{worktype}", igu);
+check("window + work type", renderUid(igu, uidValues({ windownumber: "W12" }, "GL")) === "W12-GL");
+check("no work type yet", renderUid(igu, uidValues({ windownumber: "W12" }, "")) === "W12");
+check("igu description", describeUidFormat(igu) === "Window Number-Work type", describeUidFormat(igu));
+check("igu example", exampleUid(igu) === "1-GL", exampleUid(igu));
+check("read back ignores work type", JSON.stringify(parseUidWithFormat(igu, "W12-GL")) === JSON.stringify({ windownumber: "W12" }), parseUidWithFormat(igu, "W12-GL"));
+const pre = parseUidFormat(JSON.stringify({ pattern: "W{window}-{worktype}", parts: [{ label: "Window" }] }))!;
+check("literal prefix", renderUid(pre, uidValues({ window: "12" }, "SE")) === "W12-SE");
+check("GRC unchanged with work type value", renderUid(grc, uidValues({ level: "9", fin: "14", bracket: "B" }, "SLT")) === "9.14-B");
+check("only work type in pattern = standard UID", parseUidFormat(JSON.stringify({ pattern: "{worktype}", parts: [{ label: "Fin" }] })) === null);
+check("no parts, empty pattern = standard UID", parseUidFormat(JSON.stringify({ pattern: "", parts: [] })) === null);
+const s3 = uidNomenclatureSentence({ uidFormat: JSON.stringify({ pattern: "", parts: [{ label: "Window Number" }] }) }, [rec("W12-GL", { windownumber: "W12" }, "GL")]);
+check("1.5 wording with work type", s3 === "The UID comprises the following components: Window Number-Work type. For example, W12-GL refers to Window Number W12.", s3);
 
 console.log(`\n${pass}/${pass + fail} passed`);
 if (fail) process.exit(1);

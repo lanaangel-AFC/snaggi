@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 import { parseAppendices, appendixLetter } from "@shared/appendices";
-import { parseUidFormat, describeUidFormat, exampleUid, partKeyFromLabel } from "@shared/uid-format";
+import { parseUidFormat, describeUidFormat, exampleUid, partKeyFromLabel, defaultUidPattern, WORK_TYPE_TOKEN } from "@shared/uid-format";
 import { useMemo } from "react";
 
 // ---- helpers ---------------------------------------------------------------
@@ -363,7 +363,9 @@ export function UidFormatEditor({ value, onChange }: { value: string; onChange: 
     update(draft.pattern, parts);
   };
   const tokens = draft.parts.map((p) => partKeyFromLabel(p.label)).filter(Boolean);
-  const unused = tokens.filter((k) => !draft.pattern.includes(`{${k}}`));
+  // Compare against the pattern in effect (an empty pattern means the default, which uses every part).
+  const effectivePattern = draft.pattern.trim() || defaultUidPattern(tokens);
+  const unused = tokens.filter((k) => !effectivePattern.includes(`{${k}}`));
   return (
     <div data-testid="uid-format-editor">
       <Label className="mb-2 block">Record UID format</Label>
@@ -376,7 +378,7 @@ export function UidFormatEditor({ value, onChange }: { value: string; onChange: 
       </p>
       <div className="space-y-2">
         {draft.parts.map((p, i) => (
-          <div key={i} className="grid grid-cols-[7rem_1fr_auto] gap-2 items-center">
+          <div key={i} className="grid grid-cols-[10rem_1fr_auto] gap-2 items-center">
             <Input
               placeholder="Part (e.g. Fin)"
               value={p.label}
@@ -408,19 +410,21 @@ export function UidFormatEditor({ value, onChange }: { value: string; onChange: 
           <div className="flex gap-2">
             <Input
               className="font-mono"
-              placeholder={tokens.map((k) => `{${k}}`).join("-") || "{level}.{fin}-{bracket}"}
+              placeholder={defaultUidPattern(tokens) || "{level}.{fin}-{bracket}"}
               value={draft.pattern}
               onChange={(e) => update(e.target.value, draft.parts)}
               data-testid="input-uid-pattern"
             />
             <Button type="button" variant="outline" size="sm"
-              onClick={() => update(tokens.map((k) => `{${k}}`).join("-"), draft.parts)}>
+              onClick={() => update(defaultUidPattern(tokens), draft.parts)}>
               Fill
             </Button>
           </div>
           <p className="text-xs text-muted-foreground mt-1">
             Placeholders: {tokens.map((k) => <code key={k} className="mr-1">{`{${k}}`}</code>)}
-            Anything else is typed as-is, e.g. <code>.</code> or <code>-</code>.
+            <code className="mr-1">{`{${WORK_TYPE_TOKEN}}`}</code> (the record's work type).
+            Anything else is typed as-is, e.g. <code>.</code>, <code>-</code> or a prefix like <code>W</code>.
+            Leave the pattern empty to use <code>{defaultUidPattern(tokens) || "the parts"}</code>.
           </p>
           {fmt ? (
             <p className="mt-1 text-xs">
