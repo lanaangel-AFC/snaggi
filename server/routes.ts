@@ -994,7 +994,12 @@ export async function registerRoutes(
     }
 
     const now = new Date().toISOString();
-    if (updates.comment !== undefined && updates.comment !== existing.comment && existing.comment?.trim()) {
+    // Autosave sends a PATCH after every pause in typing. Keep one "previous wording"
+    // row per inspection (the wording before this inspection's first change; it drives
+    // the "Observation amended" marker) instead of one row per save.
+    const obsLoggedHere = existing.reportId != null && (await storage.getObservationHistory(defectId)).some((h) => h.reportId === existing.reportId);
+    const actLoggedHere = existing.reportId != null && (await storage.getActionHistory(defectId)).some((h) => h.reportId === existing.reportId);
+    if (updates.comment !== undefined && updates.comment !== existing.comment && existing.comment?.trim() && !obsLoggedHere) {
       await storage.createObservationHistory({
         defectId,
         reportId: existing.reportId!,
@@ -1002,7 +1007,7 @@ export async function registerRoutes(
         createdAt: now,
       });
     }
-    if (updates.actionRequired !== undefined && updates.actionRequired !== existing.actionRequired && existing.actionRequired?.trim()) {
+    if (updates.actionRequired !== undefined && updates.actionRequired !== existing.actionRequired && existing.actionRequired?.trim() && !actLoggedHere) {
       await storage.createActionHistory({
         defectId,
         reportId: existing.reportId!,
@@ -1337,10 +1342,17 @@ export async function registerRoutes(
     const ageOf = (rid: number | null | undefined): "current" | "prior" =>
       currentReportId != null && rid === currentReportId ? "current" : "prior";
 
+    // Previous wording saved during the record's own inspection is edit bookkeeping
+    // (autosave), not history: the current text is in the field. Only wording from
+    // earlier inspections is listed.
+    const ownReport = defect.reportId ?? null;
+    const shown = (rid: number | null | undefined) => ownReport == null || rid !== ownReport;
     for (const h of obs) {
+      if (!shown(h.reportId)) continue;
       entries.push({ kind: "observation", date: h.createdAt, inspectionNumber: inspNum(h.reportId), author: defaultAuthor, text: h.text, age: ageOf(h.reportId), reportId: h.reportId ?? null });
     }
     for (const h of act) {
+      if (!shown(h.reportId)) continue;
       entries.push({ kind: "action", date: h.createdAt, inspectionNumber: inspNum(h.reportId), author: defaultAuthor, text: h.text, age: ageOf(h.reportId), reportId: h.reportId ?? null });
     }
     for (const n of notes) {
