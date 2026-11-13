@@ -28,6 +28,18 @@ export interface UidFormat {
 
 export type UidPartValues = Record<string, string | null | undefined>;
 
+// Reserved placeholder for the record's work type code (e.g. GL), so a project can
+// end its UID with the work type the way the standard UID does: "{window}-{worktype}".
+export const WORK_TYPE_TOKEN = "worktype";
+
+// Pattern used when parts are set but no pattern is typed: the parts joined with "-",
+// then the work type, matching the standard UID's order (location, then work type).
+export function defaultUidPattern(keys: string[]): string {
+  const ks = keys.filter((k) => k && k !== WORK_TYPE_TOKEN);
+  if (ks.length === 0) return "";
+  return [...ks, WORK_TYPE_TOKEN].map((k) => `{${k}}`).join("-");
+}
+
 // Turn a label into a pattern key: "Fin no." → "finno".
 export function partKeyFromLabel(label: string): string {
   return String(label || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -55,7 +67,9 @@ export function parseUidFormat(raw: unknown): UidFormat | null {
     })
     .filter((p: UidFormatPart) => p.key !== "");
   if (parts.length === 0) return null;
-  const pattern = String(obj.pattern ?? "").trim();
+  // An empty pattern means "use the default", not "no format": someone who has set up
+  // parts expects them to be used.
+  const pattern = String(obj.pattern ?? "").trim() || defaultUidPattern(parts.map((p) => p.key));
   if (!pattern || !parts.some((p) => pattern.includes(`{${p.key}}`))) return null;
   return { pattern, parts };
 }
@@ -78,17 +92,26 @@ function tokenize(pattern: string): Token[] {
 
 const clean = (v: unknown) => String(v ?? "").trim();
 
+// Values for renderUid: the record's location parts plus its work type code. A part
+// that happens to be called "worktype" wins over the work type column.
+export function uidValues(parts: UidPartValues, workTypeCode: unknown): UidPartValues {
+  return { [WORK_TYPE_TOKEN]: String(workTypeCode ?? "").trim(), ...parts };
+}
+
 // Build the UID from part values. A blank part is skipped together with the
 // separator in front of it, so Level 9 / Fin 14 with no bracket gives "9.14".
 export function renderUid(fmt: UidFormat, values: UidPartValues): string {
   const tokens = tokenize(fmt.pattern);
   let out = "";
   let pendingLit = "";
+  let seenPart = false; // text before the first placeholder is a prefix (e.g. "W"), not a separator
   for (const t of tokens) {
     if (t.kind === "lit") { pendingLit += t.text; continue; }
     const v = clean(values?.[t.key]);
+    const lead = out || !seenPart ? pendingLit : "";
+    seenPart = true;
     if (!v) { pendingLit = ""; continue; }
-    out += (out ? pendingLit : "") + v;
+    out += lead + v;
     pendingLit = "";
   }
   return out;
@@ -102,7 +125,7 @@ export function isUidComplete(fmt: UidFormat, values: UidPartValues): boolean {
 // The pattern with labels in place of keys, for the report and setup screen:
 // "{level}.{fin}-{bracket}" → "Level.Fin-Bracket".
 export function describeUidFormat(fmt: UidFormat): string {
-  const labels = new Map(fmt.parts.map((p) => [p.key, p.label]));
+  const labels = new Map<string, string>([[WORK_TYPE_TOKEN, "Work type"], ...fmt.parts.map((p) => [p.key, p.label] as [string, string])]);
   return tokenize(fmt.pattern)
     .map((t) => (t.kind === "lit" ? t.text : labels.get(t.key) || t.key))
     .join("");
@@ -111,6 +134,7 @@ export function describeUidFormat(fmt: UidFormat): string {
 // Example UID using the first pick-list value of each part (or a placeholder).
 export function exampleUid(fmt: UidFormat): string {
   const sample: Record<string, string> = {};
+  sample[WORK_TYPE_TOKEN] = "GL";
   fmt.parts.forEach((p, i) => { sample[p.key] = p.options[0] || String(i + 1); });
   return renderUid(fmt, sample);
 }
@@ -139,6 +163,8 @@ export function parseUidWithFormat(fmt: UidFormat, uid: string): Record<string, 
   const m = new RegExp(src).exec(String(uid || "").trim());
   if (!m) return null;
   const out: Record<string, string> = {};
-  keys.forEach((k, i) => { out[k] = m[i + 1]; });
+  const partKeys = new Set(fmt.parts.map((p) => p.key));
+  // The work type is a column of its own, not a location part.
+  keys.forEach((k, i) => { if (partKeys.has(k)) out[k] = m[i + 1]; });
   return out;
 }

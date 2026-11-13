@@ -11,7 +11,7 @@ import {
 } from "./action-summary";
 import { insertProjectSchema, insertDefectSchema, insertReportSchema, insertElevationSchema, insertMarkerSchema, insertDefectLocationSchema } from "@shared/schema";
 import { getLocationDimensions, parseLocationStructured } from "@shared/location";
-import { parseUidFormat, renderUid, describeUidFormat, type UidFormat } from "@shared/uid-format";
+import { parseUidFormat, renderUid, describeUidFormat, uidValues, type UidFormat } from "@shared/uid-format";
 import {
   listInstructions, getInstruction, createInstruction, updateInstruction, deleteInstruction,
   getInstructionHistory, setInstructionPhotos, validateInstruction, instructionsForReport,
@@ -853,7 +853,7 @@ export async function registerRoutes(
         req.body.levelCode = null;
         req.body.seqNumber = null;
         if (!wantsNote) {
-          fmtUid = renderUid(uidFmt, parts);
+          fmtUid = renderUid(uidFmt, uidValues(parts, req.body.workTypeCode));
           if (!fmtUid) return res.status(400).json({ message: uidFormatMissingMessage(uidFmt) });
         }
       }
@@ -923,14 +923,15 @@ export async function registerRoutes(
 
     // Formatted project: keep location parts tidy and rebuild the UID from them.
     const patchFmt = parseUidFormat((await storage.getProject(existing.projectId) as any)?.uidFormat);
-    if (patchFmt && (updates.locationStructured !== undefined || updates.uid !== undefined)) {
+    const patchWorkType = updates.workTypeCode !== undefined ? updates.workTypeCode : existing.workTypeCode;
+    if (patchFmt && (updates.locationStructured !== undefined || updates.uid !== undefined || updates.workTypeCode !== undefined)) {
       const parts = uidFormatParts(patchFmt, updates.locationStructured !== undefined ? updates.locationStructured : existing.locationStructured);
       updates.locationStructured = JSON.stringify(parts);
       updates.elevationCode = null;
       updates.dropCode = null;
       updates.levelCode = null;
       updates.seqNumber = null;
-      const rendered = renderUid(patchFmt, parts);
+      const rendered = renderUid(patchFmt, uidValues(parts, patchWorkType));
       if (rendered) updates.uid = rendered; else delete updates.uid;
     }
 
@@ -959,7 +960,7 @@ export async function registerRoutes(
         // No -> Yes: assign a full UID from the record's location parts.
         if (patchFmt) {
           const parts = uidFormatParts(patchFmt, updates.locationStructured !== undefined ? updates.locationStructured : existing.locationStructured);
-          const fuid = renderUid(patchFmt, parts);
+          const fuid = renderUid(patchFmt, uidValues(parts, patchWorkType));
           if (!fuid) return res.status(400).json({ message: uidFormatMissingMessage(patchFmt) });
           const inRep = existing.reportId ? await storage.getDefectsByReport(existing.reportId) : [];
           if (inRep.some((d) => d.id !== existing.id && d.uid === fuid)) {

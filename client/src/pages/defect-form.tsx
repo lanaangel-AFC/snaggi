@@ -17,7 +17,7 @@ import { DictationButton } from "@/components/DictationButton";
 import type { Defect, Photo, Project, Elevation, DefectLocation } from "@shared/schema";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { typeWords, usesRecordWording } from "@/lib/wording";
-import { parseUidFormat, renderUid, parseUidWithFormat } from "@shared/uid-format";
+import { parseUidFormat, renderUid, parseUidWithFormat, uidValues } from "@shared/uid-format";
 import { parseLocationStructured } from "@shared/location";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -643,7 +643,7 @@ export default function DefectForm() {
   // Legacy (no template):          Elevation - Drop - Level - WorkType
   const uidFmt = useMemo(() => parseUidFormat((project as any)?.uidFormat), [(project as any)?.uidFormat]);
   const uidPrefix = useMemo(() => {
-    if (uidFmt) return renderUid(uidFmt, uidPartValues);
+    if (uidFmt) return renderUid(uidFmt, uidValues(uidPartValues, workType));
     if (areaRefTemplate) {
       const segments = [areaRef, workType || ""].filter((s) => s !== "");
       return segments.join("-");
@@ -660,7 +660,7 @@ export default function DefectForm() {
   // Full assembled UID — includes seq number if present.
   // New convention: {AreaRef}-{WorkItem}-{Seq#}.  Legacy: 5-part.
   const assembledUid = useMemo(() => {
-    if (uidFmt) return renderUid(uidFmt, uidPartValues);
+    if (uidFmt) return renderUid(uidFmt, uidValues(uidPartValues, workType));
     if (areaRefTemplate) {
       const segments = [
         areaRef,
@@ -1610,7 +1610,9 @@ export default function DefectForm() {
           <p className="text-xs text-muted-foreground">
             {isNote
               ? "Location of this note. The note keeps its own reference."
-              : "Pick from the list or type a value. The UID is built from these parts; work type is recorded but isn't part of the UID."}
+              : uidFmt.pattern.includes("{worktype}")
+                ? "Pick from the list or type a value. The UID is built from these parts and the work type."
+                : "Pick from the list or type a value. The UID is built from these parts; work type is recorded but isn't part of the UID."}
           </p>
           </>) : (<>
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">

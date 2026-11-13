@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { formatLocation, getLocationDimensions, parseLocationStructured } from "@shared/location";
-import { parseUidFormat, describeUidFormat, renderUid, isUidComplete } from "@shared/uid-format";
+import { parseUidFormat, describeUidFormat, renderUid, isUidComplete, uidValues } from "@shared/uid-format";
 
 // API base — mirrors the convention used elsewhere in the client.
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -475,16 +475,17 @@ export function uidNomenclatureSentence(project: any, records: any[] = []): stri
   if (!fmt) return "The UID comprises the following components: Area Ref \u2013 Work item \u2013 Sequential identifier.";
   let sentence = `The UID comprises the following components: ${describeUidFormat(fmt)}.`;
   let sample: Record<string, any> | null = null;
+  let sampleWorkType = "";
   for (const r of records || []) {
     const loc = parseLocationStructured(r?.locationStructured);
-    if (isUidComplete(fmt, loc)) { sample = loc; break; }
+    if (isUidComplete(fmt, loc)) { sample = loc; sampleWorkType = String(r?.workTypeCode || ""); break; }
   }
   if (!sample && fmt.parts.every((p) => p.options.length > 0)) {
     sample = Object.fromEntries(fmt.parts.map((p) => [p.key, p.options[0]]));
   }
   if (sample) {
     const parts = fmt.parts.map((p) => `${p.label} ${String(sample![p.key]).trim()}`).join(", ");
-    sentence += ` For example, ${renderUid(fmt, sample)} refers to ${parts}.`;
+    sentence += ` For example, ${renderUid(fmt, uidValues(sample, sampleWorkType))} refers to ${parts}.`;
   }
   return sentence;
 }
