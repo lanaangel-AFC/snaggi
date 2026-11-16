@@ -370,6 +370,18 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS bracket_actions (
 )`);
 safeAddColumn("bracket_actions", "closed_at", "TEXT");
 try { sqlite.exec(`UPDATE bracket_actions SET closed_at = COALESCE(updated_at, created_at) WHERE status = 'Closed' AND closed_at IS NULL`); } catch { /* ignore */ }
+// Bracket Record Review (GRC): which contractor bracket records were reviewed and the
+// outcome. Project-level; the report lists those recorded in its period (2.2).
+sqlite.exec(`CREATE TABLE IF NOT EXISTS bracket_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  level TEXT NOT NULL DEFAULT '',
+  bracket TEXT NOT NULL DEFAULT '',
+  date_submitted TEXT DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+)`);
 // Switch the Bracket Action List on for GRC Fin Rectification only (once).
 try {
   const k = "bracket_actions_enabled_grc";

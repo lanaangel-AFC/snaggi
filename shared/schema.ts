@@ -333,6 +333,19 @@ export const bracketActions = sqliteTable("bracket_actions", {
 });
 export type BracketAction = typeof bracketActions.$inferSelect;
 
+// Bracket Record Review rows (GRC): contractor bracket records reviewed and the outcome.
+export const bracketReviews = sqliteTable("bracket_reviews", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  level: text("level").notNull().default(""),
+  bracket: text("bracket").notNull().default(""),
+  dateSubmitted: text("date_submitted").default(""),
+  outcome: text("outcome").notNull().default(""), // Acceptable | Requires rectification
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"),
+});
+export type BracketReview = typeof bracketReviews.$inferSelect;
+
 export const insertNarrativeHoldSchema = createInsertSchema(narrativeHolds).omit({ id: true });
 export const insertProgramScheduleSchema = createInsertSchema(programSchedule).omit({ id: true });
 export const insertStageProgressMapSchema = createInsertSchema(stageProgressMap).omit({ id: true });

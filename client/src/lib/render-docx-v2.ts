@@ -17,7 +17,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
-  bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS,
+  bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS, REVIEW_OUTCOME_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -300,6 +300,24 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
         ] })),
       }));
       c.push(new Paragraph({ spacing: { after: 120 }, children: [] })); // space after the 2.1 table (change 5)
+    }
+    const reviews = tree.projectStatus.bracketReviews;
+    if (Array.isArray(reviews)) {
+      // 2.2 Bracket Record Review (GRC): contractor bracket records reviewed this period.
+      c.push(h2("2.review"));
+      if (reviews.length === 0) c.push(para("No bracket records were reviewed this period."));
+      else {
+        const hexR = (rgb: [number, number, number]) => rgb.map((n) => n.toString(16).padStart(2, "0")).join("").toUpperCase();
+        const W = [1800, 2600, 2400, 3666];
+        const rows: Cell[][] = reviews.map((r: any) => [
+          safeText(r.level),
+          safeText(r.bracket),
+          safeText(r.dateSubmitted) || "\u2014",
+          [run(safeText(r.outcome) || "\u2014", { size: 15, color: hexR(REVIEW_OUTCOME_COLOURS[r.outcome] || [0, 0, 0]) })],
+        ]);
+        c.push(gridTable(["Level", "Bracket", "Date Submitted", "Outcome"], W, rows));
+        c.push(new Paragraph({ spacing: { after: 120 }, children: [] })); // space before 2.3
+      }
     }
     c.push(h2("2.action"));
     c.push(para("Based on our observations, we recommend the following actions."));
