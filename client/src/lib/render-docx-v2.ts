@@ -17,7 +17,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
-  bracketActionUid, isBracketActionOverdue, BRACKET_STATUS_COLOURS,
+  bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -526,8 +526,26 @@ export async function renderDocxV2(tree: ReportTree): Promise<Blob> {
   // ===================== 5. CLOSED THIS INSPECTION =====================
   {
     const c: any[] = [h1("5")];
-    if (v2.closedThisInspection.length === 0) c.push(para("No records were closed this inspection."));
+    const closedBrackets: any[] = v2.closedBrackets || [];
+    if (v2.closedThisInspection.length === 0 && closedBrackets.length === 0) c.push(para("No records were closed this inspection."));
     c.push(...(await groupBlocks(v2.closedThisInspection)));
+    if (closedBrackets.length > 0) {
+      // Bracket Action List rows (GRC) closed this inspection, same widths as 2.2.
+      if (v2.closedThisInspection.length > 0) c.push(ruleLine());
+      c.push(h3("Bracket Action List"));
+      const wt = "SLT \u2013 Slot Lengthening";
+      const hex = (rgb: [number, number, number]) => rgb.map((n) => n.toString(16).padStart(2, "0")).join("").toUpperCase();
+      const W = [1134, 1701, 2982, 1361, 1134, 2154];
+      const rows: Cell[][] = closedBrackets.map((r) => [
+        bracketActionUid(data.project, r),
+        r.workType === "SLT" ? wt : safeText(r.workType),
+        safeText(r.condition) || "\u2014",
+        r.consultantInspection ? "Y" : "N",
+        [run(safeText(r.status) || "Closed", { size: 15, color: hex(BRACKET_STATUS_COLOURS[r.status] || [0, 0, 0]) })],
+        bracketClosedDate(r) || "\u2014",
+      ]);
+      c.push(gridTable(["ID", "Work Type", "Observed Condition", "Consultant Inspection", "Status", "Date Closed"], W, rows));
+    }
     sections.push({ properties: portrait, ...portraitHF, children: c });
   }
 

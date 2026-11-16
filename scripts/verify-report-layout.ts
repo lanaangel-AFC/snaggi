@@ -109,6 +109,24 @@ async function main() {
     check("section 4 has the uncategorised observation under Observations", labels(v2.newThisInspection).at(-1) === "Observations", labels(v2.newThisInspection).join("|"));
     check("notes listed for section 4", v2.notes.length === 1 && String(v2.notes[0].uid).startsWith("Note-"), v2.notes.map((n: any) => n.uid).join(","));
     check("section 5 = closed this inspection (new and carried)", uids(v2.closedThisInspection).join(",") === "E-03-03-GW-02,N-01-02-CR-03", uids(v2.closedThisInspection).join(","));
+    check("no closed brackets on a project without a Bracket Action List", Array.isArray(v2.closedBrackets) && v2.closedBrackets.length === 0);
+    // Bracket Action List (GRC): Closed rows closed within this inspection's window go to section 5.
+    {
+      const win = { start: "2026-11-01T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z" };
+      const rows = [
+        { id: 1, level: "9", fin: "14", bracket: "A", workType: "SLT", status: "Closed", closedAt: "2026-11-10T03:00:00.000Z" },
+        { id: 2, level: "9", fin: "14", bracket: "B", workType: "SLT", status: "Closed", closedAt: "2026-10-20T03:00:00.000Z" },
+        { id: 3, level: "9", fin: "15", bracket: "A", workType: "SLT", status: "Open", closedAt: null },
+        { id: 4, level: "9", fin: "15", bracket: "B", workType: "SLT", status: "Pending", closedAt: null },
+        { id: 5, level: "9", fin: "16", bracket: "A", workType: "SLT", status: "Closed", closedAt: "2026-11-25T03:00:00.000Z" },
+      ];
+      const bt = buildReportTree({ ...data, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win } }, "contractor");
+      check("section 5 lists only brackets closed this inspection", (bt.v2?.closedBrackets || []).map((r: any) => r.id).join(",") === "1", JSON.stringify(bt.v2?.closedBrackets?.map((r: any) => r.id)));
+      check("2.2 still lists every bracket row", bt.projectStatus.bracketActions.length === 5);
+      check("closed-this-period counts the same bracket as section 5", bt.progressSummary!.closedThisPeriod === tree.progressSummary!.closedThisPeriod + 1, `${bt.progressSummary!.closedThisPeriod} vs ${tree.progressSummary!.closedThisPeriod}`);
+      const ct = buildReportTree({ ...data, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win } }, "client");
+      check("client export also lists closed brackets in section 5", (ct.v2?.closedBrackets || []).length === 1);
+    }
     check("section 6 = open items from previous inspections only",
       uids(v2.runningOpen).join(",") === ["E-01-01-WP-01", "N-01-03-SE-01", "N-01-04-CR-02", "N-01-05-CR-01", "S-02-05-GL-01"].sort().join(","), uids(v2.runningOpen).join(","));
     check("amended earlier item stays in its category in section 6", v2.runningOpen.find((g: any) => g.label === "Rectify")?.defects.some((d: any) => d.uid === "N-01-04-CR-02") === true);

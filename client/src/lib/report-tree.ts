@@ -283,6 +283,9 @@ export type ReportTreeV2 = {
   notes: any[];
   // 5. Closed This Inspection: records closed in this inspection (new or earlier).
   closedThisInspection: CategoryGroup[];
+  // Bracket Action List rows (GRC) closed within this inspection's window, listed in
+  // section 5 after the records. Empty elsewhere.
+  closedBrackets: any[];
   // 6. Running list of all open items: open records carried in from earlier inspections,
   // whatever today's coverage. Always itemised.
   runningOpen: CategoryGroup[];
@@ -620,6 +623,16 @@ export function buildReportTree(
   // Previously gated to profile === "client"; that gate was removed in commit
   // 10 (§2.1 restructure) because the AFC SVR template places the summary in
   // §2 Project Status for all audiences.
+  // Bracket Action List (GRC) rows and this inspection's window. A Closed row counts as
+  // closed this inspection when its closed_at falls inside the window.
+  const bracketRows: any[] = Array.isArray(data?.projectStatus?.bracketActions) ? data.projectStatus.bracketActions : [];
+  const bracketWin = data?.projectStatus?.bracketWindow || {};
+  const bracketClosedThis = (r: any) => {
+    if (r?.status !== "Closed") return false;
+    const at = String(r.closedAt || "");
+    return !!at && (!bracketWin.start || at >= bracketWin.start) && (!bracketWin.end || at < bracketWin.end);
+  };
+
   let progressSummary: ProgressSummary | null = null;
   {
     const today = new Date();
@@ -640,16 +653,13 @@ export function buildReportTree(
     // Bracket Action List (GRC): open items from the desktop review of contractor records.
     // Open and Pending count as open; Closed counts as closed this period when it was
     // closed within this inspection's window (same window as the records above).
-    const bracketRows: any[] = Array.isArray(data?.projectStatus?.bracketActions) ? data.projectStatus.bracketActions : [];
     if (bracketRows.length > 0) {
-      const win = data?.projectStatus?.bracketWindow || {};
       const todayIso = new Date().toISOString().slice(0, 10);
       const b = { open: 0, pending: 0, closed: 0 };
       for (const r of bracketRows) {
         if (r.status === "Closed") {
           b.closed++;
-          const at = String(r.closedAt || "");
-          if (at && (!win.start || at >= win.start) && (!win.end || at < win.end)) progressSummary.closedThisPeriod++;
+          if (bracketClosedThis(r)) progressSummary.closedThisPeriod++;
         } else {
           if (r.status === "Pending") b.pending++; else b.open++;
           progressSummary.open++;
@@ -697,6 +707,7 @@ export function buildReportTree(
       newThisInspection,
       notes: notes.filter((n) => !carried(n)),
       closedThisInspection,
+      closedBrackets: bracketRows.filter(bracketClosedThis),
       runningOpen: groupsV2(runningOpen, true),
       detailIds,
       elevationRecordIds: audienceDefects.map((d) => d.id),

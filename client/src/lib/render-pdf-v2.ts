@@ -19,7 +19,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
-  bracketActionUid, isBracketActionOverdue, BRACKET_STATUS_COLOURS,
+  bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -805,8 +805,27 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   // ===================== 5. CLOSED THIS INSPECTION =====================
   newPage();
   h1("5");
-  if (v2.closedThisInspection.length === 0) para("No records were closed this inspection.");
+  const closedBrackets: any[] = v2.closedBrackets || [];
+  if (v2.closedThisInspection.length === 0 && closedBrackets.length === 0) para("No records were closed this inspection.");
   await renderGroups(v2.closedThisInspection);
+  if (closedBrackets.length > 0) {
+    // Bracket Action List rows (GRC) closed this inspection, same widths as 2.2.
+    if (v2.closedThisInspection.length > 0) groupRule(false);
+    h3("Bracket Action List", 24);
+    const wt = "SLT \u2013 Slot Lengthening";
+    const rows = closedBrackets.map((r) => [bracketActionUid(data.project, r), r.workType === "SLT" ? wt : (r.workType || ""), r.condition || "\u2014", r.consultantInspection ? "Y" : "N", r.status || "Closed", bracketClosedDate(r) || "\u2014"]);
+    autoTable(doc, {
+      startY: y, head: [["ID", "Work Type", "Observed Condition", "Consultant Inspection", "Status", "Date Closed"]], body: rows,
+      margin: { left: margin, right: margin, top: TOP }, styles: tableStyles, headStyles: tableHead,
+      columnStyles: { 0: { cellWidth: 20, fontStyle: "bold" }, 1: { cellWidth: 30 }, 2: { cellWidth: 52.6 }, 3: { cellWidth: 24, halign: "center" }, 4: { cellWidth: 20 }, 5: { cellWidth: 38 } },
+      ...tableHook,
+      didParseCell: (h: any) => {
+        if (h.section === "head" && h.column.index === 3) h.cell.styles.halign = "center";
+        if (h.section === "body" && h.column.index === 4) h.cell.styles.textColor = BRACKET_STATUS_COLOURS[closedBrackets[h.row.index]?.status] || 0;
+      },
+    });
+    afterTable();
+  }
 
   // ===================== 6. RUNNING LIST OF OPEN ITEMS =====================
   newPage();

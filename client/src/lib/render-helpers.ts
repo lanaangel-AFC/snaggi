@@ -514,6 +514,15 @@ export function isBracketActionOverdue(r: any): boolean {
   return !Number.isNaN(due.getTime()) && due < today;
 }
 
+// Local calendar date (YYYY-MM-DD) a bracket row was closed, for section 5.
+export function bracketClosedDate(r: any): string {
+  const at = String(r?.closedAt || "");
+  if (!at) return "";
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return at.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export const BRACKET_STATUS_COLOURS: Record<string, [number, number, number]> = {
   Open: [200, 150, 0], Pending: [37, 99, 235], Closed: [34, 139, 34],
 };
