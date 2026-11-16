@@ -43,7 +43,9 @@ const STANDARD_ELEVATIONS = [
   "South", "South West", "West", "North West",
 ];
 
-// Trigger a browser download for an export Blob.
+// Trigger a browser download for an export Blob. The object URL is revoked later, not
+// straight after click(): iPad/iPhone Safari (and the installed PWA) read the blob after
+// click() returns, so revoking at once leaves an empty or failed download.
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -51,8 +53,26 @@ function downloadBlob(blob: Blob, filename: string) {
   a.download = filename;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// iPad / iPhone (iPadOS reports itself as a Mac, so also check for touch).
+function isAppleTouchDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);
+}
+
+// A File the share sheet can take (Open in Bluebeam, Save to Files, Mail...), or null
+// where the device can't share files.
+function shareableFile(blob: Blob, filename: string, type: string): File | null {
+  try {
+    const file = new File([blob], filename, { type });
+    const nav: any = navigator;
+    return typeof nav.share === "function" && typeof nav.canShare === "function" && nav.canShare({ files: [file] }) ? file : null;
+  } catch {
+    return null;
+  }
 }
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -66,6 +86,9 @@ export default function ReportDetail() {
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [customElevation, setCustomElevation] = useState("");
   const [shareOpen, setShareOpen] = useState(false);
+  // Finished export waiting for the user to send it to another app (iPad/iPhone). The
+  // share sheet needs a fresh tap, so it opens from a button once the file is ready.
+  const [readyFile, setReadyFile] = useState<{ file: File; blob: Blob; kind: string } | null>(null);
   const [shareRecipient, setShareRecipient] = useState("");
   const [generatedLink, setGeneratedLink] = useState("");
   // afcReference export guard: when afcReference is blank we block export and
@@ -374,6 +397,30 @@ export default function ReportDetail() {
   // category treatments, photo trimming, carried-forward and progress-summary
   // computation) then hand the tree to a renderer. The renderers walk the tree
   // in master section order and DO NOT re-filter. See render-docx.ts / render-pdf.ts.
+  // Hand a finished export to the user. On iPad/iPhone, offer the share sheet (Open in
+  // Bluebeam, Save to Files...) as well as a plain download; elsewhere, download.
+  const deliverExport = (blob: Blob, filename: string, type: string, kind: string) => {
+    const file = isAppleTouchDevice() ? shareableFile(blob, filename, type) : null;
+    if (file) { setReadyFile({ file, blob, kind }); return; }
+    downloadBlob(blob, filename);
+    toast({ title: `${kind} report downloaded` });
+  };
+  const shareReadyFile = async () => {
+    if (!readyFile) return;
+    try {
+      await (navigator as any).share({ files: [readyFile.file], title: readyFile.file.name });
+      setReadyFile(null);
+    } catch (e: any) {
+      if (e?.name === "AbortError") return; // closed the share sheet; keep the dialog
+      toast({ title: "Could not open the share sheet", description: "Use Download instead.", variant: "destructive" });
+    }
+  };
+  const downloadReadyFile = () => {
+    if (!readyFile) return;
+    downloadBlob(readyFile.blob, readyFile.file.name);
+    setReadyFile(null);
+  };
+
   const handleGeneratePdf = async (profile: ProfileKey = "contractor", audienceSuffix: string = "") => {
     setGenerating("pdf");
     try {
@@ -381,11 +428,10 @@ export default function ReportDetail() {
       const data = await res.json();
       const tree = buildReportTree(data, profile, audienceSuffix);
       const blob = await renderPdf(tree, { profile });
-      downloadBlob(blob, `${tree.filenameBase}.pdf`);
-      toast({ title: "PDF report downloaded" });
-    } catch (err) {
+      deliverExport(blob, `${tree.filenameBase}.pdf`, "application/pdf", "PDF");
+    } catch (err: any) {
       console.error(err);
-      toast({ title: "Error generating PDF", variant: "destructive" });
+      toast({ title: "Error generating PDF", description: err?.message ? String(err.message).slice(0, 200) : undefined, variant: "destructive" });
     } finally {
       setGenerating(null);
     }
@@ -398,11 +444,10 @@ export default function ReportDetail() {
       const data = await res.json();
       const tree = buildReportTree(data, profile, audienceSuffix);
       const blob = await renderDocx(tree, { profile });
-      downloadBlob(blob, `${tree.filenameBase}.docx`);
-      toast({ title: "Word report downloaded" });
-    } catch (err) {
+      deliverExport(blob, `${tree.filenameBase}.docx`, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Word");
+    } catch (err: any) {
       console.error(err);
-      toast({ title: "Error generating Word document", variant: "destructive" });
+      toast({ title: "Error generating Word document", description: err?.message ? String(err.message).slice(0, 200) : undefined, variant: "destructive" });
     } finally {
       setGenerating(null);
     }
@@ -503,6 +548,24 @@ export default function ReportDetail() {
               <Settings className="w-4 h-4" />
             </Button>
           </div>
+
+        <Dialog open={!!readyFile} onOpenChange={(o) => { if (!o) setReadyFile(null); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{readyFile?.kind} report ready</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground break-all" data-testid="text-ready-filename">{readyFile?.file.name}</p>
+            <p className="text-sm text-muted-foreground">Choose Open in&hellip; and pick Bluebeam, Files or another app.</p>
+            <div className="space-y-2">
+              <Button className="w-full" onClick={shareReadyFile} data-testid="button-share-export">
+                <Share2 className="w-4 h-4 mr-2" /> Open in&hellip;
+              </Button>
+              <Button variant="outline" className="w-full" onClick={downloadReadyFile} data-testid="button-download-export">
+                <FileDown className="w-4 h-4 mr-2" /> Download
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={drawingPickerOpen} onOpenChange={setDrawingPickerOpen}>
           <DialogContent className="max-w-sm">
