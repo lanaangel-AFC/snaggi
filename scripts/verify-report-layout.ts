@@ -122,7 +122,23 @@ async function main() {
       ];
       const bt = buildReportTree({ ...data, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win } }, "contractor");
       check("section 5 lists only brackets closed this inspection", (bt.v2?.closedBrackets || []).map((r: any) => r.id).join(",") === "1", JSON.stringify(bt.v2?.closedBrackets?.map((r: any) => r.id)));
-      check("2.2 still lists every bracket row", bt.projectStatus.bracketActions.length === 5);
+      check("Action List shows only Open/Pending bracket rows", bt.projectStatus.bracketActions!.map((r: any) => r.id).join(",") === "3,4", JSON.stringify(bt.projectStatus.bracketActions!.map((r: any) => r.id)));
+      check("no Bracket Record Review section without the Bracket Action List", bt.projectStatus.bracketReviews === null && !buildOutlineV2(bt, []).some((e) => e.key === "2.review"));
+      // 2.2 Bracket Record Review: reviews since the previous inspection started, up to the next one.
+      const reviews = [
+        { id: 1, level: "9", bracket: "14-B", dateSubmitted: "2026-11-03", outcome: "Requires rectification", createdAt: "2026-11-04T01:00:00.000Z" },
+        { id: 2, level: "10", bracket: "2-A", dateSubmitted: "2026-11-03", outcome: "Acceptable", createdAt: "2026-10-28T01:00:00.000Z" },
+        { id: 3, level: "9", bracket: "3-A", dateSubmitted: "2026-11-02", outcome: "Acceptable", createdAt: "2026-11-05T01:00:00.000Z" },
+        { id: 4, level: "8", bracket: "1-A", dateSubmitted: "2026-10-01", outcome: "Acceptable", createdAt: "2026-10-01T01:00:00.000Z" },
+        { id: 5, level: "8", bracket: "2-A", dateSubmitted: "2026-11-20", outcome: "Acceptable", createdAt: "2026-11-21T01:00:00.000Z" },
+      ];
+      const grc = { ...data, project: { ...data.project, bracketActions: 1 }, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win, bracketReviews: reviews, reviewWindow: { start: "2026-10-25T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z" } } };
+      const gt = buildReportTree(grc, "contractor");
+      check("2.2 Bracket Record Review: in-period reviews, sorted by Level then Bracket", (gt.projectStatus.bracketReviews || []).map((r: any) => r.id).join(",") === "3,1,2", JSON.stringify((gt.projectStatus.bracketReviews || []).map((r: any) => r.id)));
+      const go = buildOutlineV2(gt, []).filter((e) => e.key.startsWith("2."));
+      check("outline: 2.1 Progress Summary, 2.2 Bracket Record Review, 2.3 Action List", go.slice(0, 3).map((e) => `${e.no} ${e.title}`).join(" | ") === "2.1 Progress Summary | 2.2 Bracket Record Review | 2.3 Action List", go.map((e) => `${e.no} ${e.title}`).join(" | "));
+      const gEmpty = buildReportTree({ ...grc, projectStatus: { ...grc.projectStatus, bracketReviews: [] } }, "contractor");
+      check("GRC with no reviews still gets the 2.2 heading", Array.isArray(gEmpty.projectStatus.bracketReviews) && gEmpty.projectStatus.bracketReviews.length === 0 && buildOutlineV2(gEmpty, []).some((e) => e.key === "2.review"));
       check("closed-this-period counts the same bracket as section 5", bt.progressSummary!.closedThisPeriod === tree.progressSummary!.closedThisPeriod + 1, `${bt.progressSummary!.closedThisPeriod} vs ${tree.progressSummary!.closedThisPeriod}`);
       const ct = buildReportTree({ ...data, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win } }, "client");
       check("client export also lists closed brackets in section 5", (ct.v2?.closedBrackets || []).length === 1);

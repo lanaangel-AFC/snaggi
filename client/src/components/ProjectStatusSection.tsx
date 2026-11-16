@@ -16,6 +16,7 @@ import { Plus, Trash2, Upload, ArrowUp, ArrowDown } from "lucide-react";
 import { useState } from "react";
 import type { NarrativeHold, ProgramSchedule, StageProgressMap } from "@shared/schema";
 import BracketActionList from "@/components/BracketActionList";
+import BracketRecordReview, { type BracketPrefill } from "@/components/BracketRecordReview";
 
 const AUDIENCES = [
   { value: "both", label: "Both" },
@@ -59,6 +60,7 @@ export default function ProjectStatusSection({ projectId }: { projectId: string 
 
   // ---- Narrative/Hold modal ----
   const [holdOpen, setHoldOpen] = useState(false);
+  const [bracketPrefill, setBracketPrefill] = useState<BracketPrefill | null>(null);
   const [editingHold, setEditingHold] = useState<NarrativeHold | null>(null);
   const blankHold = { title: "", body: "", status: "Active", dateRaised: "", dateLifted: "", audience: "both", sortOrder: 0 };
   const [holdForm, setHoldForm] = useState<Record<string, any>>(blankHold);
@@ -179,8 +181,13 @@ export default function ProjectStatusSection({ projectId }: { projectId: string 
     <div className="mt-10">
       <h2 className="text-lg font-semibold mb-4">Project Status</h2>
 
-      {/* ===== 2.2 Bracket Action List (GRC only) ===== */}
-      {project?.bracketActions ? <BracketActionList projectId={projectId} project={project} /> : null}
+      {/* ===== Bracket Record Review (2.2) and Bracket Action List (GRC only) ===== */}
+      {project?.bracketActions ? (
+        <>
+          <BracketRecordReview projectId={projectId} project={project} onPrefillAction={(p) => setBracketPrefill({ ...p, nonce: Date.now() })} />
+          <BracketActionList projectId={projectId} project={project} prefill={bracketPrefill} />
+        </>
+      ) : null}
 
       {/* ===== Narratives / Holds ===== */}
       <div className="mb-8">

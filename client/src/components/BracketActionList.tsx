@@ -1,4 +1,4 @@
-// 2.2 Bracket Action List editor (projects with bracketActions on; GRC Fin Rectification).
+// Bracket Action List editor (projects with bracketActions on; GRC Fin Rectification).
 // Project-level rows carried across inspections. ID follows the project's UID format
 // (GRC: Level.Fin-Bracket → 9.14-B); work type is always SLT – Slot Lengthening.
 
@@ -11,7 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { BracketPrefill } from "./BracketRecordReview";
 import { parseUidFormat, renderUid } from "@shared/uid-format";
 
 export const BRACKET_CONDITIONS = ["Incomplete routing depth", "Required clearance not achieved", "Damage to bracket"];
@@ -31,7 +32,7 @@ async function errMessage(e: any): Promise<string> {
   try { return JSON.parse(json).message || m; } catch { return m || "Save failed"; }
 }
 
-export default function BracketActionList({ projectId, project }: { projectId: string; project: any }) {
+export default function BracketActionList({ projectId, project, prefill }: { projectId: string; project: any; prefill?: BracketPrefill | null }) {
   const { toast } = useToast();
   const key = [`/api/projects/${projectId}/bracket-actions`];
   const { data: rows = [] } = useQuery<Row[]>({ queryKey: key });
@@ -43,6 +44,14 @@ export default function BracketActionList({ projectId, project }: { projectId: s
 
   const [draft, setDraft] = useState({ level: "", fin: "", bracket: "" });
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
+  const [showClosed, setShowClosed] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // From Bracket Record Review: fill in what is known and bring the form into view.
+  useEffect(() => {
+    if (!prefill) return;
+    setDraft({ level: prefill.level || "", fin: prefill.fin || "", bracket: prefill.bracket || "" });
+    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [prefill?.nonce]);
 
   const addMutation = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/projects/${projectId}/bracket-actions`, { ...draft, status: "Open" })).json(),
@@ -60,17 +69,19 @@ export default function BracketActionList({ projectId, project }: { projectId: s
   });
   const patch = (id: number, p: Partial<Row>) => patchMutation.mutate({ id, patch: p });
 
+  const openRows = rows.filter((r) => r.status !== "Closed");
+  const closedRows = rows.filter((r) => r.status === "Closed");
   const preview = uidOf(draft);
   const canAdd = !!draft.level.trim() && !!draft.fin.trim() && !!draft.bracket.trim();
 
   return (
-    <div className="mb-8" data-testid="bracket-action-list">
+    <div className="mb-8 scroll-mt-4" ref={rootRef} data-testid="bracket-action-list">
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-base font-medium">Bracket Action List</h3>
-        <span className="text-xs text-muted-foreground">{rows.length} bracket{rows.length === 1 ? "" : "s"}</span>
+        <span className="text-xs text-muted-foreground">{openRows.length} open{closedRows.length ? ` · ${closedRows.length} closed` : ""}</span>
       </div>
       <p className="text-xs text-muted-foreground mb-3">
-        Shown in the report under 2.2 Action List. Work type is SLT – Slot Lengthening for every row.
+        Open and Pending rows are shown in the report under the Action List. Closed rows leave the Action List and are shown in section 5 Closed This Inspection. Work type is SLT – Slot Lengthening for every row.
       </p>
 
       <Card className="p-3 mb-3">
@@ -99,7 +110,8 @@ export default function BracketActionList({ projectId, project }: { projectId: s
         <p className="text-sm text-muted-foreground">No brackets yet.</p>
       ) : (
         <div className="space-y-2">
-          {rows.map((r) => (
+          {openRows.length === 0 && <p className="text-sm text-muted-foreground">No open brackets.</p>}
+          {[...openRows, ...(showClosed ? closedRows : [])].map((r) => (
             <Card key={r.id} className="p-3" data-testid={`bracket-row-${uidOf(r)}`}>
               <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="font-mono font-semibold">{uidOf(r)}</span>
@@ -146,6 +158,11 @@ export default function BracketActionList({ projectId, project }: { projectId: s
               </div>
             </Card>
           ))}
+          {closedRows.length > 0 && (
+            <Button variant="ghost" size="sm" className="w-full" onClick={() => setShowClosed(!showClosed)} data-testid="bracket-toggle-closed">
+              {showClosed ? "Hide closed brackets" : `Show closed brackets (${closedRows.length})`}
+            </Button>
+          )}
         </div>
       )}
     </div>

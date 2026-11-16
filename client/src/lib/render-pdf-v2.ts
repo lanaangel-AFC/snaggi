@@ -19,7 +19,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
   parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
-  bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS,
+  bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS, REVIEW_OUTCOME_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, instructionRows } from "./project-instructions";
@@ -488,6 +488,25 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
       columnStyles: { 0: { fontStyle: "bold", cellWidth: ps.brackets ? 80 : 60 }, 1: { cellWidth: 30 } }, theme: "grid", ...tableHook,
     });
     afterTable(8); // space after the 2.1 table (change 5)
+  }
+  const reviews = tree.projectStatus.bracketReviews;
+  if (Array.isArray(reviews)) {
+    // 2.2 Bracket Record Review (GRC). 30 + 45 + 40 + 69.6 = 184.6 mm
+    h2("2.review");
+    if (reviews.length === 0) para("No bracket records were reviewed this period.");
+    else {
+      autoTable(doc, {
+        startY: y, head: [["Level", "Bracket", "Date Submitted", "Outcome"]],
+        body: reviews.map((r: any) => [r.level || "", r.bracket || "", r.dateSubmitted || "\u2014", r.outcome || "\u2014"]),
+        margin: { left: margin, right: margin, top: TOP }, styles: tableStyles, headStyles: tableHead,
+        columnStyles: { 0: { cellWidth: 30, fontStyle: "bold" }, 1: { cellWidth: 45 }, 2: { cellWidth: 40 }, 3: { cellWidth: 69.6 } },
+        ...tableHook,
+        didParseCell: (h: any) => {
+          if (h.section === "body" && h.column.index === 3) h.cell.styles.textColor = REVIEW_OUTCOME_COLOURS[reviews[h.row.index]?.outcome] || 0;
+        },
+      });
+      afterTable();
+    }
   }
   h2("2.action");
   para("Based on our observations, we recommend the following actions.");

@@ -5,7 +5,8 @@
 //   1. Introduction            1.1 General, then Scope of works (if any), Inspection
 //                              particulars, Background information (if any), Record UID
 //                              nomenclature, Limitations — numbered consecutively.
-//   2. Project Status          2.1 Progress Summary, 2.2 Action List, then Project
+//   2. Project Status          2.1 Progress Summary, (GRC: Bracket Record Review),
+//                              Action List, then Project
 //                              Narratives and Holds (if any) with each narrative/hold as
 //                              a level 3 heading (2.3.1, 2.3.2 …), then Program and Stage
 //                              Map if present.
@@ -68,6 +69,7 @@ export function buildOutlineV2(tree: ReportTree, elevations: Array<{ id: number;
 
   const s2: Sub[] = [];
   if (tree.progressSummary) s2.push(["2.progress", "Progress Summary"]);
+  if (Array.isArray(tree.projectStatus.bracketReviews)) s2.push(["2.review", "Bracket Record Review"]);
   s2.push(["2.action", "Action List"]);
   const narratives = tree.projectStatus.narratives;
   if (narratives.length > 0) {

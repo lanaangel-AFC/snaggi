@@ -508,6 +508,68 @@ export async function registerRoutes(
     res.status(204).end();
   });
 
+  // === 2.2 BRACKET RECORD REVIEW (projects with bracket_actions on; GRC only) ===
+  // Contractor bracket records reviewed (desktop review) and the outcome. Rows marked
+  // "Requires rectification" are expected to be added to the Bracket Action List.
+  const REVIEW_OUTCOMES = ["Acceptable", "Requires rectification"];
+  const reviewRow = (r: any) => ({
+    id: r.id, projectId: r.project_id, level: r.level, bracket: r.bracket,
+    dateSubmitted: r.date_submitted || "", outcome: r.outcome || "", createdAt: r.created_at, updatedAt: r.updated_at,
+  });
+  const listBracketReviews = (projectId: number) =>
+    (sqlite.prepare(`SELECT * FROM bracket_reviews WHERE project_id = ? ORDER BY created_at DESC, id DESC`).all(projectId) as any[]).map(reviewRow);
+  const cleanText = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim();
+  const validateReview = (r: any): string | null => {
+    if (!r.level || !r.bracket) return "Enter the Level and Bracket";
+    if (r.outcome && !REVIEW_OUTCOMES.includes(r.outcome)) return "Outcome must be Acceptable or Requires rectification";
+    if (r.dateSubmitted && !/^\d{4}-\d{2}-\d{2}$/.test(r.dateSubmitted)) return "Date submitted must be a date";
+    return null;
+  };
+
+  app.get("/api/projects/:id/bracket-reviews", (req, res) => {
+    res.json(listBracketReviews(Number(req.params.id)));
+  });
+
+  app.post("/api/projects/:id/bracket-reviews", async (req, res) => {
+    const projectId = Number(req.params.id);
+    const project: any = await storage.getProject(projectId);
+    if (!project?.bracketActions) return res.status(400).json({ message: "The Bracket Record Review isn't enabled for this project" });
+    const body = req.body || {};
+    const r = {
+      level: cleanPart(body.level), bracket: cleanText(body.bracket).toUpperCase(),
+      dateSubmitted: String(body.dateSubmitted ?? ""), outcome: String(body.outcome ?? ""),
+    };
+    const err = validateReview(r);
+    if (err) return res.status(400).json({ message: err });
+    const now = new Date().toISOString();
+    const info = sqlite.prepare(`INSERT INTO bracket_reviews (project_id, level, bracket, date_submitted, outcome, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(projectId, r.level, r.bracket, r.dateSubmitted, r.outcome, now, now);
+    res.status(201).json(reviewRow(sqlite.prepare(`SELECT * FROM bracket_reviews WHERE id = ?`).get(info.lastInsertRowid)));
+  });
+
+  app.patch("/api/bracket-reviews/:id", (req, res) => {
+    const id = Number(req.params.id);
+    const cur: any = sqlite.prepare(`SELECT * FROM bracket_reviews WHERE id = ?`).get(id);
+    if (!cur) return res.status(404).json({ message: "Row not found" });
+    const body = req.body || {};
+    const next = {
+      level: body.level !== undefined ? cleanPart(body.level) : cur.level,
+      bracket: body.bracket !== undefined ? cleanText(body.bracket).toUpperCase() : cur.bracket,
+      dateSubmitted: body.dateSubmitted !== undefined ? String(body.dateSubmitted ?? "") : (cur.date_submitted || ""),
+      outcome: body.outcome !== undefined ? String(body.outcome ?? "") : cur.outcome,
+    };
+    const err = validateReview(next);
+    if (err) return res.status(400).json({ message: err });
+    sqlite.prepare(`UPDATE bracket_reviews SET level = ?, bracket = ?, date_submitted = ?, outcome = ?, updated_at = ? WHERE id = ?`)
+      .run(next.level, next.bracket, next.dateSubmitted, next.outcome, new Date().toISOString(), id);
+    res.json(reviewRow(sqlite.prepare(`SELECT * FROM bracket_reviews WHERE id = ?`).get(id)));
+  });
+
+  app.delete("/api/bracket-reviews/:id", (req, res) => {
+    sqlite.prepare(`DELETE FROM bracket_reviews WHERE id = ?`).run(Number(req.params.id));
+    res.status(204).end();
+  });
+
   // === PROJECT STATUS — Program/Schedule (single per project, upsert) ===
   app.get("/api/projects/:id/program-schedule", async (req, res) => {
     const prog = await storage.getProgramSchedule(Number(req.params.id));
@@ -1713,7 +1775,12 @@ export async function registerRoutes(
     const stageProgressMap = await storage.getStageProgressMap(project.id);
     res.json({
       project, report, defects: defectsWithPhotos, allProjectDefects,
-      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null, bracketActions: (project as any).bracketActions ? listBracketActions(project.id) : [], bracketWindow: { start: windowStart, end: windowEnd } },
+      projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null, bracketActions: (project as any).bracketActions ? listBracketActions(project.id) : [], bracketWindow: { start: windowStart, end: windowEnd },
+        // 2.2 Bracket Record Review: reviews recorded since the previous inspection started,
+        // up to the next one, so reviews entered before or after starting this inspection
+        // both reach this report.
+        bracketReviews: (project as any).bracketActions ? listBracketReviews(project.id) : [],
+        reviewWindow: { start: reportIdx > 0 ? sortedReports[reportIdx - 1].createdAt : "", end: windowEnd } },
       // WP6: Project Instructions as they stood for this report (new projects only).
       projectInstructions: (project.featureVersion ?? 1) >= 2
         ? instructionsForReport(project.id, windowEnd).map((i) => ({ ...i, workTypeLabels: i.workTypes.map((c) => labelForWorkType(project, c)) }))

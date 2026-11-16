@@ -240,8 +240,12 @@ export type ReportTree = {
     narratives: any[];
     program: any | null;
     stageMap: any | null;
-    // 2.2 Bracket Action List rows (GRC only; empty elsewhere). Shown to both audiences.
+    // Bracket Action List rows still outstanding (Open/Pending; GRC only, empty elsewhere).
+    // Closed rows leave the Action List and appear in section 5 when closed this period.
     bracketActions?: any[];
+    // 2.2 Bracket Record Review (GRC only): null where the project has no bracket review,
+    // otherwise the reviews recorded in this report's period, sorted by Level then Bracket.
+    bracketReviews?: any[] | null;
     empty: boolean; // true => render header + "Nothing for this report"
   };
 
@@ -457,6 +461,21 @@ function buildGroups(
 // ---------------------------------------------------------------------------
 // Build the Pass 2 report tree. `data` is the /report-data response.
 // ---------------------------------------------------------------------------
+
+// 2.2 Bracket Record Review rows for this report: recorded since the previous inspection
+// started, up to the next one (reviewWindow from the server). null when the project has
+// no Bracket Action List (non-GRC), so the section is left out entirely.
+export function bracketReviewsForReport(data: any): any[] | null {
+  if (!data?.project?.bracketActions) return null;
+  const rows: any[] = Array.isArray(data?.projectStatus?.bracketReviews) ? data.projectStatus.bracketReviews : [];
+  const win = data?.projectStatus?.reviewWindow || {};
+  const inWin = (r: any) => {
+    const at = String(r?.createdAt || "");
+    return !!at && (!win.start || at >= win.start) && (!win.end || at < win.end);
+  };
+  const key = (r: any) => `${r.level}|${r.bracket}`;
+  return rows.filter(inWin).sort((a, b) => key(a).localeCompare(key(b), undefined, { numeric: true }) || String(a.createdAt).localeCompare(String(b.createdAt)));
+}
 
 export function buildReportTree(
   data: any,
@@ -722,7 +741,7 @@ export function buildReportTree(
     project: data?.project,
     report: data?.report,
     actionList: { groups: actionGroups },
-    projectStatus: { narratives, program, stageMap, bracketActions: Array.isArray(ps.bracketActions) ? ps.bracketActions : [], empty: projectStatusEmpty },
+    projectStatus: { narratives, program, stageMap, bracketActions: bracketRows.filter((r) => r?.status !== "Closed"), bracketReviews: bracketReviewsForReport(data), empty: projectStatusEmpty },
     progressSummary,
     thisInspection: { new: tiNew, amended: tiAmended, completed: tiCompleted, empty: tiEmpty },
     carriedForward: { groups: carriedGroups, empty: carriedGroups.length === 0 },

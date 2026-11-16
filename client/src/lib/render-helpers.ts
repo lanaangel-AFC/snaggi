@@ -523,6 +523,11 @@ export function bracketClosedDate(r: any): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Bracket Record Review outcome colours (Word/PDF).
+export const REVIEW_OUTCOME_COLOURS: Record<string, [number, number, number]> = {
+  Acceptable: [34, 139, 34], "Requires rectification": [200, 30, 30],
+};
+
 export const BRACKET_STATUS_COLOURS: Record<string, [number, number, number]> = {
   Open: [200, 150, 0], Pending: [37, 99, 235], Closed: [34, 139, 34],
 };
