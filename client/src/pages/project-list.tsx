@@ -24,7 +24,7 @@ export default function ProjectList() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
-    name: "", address: "", client: "", inspector: "", afcReference: "",
+    name: "", address: "", client: "", afcReference: "",
     reportTitle: "",
     roles: "[]",
     scopeOfWorks: "[]",
@@ -60,7 +60,7 @@ export default function ProjectList() {
     mutationFn: async (data: typeof form) => {
       const body: any = {
         name: data.name, address: data.address, client: data.client,
-        inspector: data.inspector, afcReference: data.afcReference,
+        afcReference: data.afcReference,
         reportTitle: data.reportTitle,
         roles: data.roles,
         scopeOfWorks: data.scopeOfWorks,
@@ -80,7 +80,7 @@ export default function ProjectList() {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
       setOpen(false);
       setForm({
-        name: "", address: "", client: "", inspector: "", afcReference: "",
+        name: "", address: "", client: "", afcReference: "",
         reportTitle: "", roles: "[]", scopeOfWorks: "[]", backgroundDocs: "[]", areaRefTemplate: "",
         elevations: "[]", enabledUidParts: '{"elevation":true,"drop":true,"level":true,"workType":true}',
         primaryWorkTypes: "[]", customDrops: "[]", customLevels: "[]",
@@ -166,10 +166,6 @@ export default function ProjectList() {
               <div>
                 <Label htmlFor="client">Client (Principal)</Label>
                 <Input id="client" placeholder="Client name" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} required data-testid="input-project-client" />
-              </div>
-              <div>
-                <Label htmlFor="inspector">Inspector</Label>
-                <Input id="inspector" placeholder="Your name" value={form.inspector} onChange={(e) => setForm({ ...form, inspector: e.target.value })} required data-testid="input-project-inspector" />
               </div>
               <div>
                 <Label htmlFor="afcReference">AFC Reference</Label>

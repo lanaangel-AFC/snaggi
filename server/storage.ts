@@ -398,6 +398,31 @@ try {
 // live project row in that case).
 safeAddColumn("reports", "project_snapshot", "TEXT");
 
+// Inspector per inspection. Existing inspections take the inspector they were
+// reported under (frozen snapshot, else the project's), once, so their reports
+// read exactly as before.
+safeAddColumn("reports", "inspector", "TEXT DEFAULT ''");
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+  const k = "report_inspector_backfill";
+  const done = sqlite.prepare(`SELECT value FROM meta WHERE key = ?`).get(k) as any;
+  if (!done) {
+    const rows = sqlite.prepare(
+      `SELECT r.id, r.project_snapshot AS snap, p.inspector AS projInspector
+         FROM reports r LEFT JOIN projects p ON p.id = r.project_id
+        WHERE r.inspector IS NULL OR r.inspector = ''`
+    ).all() as { id: number; snap: string | null; projInspector: string | null }[];
+    const upd = sqlite.prepare(`UPDATE reports SET inspector = ? WHERE id = ?`);
+    for (const r of rows) {
+      let name = "";
+      try { name = r.snap ? String(JSON.parse(r.snap)?.inspector || "") : ""; } catch {}
+      if (!name) name = r.projInspector || "";
+      if (name) upd.run(name, r.id);
+    }
+    sqlite.prepare(`INSERT INTO meta (key, value) VALUES (?, '1')`).run(k);
+  }
+} catch (err) { console.warn("report inspector backfill skipped:", err); }
+
 // Meta table for one-time migration flags
 sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
 
@@ -1130,6 +1155,7 @@ export interface StartNextInspectionMetadata {
   inspectionDate: string;
   locationsCovered?: string;
   attendees?: string; // JSON-encoded [{name, company}]
+  inspector?: string;
   elevations?: string; // JSON-encoded string[]
 }
 
@@ -1637,6 +1663,7 @@ export class DatabaseStorage implements IStorage {
       locationsCovered: metadata.locationsCovered ?? source.locationsCovered,
       elevations: metadata.elevations ?? source.elevations,
       attendees: metadata.attendees ?? source.attendees,
+      inspector: metadata.inspector ?? (source as any).inspector ?? "",
       projectSnapshot: inheritedSnapshot,
       priorReportId: source.id,
       createdAt: now,

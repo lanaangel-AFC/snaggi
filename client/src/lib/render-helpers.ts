@@ -53,6 +53,14 @@ export function parseProjectSnapshot(raw: unknown): ProjectSnapshot {
   try { return JSON.parse(String(raw)) as ProjectSnapshot; } catch { return {}; }
 }
 
+// Inspector for an inspection: the inspection's own inspector first, then (for
+// inspections recorded before it moved off project setup) the snapshot/project value.
+export function resolveInspector(report: any, snapshot: ProjectSnapshot | unknown, project: any): string {
+  const own = report?.inspector;
+  if (own != null && String(own).trim() !== "") return String(own);
+  return resolveProjectField(snapshot, project, "inspector");
+}
+
 // Resolve a project-setup value with snapshot precedence then live-project fallback.
 // Pass the report's projectSnapshot (raw or parsed) and the live project row.
 export function resolveProjectField<K extends keyof ProjectSnapshot>(

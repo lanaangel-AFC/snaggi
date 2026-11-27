@@ -844,7 +844,7 @@ export async function registerRoutes(
   // attendees/elevations) is set ONCE here. Clones only status='open' defects.
   app.post("/api/reports/:id/start-next-inspection", async (req, res) => {
     try {
-      const { inspectionNumber, inspectionDate, locationsCovered, attendees, elevations } = req.body;
+      const { inspectionNumber, inspectionDate, locationsCovered, attendees, inspector, elevations } = req.body;
       if (inspectionNumber === undefined || inspectionNumber === null || String(inspectionNumber).trim() === "") {
         return res.status(400).json({ message: "inspectionNumber is required" });
       }
@@ -853,6 +853,7 @@ export async function registerRoutes(
         inspectionDate: inspectionDate || new Date().toISOString().split("T")[0],
         locationsCovered: locationsCovered != null ? String(locationsCovered) : undefined,
         attendees: attendees != null ? (typeof attendees === "string" ? attendees : JSON.stringify(attendees)) : undefined,
+        inspector: inspector != null ? String(inspector) : undefined,
         elevations: elevations != null ? (typeof elevations === "string" ? elevations : JSON.stringify(elevations)) : undefined,
       });
       res.status(201).json(newReport);
@@ -1374,7 +1375,8 @@ export async function registerRoutes(
       ? Number(req.query.currentReportId)
       : (defect.reportId ?? null);
     const project = await storage.getProject(defect.projectId);
-    const defaultAuthor = project?.inspector || "";
+    const authorReport = currentReportId != null ? await storage.getReport(currentReportId) : undefined;
+    const defaultAuthor = (authorReport as any)?.inspector || project?.inspector || "";
 
     const [obs, act, notes, stat] = await Promise.all([
       storage.getObservationHistory(defectId),
@@ -1444,7 +1446,7 @@ export async function registerRoutes(
     const note = await storage.createInspectionNote({
       defectId,
       reportId,
-      author: req.body.author || project?.inspector || "",
+      author: req.body.author || ((await storage.getReport(reportId)) as any)?.inspector || project?.inspector || "",
       text: String(text).trim(),
       createdAt: new Date().toISOString(),
     });
@@ -3104,7 +3106,7 @@ export async function registerRoutes(
     res.json({
       recipientName: link.recipientName,
       sharedAt: link.createdAt,
-      project: { name: project.name, address: project.address, client: project.client, inspector: project.inspector, afcReference: (project as any).afcReference },
+      project: { name: project.name, address: project.address, client: project.client, inspector: (report as any).inspector || project.inspector, afcReference: (project as any).afcReference },
       report,
       defects: defectsWithPhotos,
     });

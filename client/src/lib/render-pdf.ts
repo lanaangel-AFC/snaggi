@@ -15,7 +15,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel,
   truncateWordBoundary, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField,
+  parseProjectSnapshot, resolveProjectField, resolveInspector,
   deriveAreaRef,
 } from "./render-helpers";
 import { usesRecordWording } from "./wording";
@@ -52,7 +52,7 @@ export async function renderPdf(tree: ReportTree, _opts: { profile: "contractor"
   const projAddress     = resolveProjectField(snap, data.project, "address");
   const projName        = resolveProjectField(snap, data.project, "name");
   const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
-  const projInspector   = resolveProjectField(snap, data.project, "inspector");
+  const projInspector   = resolveInspector(data.report, snap, data.project);
   const afcRef          = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
   // §2.2 area-ref template (used by the Action List to derive the Location column per defect).
   const areaRefTemplateForPdf: string = String(resolveProjectField(snap, data.project, "areaRefTemplate") || "");
