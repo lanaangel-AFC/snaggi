@@ -7,7 +7,9 @@ export const projects = sqliteTable("projects", {
   name: text("name").notNull(),
   address: text("address").notNull(),
   client: text("client").notNull(),
-  inspector: text("inspector").notNull(),
+  // Legacy: the inspector now belongs to each inspection (reports.inspector). Kept so
+  // older reports without their own inspector can still fall back to it.
+  inspector: text("inspector").notNull().default(""),
   afcReference: text("afc_reference").default(""),
   // §2.3 Title page + §1 spec: separate Report Title field (full-width, no truncation).
   // Replaces the legacy combined "Report Title / Address" usage of `name` on the cover.
@@ -76,6 +78,8 @@ export const reports = sqliteTable("reports", {
   locationsCovered: text("locations_covered").default(""),
   elevations: text("elevations").default("[]"), // JSON array of strings: elevation labels for this report
   attendees: text("attendees").default("[]"), // JSON array: [{name, company}]
+  // Inspector for this inspection (set per inspection; may be one of the attendees).
+  inspector: text("inspector").default(""),
   // §2.3 spec — frozen snapshot of project-setup data captured at report creation.
   // Editing the project later does NOT mutate existing reports. Snapshot is preserved
   // across revisions of the same SVR. Renderers prefer this over the live project row.

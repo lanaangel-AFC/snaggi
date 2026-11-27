@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { InspectionPeople } from "@/components/inspection-people";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -178,6 +179,7 @@ export default function ReportDetail() {
       locationsCovered: report.locationsCovered || "",
       elevations: (report as any).elevations || project?.elevations || "[]",
       attendees: report.attendees || "[]",
+      inspector: (report as any).inspector || "",
     });
     setCustomElevation("");
     setEditOpen(true);
@@ -677,54 +679,11 @@ export default function ReportDetail() {
                   }}><Plus className="w-4 h-4" /></Button>
                 </div>
               </div>
-              <div>
-                <Label>Attendees</Label>
-                <div className="space-y-2 mt-1">
-                  {(() => {
-                    try {
-                      return (JSON.parse(editForm.attendees || "[]") as { name: string; company: string }[]).map((attendee, index) => (
-                        <div key={index} className="flex items-center gap-2">
-                          <Input
-                            placeholder="Name"
-                            value={attendee.name}
-                            onChange={(e) => {
-                              const attendees = JSON.parse(editForm.attendees || "[]") as { name: string; company: string }[];
-                              attendees[index].name = e.target.value;
-                              setEditForm({ ...editForm, attendees: JSON.stringify(attendees) });
-                            }}
-                          />
-                          <Input
-                            placeholder="Company / Role"
-                            value={attendee.company}
-                            onChange={(e) => {
-                              const attendees = JSON.parse(editForm.attendees || "[]") as { name: string; company: string }[];
-                              attendees[index].company = e.target.value;
-                              setEditForm({ ...editForm, attendees: JSON.stringify(attendees) });
-                            }}
-                          />
-                          <Button type="button" variant="ghost" size="icon" className="shrink-0" onClick={() => {
-                            const attendees = JSON.parse(editForm.attendees || "[]") as { name: string; company: string }[];
-                            attendees.splice(index, 1);
-                            setEditForm({ ...editForm, attendees: JSON.stringify(attendees) });
-                          }}>
-                            <X className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      ));
-                    } catch { return null; }
-                  })()}
-                  <Button type="button" variant="outline" size="sm" onClick={() => {
-                    try {
-                      const attendees = JSON.parse(editForm.attendees || "[]") as { name: string; company: string }[];
-                      attendees.push({ name: "", company: "" });
-                      setEditForm({ ...editForm, attendees: JSON.stringify(attendees) });
-                    } catch {}
-                  }}>
-                    <Plus className="w-4 h-4 mr-1" />
-                    Add Attendee
-                  </Button>
-                </div>
-              </div>
+              <InspectionPeople
+                attendees={editForm.attendees || "[]"}
+                inspector={editForm.inspector || ""}
+                onChange={({ attendees, inspector }) => setEditForm({ ...editForm, attendees, inspector })}
+              />
               <Button type="submit" className="w-full" disabled={updateReportMutation.isPending}>
                 {updateReportMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>

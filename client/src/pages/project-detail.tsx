@@ -1,4 +1,5 @@
 import { parseAppendices } from "@shared/appendices";
+import { InspectionPeople } from "@/components/inspection-people";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link, useParams, useLocation } from "wouter";
@@ -42,6 +43,7 @@ export default function ProjectDetail() {
     revision: "01",
     locationsCovered: "",
     attendees: "[]",
+    inspector: "",
   });
   const [elevUploadOpen, setElevUploadOpen] = useState(false);
   const [elevName, setElevName] = useState("");
@@ -53,6 +55,7 @@ export default function ProjectDetail() {
     inspectionDate: new Date().toISOString().split("T")[0],
     locationsCovered: "",
     attendees: "[]",
+    inspector: "",
   });
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
@@ -85,7 +88,6 @@ export default function ProjectDetail() {
       name: project.name,
       address: project.address,
       client: project.client,
-      inspector: project.inspector,
       afcReference: (project as any).afcReference || "",
       elevations: (project as any).elevations || "[]",
       enabledUidParts: (project as any).enabledUidParts || '{"elevation":true,"drop":true,"level":true,"workType":true}',
@@ -135,7 +137,7 @@ export default function ProjectDetail() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [`/api/projects/${id}/reports`] });
       setNewReportOpen(false);
-      setNewReportForm({ inspectionNumber: "", inspectionDate: new Date().toISOString().split("T")[0], revision: "01", locationsCovered: "", attendees: "[]" });
+      setNewReportForm({ inspectionNumber: "", inspectionDate: new Date().toISOString().split("T")[0], revision: "01", locationsCovered: "", attendees: "[]", inspector: "" });
       toast({ title: "Report created" });
       navigate(`/projects/${id}/reports/${data.id}`);
     },
@@ -229,6 +231,7 @@ export default function ProjectDetail() {
       inspectionDate: new Date().toISOString().split("T")[0],
       locationsCovered: (mostRecentReport as any).locationsCovered || "",
       attendees: (mostRecentReport as any).attendees || "[]",
+      inspector: (mostRecentReport as any).inspector || "",
     });
     setStartNextOpen(true);
   };
@@ -256,10 +259,6 @@ export default function ProjectDetail() {
               <span className="flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5" />
                 {project.client}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5" />
-                {project.inspector}
               </span>
             </div>
           </div>
@@ -299,15 +298,9 @@ export default function ProjectDetail() {
                 />
                 <p className="text-xs text-muted-foreground mt-1">Used on the report title page (full text, no truncation).</p>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>Client</Label>
-                  <Input value={editForm.client || ""} onChange={(e) => setEditForm({ ...editForm, client: e.target.value })} required />
-                </div>
-                <div>
-                  <Label>Inspector</Label>
-                  <Input value={editForm.inspector || ""} onChange={(e) => setEditForm({ ...editForm, inspector: e.target.value })} required />
-                </div>
+              <div>
+                <Label>Client</Label>
+                <Input value={editForm.client || ""} onChange={(e) => setEditForm({ ...editForm, client: e.target.value })} required />
               </div>
               <div>
                 <Label>AFC Reference</Label>
@@ -475,7 +468,7 @@ export default function ProjectDetail() {
 
         {/* New Report Dialog */}
         <Dialog open={newReportOpen} onOpenChange={setNewReportOpen}>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>New Report</DialogTitle>
             </DialogHeader>
@@ -504,6 +497,11 @@ export default function ProjectDetail() {
                 <Label>Locations Covered</Label>
                 <Input value={newReportForm.locationsCovered} onChange={(e) => setNewReportForm({ ...newReportForm, locationsCovered: e.target.value })} placeholder="e.g. North elevation levels 1-5" />
               </div>
+              <InspectionPeople
+                attendees={newReportForm.attendees}
+                inspector={newReportForm.inspector}
+                onChange={({ attendees, inspector }) => setNewReportForm({ ...newReportForm, attendees, inspector })}
+              />
               <Button type="submit" className="w-full" disabled={createReportMutation.isPending}>
                 {createReportMutation.isPending ? "Creating..." : "Create Report"}
               </Button>
@@ -535,7 +533,7 @@ export default function ProjectDetail() {
 
       {/* Start Next Inspection modal — the ONLY place inspection metadata is set */}
       <Dialog open={startNextOpen} onOpenChange={setStartNextOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Start Next Inspection</DialogTitle>
           </DialogHeader>
@@ -550,6 +548,7 @@ export default function ProjectDetail() {
                   inspectionDate: startNextForm.inspectionDate,
                   locationsCovered: startNextForm.locationsCovered,
                   attendees: startNextForm.attendees,
+                  inspector: startNextForm.inspector,
                 },
               });
             }}
@@ -569,6 +568,11 @@ export default function ProjectDetail() {
               <Label>Locations Covered</Label>
               <Input value={startNextForm.locationsCovered} onChange={(e) => setStartNextForm({ ...startNextForm, locationsCovered: e.target.value })} placeholder="e.g. East Elevation drops 02-06, levels GF-06" />
             </div>
+            <InspectionPeople
+              attendees={startNextForm.attendees}
+              inspector={startNextForm.inspector}
+              onChange={({ attendees, inspector }) => setStartNextForm({ ...startNextForm, attendees, inspector })}
+            />
             <p className="text-xs text-muted-foreground">
               Carries forward all open and amended records as the base for the new inspection. Closed records stay on the previous report.
             </p>
@@ -757,6 +761,12 @@ function ReportCard({ report, projectId, onDelete }: { report: Report; projectId
                 <span className="flex items-center gap-1.5">
                   <MapPin className="w-3.5 h-3.5" />
                   <span className="truncate max-w-[200px]">{report.locationsCovered}</span>
+                </span>
+              )}
+              {(report as any).inspector && (
+                <span className="flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5" />
+                  {(report as any).inspector}
                 </span>
               )}
               <span>{entryCount} {entryCount === 1 ? "entry" : "entries"}</span>

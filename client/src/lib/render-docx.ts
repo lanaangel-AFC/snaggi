@@ -16,7 +16,7 @@ import {
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel,
   truncateWordBoundary, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField, deriveAreaRef,
+  parseProjectSnapshot, resolveProjectField, resolveInspector, deriveAreaRef,
 } from "./render-helpers";
 import { usesRecordWording } from "./wording";
 import { INSTRUCTION_HEADERS, INSTRUCTION_SUBTITLE, hasInstructionSection, instructionRows, sectionNo } from "./project-instructions";
@@ -56,7 +56,7 @@ export async function renderDocx(tree: ReportTree, _opts: { profile: "contractor
   const projAddress     = resolveProjectField(snap, data.project, "address");
   const projName        = resolveProjectField(snap, data.project, "name");
   const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
-  const projInspector   = resolveProjectField(snap, data.project, "inspector");
+  const projInspector   = resolveInspector(data.report, snap, data.project);
   const afcRef          = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
 
   // §1.7 inspection number, zero-padded to 2 digits for the title-page heading.

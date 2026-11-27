@@ -18,7 +18,7 @@ import {
   getWorkTypeLabel, ELEVATION_NAMES, deriveLocation, formatDefectLocation,
   getLocationDimensions, formatReportDate, formatPhotoDate, isDefectOverdue,
   comparePhotoSlots, photoSlotLabel, resolveActionSummary,
-  parseProjectSnapshot, resolveProjectField, deriveAreaRef, compressImageWithSize, narrativeFigures,
+  parseProjectSnapshot, resolveProjectField, resolveInspector, deriveAreaRef, compressImageWithSize, narrativeFigures,
   bracketActionUid, isBracketActionOverdue, bracketClosedDate, BRACKET_STATUS_COLOURS, REVIEW_OUTCOME_COLOURS,
   workTypeLabelFor, uidNomenclatureSentence, areaRefFor,
 } from "./render-helpers";
@@ -113,7 +113,7 @@ export async function renderPdfV2(tree: ReportTree): Promise<Blob> {
   const projAddress = resolveProjectField(snap, data.project, "address");
   const projName = resolveProjectField(snap, data.project, "name");
   const projReportTitle = resolveProjectField(snap, data.project, "reportTitle");
-  const projInspector = resolveProjectField(snap, data.project, "inspector");
+  const projInspector = resolveInspector(data.report, snap, data.project);
   const projClient = resolveProjectField(snap, data.project, "client");
   const afcRef = resolveProjectField(snap, data.project, "afcReference") || "AFC-24XXX";
   const areaRefTemplate: string = String(resolveProjectField(snap, data.project, "areaRefTemplate") || "");
