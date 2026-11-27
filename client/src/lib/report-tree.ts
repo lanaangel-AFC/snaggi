@@ -469,7 +469,11 @@ export function bracketReviewsForReport(data: any): any[] | null {
   if (!data?.project?.bracketActions) return null;
   const rows: any[] = Array.isArray(data?.projectStatus?.bracketReviews) ? data.projectStatus.bracketReviews : [];
   const win = data?.projectStatus?.reviewWindow || {};
+  // The server now scopes the rows to this inspection (reviewsScoped); the date window
+  // is only a fallback for older responses.
+  const scoped = !!data?.projectStatus?.reviewsScoped;
   const inWin = (r: any) => {
+    if (scoped) return true;
     const at = String(r?.createdAt || "");
     return !!at && (!win.start || at >= win.start) && (!win.end || at < win.end);
   };

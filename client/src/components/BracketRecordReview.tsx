@@ -1,7 +1,8 @@
 // Bracket Record Review editor (projects with bracketActions on; GRC Fin Rectification).
 // A log of the contractor bracket records reviewed each week and the outcome. The report
-// lists the reviews recorded in its period as 2.2 Bracket Record Review. Rows marked
-// "Requires rectification" are expected to be added to the Bracket Action List.
+// links each review to the latest inspection when it is entered, and that inspection's
+// report shows it in 2.2. Acceptable reviews are then archived. "Requires rectification"
+// reviews stay current (and in 2.2) until their Bracket Action List item is closed.
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -20,7 +21,8 @@ const OUTCOME_ON: Record<string, string> = {
   "Requires rectification": "bg-red-600 text-white",
 };
 
-type Review = { id: number; level: string; bracket: string; dateSubmitted: string; outcome: string; createdAt: string };
+type Review = { id: number; level: string; bracket: string; dateSubmitted: string; outcome: string; reportId: number | null; createdAt: string };
+type ReportRow = { id: number; inspectionNumber: string | null; createdAt: string };
 type ActionRow = { id: number; level: string; fin: string; bracket: string; status: string };
 export type BracketPrefill = { level: string; fin: string; bracket: string; nonce: number };
 
@@ -56,12 +58,18 @@ export default function BracketRecordReview({ projectId, project, onPrefillActio
   const actionKey = [`/api/projects/${projectId}/bracket-actions`];
   const { data: rows = [] } = useQuery<Review[]>({ queryKey: key });
   const { data: actions = [] } = useQuery<ActionRow[]>({ queryKey: actionKey });
+  const { data: reports = [] } = useQuery<ReportRow[]>({ queryKey: [`/api/projects/${projectId}/reports`] });
+  const latest = [...reports].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+  const inspectionLabel = (reportId: number | null) => {
+    const r = reports.find((x) => x.id === reportId);
+    return r?.inspectionNumber ? `Inspection ${String(r.inspectionNumber).padStart(2, "0")}` : "";
+  };
   const fmt = parseUidFormat(project?.uidFormat);
   const uidOf = (r: { level: string; fin: string; bracket: string }) =>
     fmt ? renderUid(fmt, r) : [r.level, r.fin, r.bracket].filter(Boolean).join(".");
 
   const [draft, setDraft] = useState({ level: "", bracket: "", dateSubmitted: todayIso(), outcome: "" });
-  const [showAll, setShowAll] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
 
   const addMutation = useMutation({
@@ -102,17 +110,24 @@ export default function BracketRecordReview({ projectId, project, onPrefillActio
   };
 
   const canAdd = !!draft.level.trim() && !!draft.bracket.trim() && !!draft.outcome;
-  const visible = showAll ? rows : rows.slice(0, 15);
+  // Current = recorded for the latest inspection, or a rectification still awaiting closure.
+  // Everything else is archived: it was reported in its own inspection and won't repeat.
+  const isCurrent = (r: Review) =>
+    r.reportId == null || r.reportId === latest?.id ||
+    (r.outcome === "Requires rectification" && actionFor(r)?.status !== "Closed");
+  const current = rows.filter(isCurrent);
+  const archived = rows.filter((r) => !isCurrent(r));
+  const visible = showArchived ? [...current, ...archived] : current;
   const awaiting = rows.filter((r) => r.outcome === "Requires rectification" && !actionFor(r)).length;
 
   return (
     <div className="mb-8" data-testid="bracket-record-review">
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-base font-medium">Bracket Record Review</h3>
-        <span className="text-xs text-muted-foreground">{rows.length} review{rows.length === 1 ? "" : "s"}</span>
+        <span className="text-xs text-muted-foreground">{current.length} current · {archived.length} archived</span>
       </div>
       <p className="text-xs text-muted-foreground mb-3">
-        Contractor bracket records reviewed and the outcome. Shown in the report as 2.2 Bracket Record Review (reviews recorded since the previous inspection started). Add brackets that require rectification to the Bracket Action List.
+        Contractor bracket records reviewed and the outcome. New reviews belong to the latest inspection{latest?.inspectionNumber ? ` (${inspectionLabel(latest.id)})` : ""} and appear in its report as 2.2 Bracket Record Review. Acceptable reviews are then archived; reviews requiring rectification stay in 2.2 until their Bracket Action List item is closed.
       </p>
 
       <Card className="p-3 mb-3">
@@ -156,7 +171,7 @@ export default function BracketRecordReview({ projectId, project, onPrefillActio
         </p>
       )}
 
-      {rows.length === 0 ? (
+      {rows.length === 0 || (visible.length === 0 && archived.length === 0) ? (
         <p className="text-sm text-muted-foreground">No reviews yet.</p>
       ) : (
         <div className="space-y-2">
@@ -165,7 +180,10 @@ export default function BracketRecordReview({ projectId, project, onPrefillActio
             return (
               <Card key={r.id} className="p-3" data-testid={`review-row-${r.id}`}>
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs text-muted-foreground">Recorded {recordedOn(r.createdAt)}</span>
+                  <span className="text-xs text-muted-foreground" data-testid={`review-meta-${r.id}`}>
+                    Recorded {recordedOn(r.createdAt)}{inspectionLabel(r.reportId) ? ` · ${inspectionLabel(r.reportId)}` : ""}
+                    {!isCurrent(r) ? " · Archived" : r.reportId !== latest?.id && r.reportId != null ? " · Carried until closed" : ""}
+                  </span>
                   <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Delete review"
                     onClick={() => { if (confirm(`Delete the review of Level ${r.level}, Bracket ${r.bracket}?`)) deleteMutation.mutate(r.id); }}>
                     <Trash2 className="w-4 h-4" />
@@ -216,9 +234,12 @@ export default function BracketRecordReview({ projectId, project, onPrefillActio
               </Card>
             );
           })}
-          {rows.length > 15 && (
-            <Button variant="ghost" size="sm" className="w-full" onClick={() => setShowAll(!showAll)} data-testid="review-show-all">
-              {showAll ? "Show recent only" : `Show all ${rows.length} reviews`}
+          {current.length === 0 && !showArchived && (
+            <p className="text-sm text-muted-foreground">No current reviews. Earlier reviews are archived.</p>
+          )}
+          {archived.length > 0 && (
+            <Button variant="ghost" size="sm" className="w-full" onClick={() => setShowArchived(!showArchived)} data-testid="review-show-archived">
+              {showArchived ? "Hide archived reviews" : `Show ${archived.length} archived review${archived.length === 1 ? "" : "s"}`}
             </Button>
           )}
         </div>

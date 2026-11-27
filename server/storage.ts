@@ -382,6 +382,24 @@ sqlite.exec(`CREATE TABLE IF NOT EXISTS bracket_reviews (
   created_at TEXT NOT NULL,
   updated_at TEXT
 )`);
+// Link each review to one inspection. Existing reviews go to the inspection that was
+// current when they were entered (the latest one started before them), once.
+safeAddColumn("bracket_reviews", "report_id", "INTEGER");
+try {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+  const k = "bracket_review_report_backfill";
+  if (!sqlite.prepare(`SELECT value FROM meta WHERE key = ?`).get(k)) {
+    const rows = sqlite.prepare(`SELECT id, project_id, created_at FROM bracket_reviews WHERE report_id IS NULL`).all() as any[];
+    const before = sqlite.prepare(`SELECT id FROM reports WHERE project_id = ? AND created_at <= ? ORDER BY created_at DESC, id DESC LIMIT 1`);
+    const first = sqlite.prepare(`SELECT id FROM reports WHERE project_id = ? ORDER BY created_at ASC, id ASC LIMIT 1`);
+    const upd = sqlite.prepare(`UPDATE bracket_reviews SET report_id = ? WHERE id = ?`);
+    for (const r of rows) {
+      const hit: any = before.get(r.project_id, r.created_at) || first.get(r.project_id);
+      if (hit) upd.run(hit.id, r.id);
+    }
+    sqlite.prepare(`INSERT INTO meta (key, value) VALUES (?, '1')`).run(k);
+  }
+} catch (err) { console.warn("bracket review report backfill skipped:", err); }
 // Switch the Bracket Action List on for GRC Fin Rectification only (once).
 try {
   const k = "bracket_actions_enabled_grc";

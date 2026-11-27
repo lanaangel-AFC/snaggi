@@ -345,6 +345,10 @@ export const bracketReviews = sqliteTable("bracket_reviews", {
   bracket: text("bracket").notNull().default(""),
   dateSubmitted: text("date_submitted").default(""),
   outcome: text("outcome").notNull().default(""), // Acceptable | Requires rectification
+  // The inspection this review was recorded for (the latest inspection when entered).
+  // It is reported in that inspection only; "Requires rectification" rows also carry into
+  // later inspections until the matching Bracket Action List item is closed.
+  reportId: integer("report_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at"),
 });
