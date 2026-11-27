@@ -514,8 +514,39 @@ export async function registerRoutes(
   const REVIEW_OUTCOMES = ["Acceptable", "Requires rectification"];
   const reviewRow = (r: any) => ({
     id: r.id, projectId: r.project_id, level: r.level, bracket: r.bracket,
-    dateSubmitted: r.date_submitted || "", outcome: r.outcome || "", createdAt: r.created_at, updatedAt: r.updated_at,
+    dateSubmitted: r.date_submitted || "", outcome: r.outcome || "", reportId: r.report_id ?? null,
+    createdAt: r.created_at, updatedAt: r.updated_at,
   });
+  // "14-B" / "14.B" / "14 B" / "14B" -> fin 14, bracket B (matches the client's parseReviewBracket).
+  const splitReviewBracket = (text: string) => {
+    const m = /^(\d+)\s*[-.\s]?\s*([A-Z]+)$/.exec(String(text || "").trim().toUpperCase());
+    return m ? { fin: m[1], bracket: m[2] } : { fin: "", bracket: "" };
+  };
+  // 2.2 rows for one inspection: the reviews recorded for it, plus earlier "Requires
+  // rectification" reviews whose Bracket Action List item was not closed before this
+  // inspection started (no item yet, still Open/Pending, or closed during this inspection).
+  // Acceptable reviews from earlier inspections are archived and never repeat.
+  const bracketReviewsForInspection = (projectId: number, reportId: number, sortedReports: { id: number; createdAt: string }[]) => {
+    const idx = sortedReports.findIndex((r) => r.id === reportId);
+    const start = idx >= 0 ? sortedReports[idx].createdAt : "";
+    const earlier = new Set(sortedReports.slice(0, Math.max(idx, 0)).map((r) => r.id));
+    const actions = listBracketActions(projectId);
+    const stillOpen = (rv: any) => {
+      const { fin, bracket } = splitReviewBracket(rv.bracket);
+      const a = fin && bracket ? actions.find((x: any) => x.level === rv.level && x.fin === fin && x.bracket === bracket) : null;
+      if (!a) return true;
+      if (a.status !== "Closed") return true;
+      return !!a.closedAt && a.closedAt >= start;
+    };
+    return listBracketReviews(projectId).filter((rv: any) =>
+      rv.reportId === reportId ||
+      (rv.reportId != null && earlier.has(rv.reportId) && rv.outcome === "Requires rectification" && stillOpen(rv)));
+  };
+  // The latest inspection in a project (the one a new review belongs to).
+  const latestReportId = (projectId: number): number | null => {
+    const r: any = sqlite.prepare(`SELECT id FROM reports WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(projectId);
+    return r ? r.id : null;
+  };
   const listBracketReviews = (projectId: number) =>
     (sqlite.prepare(`SELECT * FROM bracket_reviews WHERE project_id = ? ORDER BY created_at DESC, id DESC`).all(projectId) as any[]).map(reviewRow);
   const cleanText = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -541,9 +572,11 @@ export async function registerRoutes(
     };
     const err = validateReview(r);
     if (err) return res.status(400).json({ message: err });
+    const reportId = latestReportId(projectId);
+    if (reportId == null) return res.status(400).json({ message: "Start an inspection before recording bracket reviews" });
     const now = new Date().toISOString();
-    const info = sqlite.prepare(`INSERT INTO bracket_reviews (project_id, level, bracket, date_submitted, outcome, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(projectId, r.level, r.bracket, r.dateSubmitted, r.outcome, now, now);
+    const info = sqlite.prepare(`INSERT INTO bracket_reviews (project_id, level, bracket, date_submitted, outcome, report_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(projectId, r.level, r.bracket, r.dateSubmitted, r.outcome, reportId, now, now);
     res.status(201).json(reviewRow(sqlite.prepare(`SELECT * FROM bracket_reviews WHERE id = ?`).get(info.lastInsertRowid)));
   });
 
@@ -1778,11 +1811,10 @@ export async function registerRoutes(
     res.json({
       project, report, defects: defectsWithPhotos, allProjectDefects,
       projectStatus: { narrativeHolds, programSchedule: programSchedule ?? null, stageProgressMap: stageProgressMap ?? null, bracketActions: (project as any).bracketActions ? listBracketActions(project.id) : [], bracketWindow: { start: windowStart, end: windowEnd },
-        // 2.2 Bracket Record Review: reviews recorded since the previous inspection started,
-        // up to the next one, so reviews entered before or after starting this inspection
-        // both reach this report.
-        bracketReviews: (project as any).bracketActions ? listBracketReviews(project.id) : [],
-        reviewWindow: { start: reportIdx > 0 ? sortedReports[reportIdx - 1].createdAt : "", end: windowEnd } },
+        // 2.2 Bracket Record Review: the reviews recorded for this inspection, plus earlier
+        // rectification reviews still awaiting closure (already scoped; see helper).
+        bracketReviews: (project as any).bracketActions ? bracketReviewsForInspection(project.id, report.id, sortedReports) : [],
+        reviewsScoped: true },
       // WP6: Project Instructions as they stood for this report (new projects only).
       projectInstructions: (project.featureVersion ?? 1) >= 2
         ? instructionsForReport(project.id, windowEnd).map((i) => ({ ...i, workTypeLabels: i.workTypes.map((c) => labelForWorkType(project, c)) }))

@@ -132,7 +132,7 @@ async function main() {
         { id: 4, level: "8", bracket: "1-A", dateSubmitted: "2026-10-01", outcome: "Acceptable", createdAt: "2026-10-01T01:00:00.000Z" },
         { id: 5, level: "8", bracket: "2-A", dateSubmitted: "2026-11-20", outcome: "Acceptable", createdAt: "2026-11-21T01:00:00.000Z" },
       ];
-      const grc = { ...data, project: { ...data.project, bracketActions: 1 }, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win, bracketReviews: reviews, reviewWindow: { start: "2026-10-25T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z" } } };
+      const grc = { ...data, project: { ...data.project, bracketActions: 1 }, projectStatus: { ...(data.projectStatus || {}), bracketActions: rows, bracketWindow: win, bracketReviews: reviews, reviewsScoped: false, reviewWindow: { start: "2026-10-25T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z" } } };
       const gt = buildReportTree(grc, "contractor");
       check("2.2 Bracket Record Review: in-period reviews, sorted by Level then Bracket", (gt.projectStatus.bracketReviews || []).map((r: any) => r.id).join(",") === "3,1,2", JSON.stringify((gt.projectStatus.bracketReviews || []).map((r: any) => r.id)));
       const go = buildOutlineV2(gt, []).filter((e) => e.key.startsWith("2."));
